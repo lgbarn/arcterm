@@ -4,6 +4,7 @@ pub mod gpu;
 pub mod palette;
 pub mod quad;
 pub mod renderer;
+pub mod structured;
 pub mod text;
 
 pub use gpu::GpuState;

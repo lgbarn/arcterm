@@ -20,3 +20,5 @@ bytemuck = { version = "1", features = ["derive"] }
 syntect.workspace = true
 pulldown-cmark.workspace = true
 image.workspace = true
+serde_json.workspace = true
+arcterm-vt = { path = "../arcterm-vt" }
