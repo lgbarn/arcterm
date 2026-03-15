@@ -17,6 +17,7 @@ mod colors;
 mod config;
 mod input;
 mod selection;
+mod tab;
 mod terminal;
 
 use std::sync::Arc;
