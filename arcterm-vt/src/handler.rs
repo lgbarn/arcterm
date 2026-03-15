@@ -704,12 +704,23 @@ impl Handler for GridState {
     }
 
     // -------------------------------------------------------------------------
-    // Device reports — no-op (would need PTY write-back to be meaningful)
+    // Device reports — queue replies in pending_replies for PTY write-back.
     // -------------------------------------------------------------------------
 
-    fn device_status_report(&mut self, _n: u16) {}
+    fn device_status_report(&mut self, n: u16) {
+        if n == 6 {
+            // DSR(6): report cursor position — ESC [ row ; col R (1-indexed).
+            let row = self.grid.cursor().row + 1;
+            let col = self.grid.cursor().col + 1;
+            let reply = format!("\x1b[{};{}R", row, col).into_bytes();
+            self.grid.pending_replies.push(reply);
+        }
+    }
 
-    fn device_attributes(&mut self) {}
+    fn device_attributes(&mut self) {
+        // Primary DA: report as VT100 with advanced video option.
+        self.grid.pending_replies.push(b"\x1b[?1;2c".to_vec());
+    }
 
     // -------------------------------------------------------------------------
     // Keypad mode
@@ -886,5 +897,74 @@ impl Handler for Grid {
 
     fn set_title(&mut self, title: &str) {
         self.title = Some(title.to_string());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests — DSR/DA reply queuing on GridState
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arcterm_core::{Grid, GridSize};
+
+    fn make_grid_state() -> GridState {
+        GridState::new(Grid::new(GridSize::new(24, 80)))
+    }
+
+    #[test]
+    fn dsr_6_queues_cursor_position_reply() {
+        let mut gs = make_grid_state();
+        // Move cursor to a known position (0-indexed → 1-indexed in reply).
+        gs.grid.set_cursor(CursorPos { row: 4, col: 9 });
+        Handler::device_status_report(&mut gs, 6);
+        assert_eq!(gs.grid.pending_replies.len(), 1);
+        let reply = std::str::from_utf8(&gs.grid.pending_replies[0]).unwrap();
+        assert_eq!(reply, "\x1b[5;10R", "DSR(6) reply must be 1-indexed row;col");
+    }
+
+    #[test]
+    fn dsr_other_param_is_noop() {
+        let mut gs = make_grid_state();
+        Handler::device_status_report(&mut gs, 5);
+        assert!(gs.grid.pending_replies.is_empty(), "DSR(5) must not queue a reply");
+    }
+
+    #[test]
+    fn device_attributes_queues_da_reply() {
+        let mut gs = make_grid_state();
+        Handler::device_attributes(&mut gs);
+        assert_eq!(gs.grid.pending_replies.len(), 1);
+        let reply = std::str::from_utf8(&gs.grid.pending_replies[0]).unwrap();
+        assert_eq!(reply, "\x1b[?1;2c", "DA reply must be ESC[?1;2c");
+    }
+
+    #[test]
+    fn multiple_replies_accumulate() {
+        let mut gs = make_grid_state();
+        Handler::device_attributes(&mut gs);
+        Handler::device_status_report(&mut gs, 6);
+        assert_eq!(gs.grid.pending_replies.len(), 2, "both replies must be queued");
+    }
+
+    #[test]
+    fn cursor_hidden_flag_can_be_toggled() {
+        let mut gs = make_grid_state();
+        assert!(gs.modes.cursor_visible, "cursor must be visible by default");
+        Handler::reset_mode(&mut gs, 25, true);
+        assert!(!gs.modes.cursor_visible, "mode reset 25 must hide cursor");
+        Handler::set_mode(&mut gs, 25, true);
+        assert!(gs.modes.cursor_visible, "mode set 25 must show cursor");
+    }
+
+    #[test]
+    fn app_cursor_keys_toggled_via_mode() {
+        let mut gs = make_grid_state();
+        assert!(!gs.modes.app_cursor_keys);
+        Handler::set_mode(&mut gs, 1, true);
+        assert!(gs.modes.app_cursor_keys);
+        Handler::reset_mode(&mut gs, 1, true);
+        assert!(!gs.modes.app_cursor_keys);
     }
 }
