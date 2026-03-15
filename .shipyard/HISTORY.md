@@ -90,3 +90,9 @@
 - **Phase:** 5
 - **Status:** planned
 - **Message:** 6 plans across 3 waves. Verdict: PASS. Workspace TOML, auto-save/restore, clap CLI, workspace switcher.
+
+## 2026-03-15 — Phase 5 Build Complete
+- **Phase:** 5
+- **Status:** complete
+- **Tests:** 400+ passing (216 app, 51 core, 10 pty, 38 render, 127 vt)
+- **Key Features:** Workspace TOML model, CWD capture, clap CLI, auto-save/restore, workspace switcher, Leader+s save
