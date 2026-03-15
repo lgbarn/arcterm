@@ -14,6 +14,7 @@
 //! 8. Rapid output (`cat /dev/urandom | head -c 1M | base64`) — no hang or crash.
 
 mod input;
+mod selection;
 mod terminal;
 
 use std::sync::Arc;
