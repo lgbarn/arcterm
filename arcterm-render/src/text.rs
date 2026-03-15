@@ -16,6 +16,30 @@ pub struct CellSize {
     pub height: f32,
 }
 
+/// Clip rectangle for text rendering.
+#[derive(Clone, Copy, Debug)]
+pub struct ClipRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Per-pane metadata for multi-pane text submission.
+struct PaneSlot {
+    /// Pixel offset for this grid.
+    offset_x: f32,
+    offset_y: f32,
+    /// Optional clip region (in physical pixels).
+    clip: Option<ClipRect>,
+    /// Number of rows shaped for this pane.
+    num_rows: usize,
+    /// Scale factor used when shaping.
+    scale_factor: f32,
+    /// Default foreground colour for this pane.
+    default_fg: Color,
+}
+
 /// Manages all glyphon state and converts a terminal Grid to GPU text draws.
 pub struct TextRenderer {
     pub font_system: FontSystem,
@@ -23,14 +47,20 @@ pub struct TextRenderer {
     pub viewport: Viewport,
     pub atlas: TextAtlas,
     pub renderer: GlyphonTextRenderer,
-    /// Per-row Buffers; resized as needed.
+    /// Per-row Buffers for the single-pane path; resized as needed.
     row_buffers: Vec<Buffer>,
     pub cell_size: CellSize,
     /// Font size in logical pixels.
     font_size: f32,
     line_height: f32,
-    /// Per-row content hashes for dirty-row optimization (Task 3).
+    /// Per-row content hashes for dirty-row optimization.
     pub row_hashes: Vec<u64>,
+
+    // ---- Multi-pane accumulation ----------------------------------------
+    /// Pool of row-buffer vectors, one per accumulated pane.
+    pane_buffer_pool: Vec<Vec<Buffer>>,
+    /// Metadata for each accumulated pane (parallel to `pane_buffer_pool`).
+    pane_slots: Vec<PaneSlot>,
 }
 
 impl TextRenderer {
@@ -63,6 +93,8 @@ impl TextRenderer {
             font_size,
             line_height,
             row_hashes: Vec::new(),
+            pane_buffer_pool: Vec::new(),
+            pane_slots: Vec::new(),
         }
     }
 
@@ -71,11 +103,24 @@ impl TextRenderer {
         self.viewport.update(queue, Resolution { width, height });
     }
 
+    /// Reset per-frame multi-pane accumulation state.
+    ///
+    /// Call once at the start of each frame before any `prepare_grid_at` calls.
+    /// This clears the pane slot list while keeping allocated `Buffer` memory
+    /// in the pool for reuse.
+    pub fn reset_frame(&mut self) {
+        // Move pane buffers back into the pool (swap out and drain slots).
+        // pane_buffer_pool already holds them; just clear the metadata.
+        self.pane_slots.clear();
+        // Truncate pool to match (it's grown cumulatively; clear overshoot).
+        self.pane_buffer_pool.truncate(0);
+    }
+
     /// Convert a Grid into glyphon TextAreas and upload to the atlas.
     ///
     /// Uses `rows_for_viewport()` so scrollback is rendered correctly.
     /// The cursor row is always re-shaped; other rows are skipped when their
-    /// content hash is unchanged (dirty-row optimization, Task 3).
+    /// content hash is unchanged (dirty-row optimization).
     pub fn prepare_grid(
         &mut self,
         device: &wgpu::Device,
@@ -106,7 +151,7 @@ impl TextRenderer {
         for (row_idx, row) in rows.iter().enumerate() {
             let is_cursor_row = row_idx == cursor.row;
 
-            // Compute a cheap content hash for dirty-row skipping (Task 3).
+            // Compute a cheap content hash for dirty-row skipping.
             let row_hash = hash_row(row, row_idx, cursor);
 
             if !is_cursor_row && self.row_hashes[row_idx] == row_hash {
@@ -123,37 +168,7 @@ impl TextRenderer {
                 Some(cell_h * scale_factor),
             );
 
-            // Build per-cell (text_slice, Attrs) spans.
-            // The quad pipeline handles background colors and the cursor block,
-            // so here we only need to output the correct foreground color.
-            // For cells with the `reverse` attribute the fg/bg are swapped:
-            // the quad renderer draws the (original) fg as background, so the
-            // text must be drawn in the (original) bg color.
-            let span_strings: Vec<(String, Color)> = row
-                .iter()
-                .map(|cell| {
-                    let s = cell.c.to_string();
-                    let fg = if cell.attrs.reverse {
-                        // Reverse: text draws with the cell's background color.
-                        ansi_color_to_glyphon(cell.attrs.bg, false, palette)
-                    } else {
-                        ansi_color_to_glyphon(cell.attrs.fg, true, palette)
-                    };
-                    (s, fg)
-                })
-                .collect();
-
-            // set_rich_text takes Iterator<Item = (&str, Attrs)>.
-            buf.set_rich_text(
-                &mut self.font_system,
-                span_strings.iter().map(|(s, fg)| {
-                    (s.as_str(), Attrs::new().family(Family::Monospace).color(*fg))
-                }),
-                &Attrs::new().family(Family::Monospace),
-                Shaping::Basic,
-                None,
-            );
-            buf.shape_until_scroll(&mut self.font_system, false);
+            shape_row_into_buffer(buf, row, &mut self.font_system, palette);
         }
 
         // Build TextArea slice from the now-stable row_buffers.
@@ -184,6 +199,186 @@ impl TextRenderer {
         )
     }
 
+    /// Shape a grid at a given pixel offset and optional clip, accumulating it
+    /// for a later [`submit_text_areas`] call.
+    ///
+    /// This is the multi-pane variant of [`prepare_grid`].  Call
+    /// [`reset_frame`] at the start of each frame, then call this method once
+    /// per pane, then call [`submit_text_areas`] to upload everything to the
+    /// GPU in a single `renderer.prepare` invocation.
+    ///
+    /// `offset_x` / `offset_y` are in physical pixels (scale_factor already
+    /// applied by the caller).
+    pub fn prepare_grid_at(
+        &mut self,
+        grid: &Grid,
+        offset_x: f32,
+        offset_y: f32,
+        clip: Option<ClipRect>,
+        scale_factor: f32,
+        palette: &RenderPalette,
+    ) {
+        let rows = grid.rows_for_viewport();
+        let num_rows = rows.len();
+        let cell_w = self.cell_size.width;
+        let cell_h = self.cell_size.height;
+        let cursor = grid.cursor;
+
+        // Allocate or reuse a buffer vector for this slot.
+        let slot_idx = self.pane_slots.len();
+        if slot_idx >= self.pane_buffer_pool.len() {
+            self.pane_buffer_pool.push(Vec::new());
+        }
+        let buf_vec = &mut self.pane_buffer_pool[slot_idx];
+
+        // Grow the buffer vector as needed.
+        while buf_vec.len() < num_rows {
+            let b = Buffer::new(
+                &mut self.font_system,
+                Metrics::new(self.font_size, self.line_height),
+            );
+            buf_vec.push(b);
+        }
+        buf_vec.truncate(num_rows);
+
+        // Shape each row.
+        for (row_idx, row) in rows.iter().enumerate() {
+            let is_cursor_row = row_idx == cursor.row;
+
+            // For multi-pane we always re-shape (no per-pane hash cache yet).
+            // This is intentional for correctness — a hash cache per pane can
+            // be added as a follow-up optimisation.
+            let _ = is_cursor_row;
+
+            let buf = &mut buf_vec[row_idx];
+            let width_px = cell_w * row.len() as f32;
+            buf.set_size(
+                &mut self.font_system,
+                Some(width_px * scale_factor),
+                Some(cell_h * scale_factor),
+            );
+            shape_row_into_buffer(buf, row, &mut self.font_system, palette);
+        }
+
+        self.pane_slots.push(PaneSlot {
+            offset_x,
+            offset_y,
+            clip,
+            num_rows,
+            scale_factor,
+            default_fg: palette.fg_glyphon(),
+        });
+    }
+
+    /// Submit all panes accumulated since the last [`reset_frame`] to the GPU.
+    ///
+    /// Builds one `TextArea` per row across all panes and calls
+    /// `renderer.prepare` once.  Returns the glyphon `PrepareError` if the
+    /// atlas is full.
+    pub fn submit_text_areas(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<(), glyphon::PrepareError> {
+        let cell_h = self.cell_size.height;
+
+        // We need to build TextArea slices borrowing from pane_buffer_pool.
+        // Collect all areas in one pass.
+        let mut text_areas: Vec<TextArea> = Vec::new();
+
+        for (slot, meta) in self.pane_buffer_pool.iter().zip(self.pane_slots.iter()) {
+            let bounds = if let Some(clip) = meta.clip {
+                TextBounds {
+                    left: clip.x,
+                    top: clip.y,
+                    right: clip.x + clip.width as i32,
+                    bottom: clip.y + clip.height as i32,
+                }
+            } else {
+                TextBounds::default()
+            };
+
+            for (row_idx, buf) in slot.iter().take(meta.num_rows).enumerate() {
+                text_areas.push(TextArea {
+                    buffer: buf,
+                    left: meta.offset_x,
+                    top: meta.offset_y + row_idx as f32 * cell_h,
+                    scale: meta.scale_factor,
+                    bounds,
+                    default_color: meta.default_fg,
+                    custom_glyphs: &[],
+                });
+            }
+        }
+
+        self.renderer.prepare(
+            device,
+            queue,
+            &mut self.font_system,
+            &mut self.atlas,
+            &self.viewport,
+            text_areas,
+            &mut self.swash_cache,
+        )
+    }
+
+    /// Prepare tab bar text labels, appending them to the multi-pane accumulator.
+    ///
+    /// Each label is positioned according to `positions` (physical-pixel x
+    /// offsets) at a fixed `y` offset.  `clip` optionally clips to the tab-bar
+    /// area.
+    pub fn prepare_tab_bar_text(
+        &mut self,
+        labels: &[String],
+        positions_x: &[f32],
+        y: f32,
+        clip: Option<ClipRect>,
+        scale_factor: f32,
+        palette: &RenderPalette,
+    ) {
+        let cell_h = self.cell_size.height;
+
+        for (label, &x) in labels.iter().zip(positions_x.iter()) {
+            let slot_idx = self.pane_slots.len();
+            if slot_idx >= self.pane_buffer_pool.len() {
+                self.pane_buffer_pool.push(Vec::new());
+            }
+            let buf_vec = &mut self.pane_buffer_pool[slot_idx];
+            if buf_vec.is_empty() {
+                buf_vec.push(Buffer::new(
+                    &mut self.font_system,
+                    Metrics::new(self.font_size, self.line_height),
+                ));
+            }
+
+            let buf = &mut buf_vec[0];
+            buf.set_size(
+                &mut self.font_system,
+                Some(500.0 * scale_factor),
+                Some(cell_h * scale_factor),
+            );
+            buf.set_text(
+                &mut self.font_system,
+                label.as_str(),
+                &Attrs::new()
+                    .family(Family::Monospace)
+                    .color(palette.fg_glyphon()),
+                Shaping::Basic,
+                None,
+            );
+            buf.shape_until_scroll(&mut self.font_system, false);
+
+            self.pane_slots.push(PaneSlot {
+                offset_x: x,
+                offset_y: y,
+                clip,
+                num_rows: 1,
+                scale_factor,
+                default_fg: palette.fg_glyphon(),
+            });
+        }
+    }
+
     /// Render previously prepared text into the active render pass, then trim
     /// the glyph atlas to reclaim unused cache entries.
     ///
@@ -202,6 +397,38 @@ impl TextRenderer {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Populate a single row `Buffer` with per-cell colored spans.
+fn shape_row_into_buffer(
+    buf: &mut Buffer,
+    row: &[arcterm_core::Cell],
+    font_system: &mut FontSystem,
+    palette: &RenderPalette,
+) {
+    let span_strings: Vec<(String, Color)> = row
+        .iter()
+        .map(|cell| {
+            let s = cell.c.to_string();
+            let fg = if cell.attrs.reverse {
+                ansi_color_to_glyphon(cell.attrs.bg, false, palette)
+            } else {
+                ansi_color_to_glyphon(cell.attrs.fg, true, palette)
+            };
+            (s, fg)
+        })
+        .collect();
+
+    buf.set_rich_text(
+        font_system,
+        span_strings.iter().map(|(s, fg)| {
+            (s.as_str(), Attrs::new().family(Family::Monospace).color(*fg))
+        }),
+        &Attrs::new().family(Family::Monospace),
+        Shaping::Basic,
+        None,
+    );
+    buf.shape_until_scroll(font_system, false);
+}
 
 /// Measure the pixel width/height of a single monospace cell using 'M'.
 fn measure_cell(font_system: &mut FontSystem, font_size: f32, line_height: f32) -> CellSize {
@@ -260,8 +487,8 @@ pub fn hash_row(
     row_idx: usize,
     cursor: arcterm_core::CursorPos,
 ) -> u64 {
-    use std::hash::{Hash, Hasher};
     use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
     let mut h = DefaultHasher::new();
     row_idx.hash(&mut h);
@@ -284,9 +511,17 @@ pub fn hash_row(
 fn hash_color(c: TermColor, h: &mut impl std::hash::Hasher) {
     use std::hash::Hash;
     match c {
-        TermColor::Default      => 0u8.hash(h),
-        TermColor::Indexed(n)   => { 1u8.hash(h); n.hash(h); }
-        TermColor::Rgb(r, g, b) => { 2u8.hash(h); r.hash(h); g.hash(h); b.hash(h); }
+        TermColor::Default => 0u8.hash(h),
+        TermColor::Indexed(n) => {
+            1u8.hash(h);
+            n.hash(h);
+        }
+        TermColor::Rgb(r, g, b) => {
+            2u8.hash(h);
+            r.hash(h);
+            g.hash(h);
+            b.hash(h);
+        }
     }
 }
 
@@ -339,7 +574,10 @@ mod tests {
         let c2 = CursorPos { row: 3, col: 4 };
         let h1 = hash_row(&row, 0, c1);
         let h2 = hash_row(&row, 0, c2);
-        assert_eq!(h1, h2, "cursor movement on another row must not change hash of row 0");
+        assert_eq!(
+            h1, h2,
+            "cursor movement on another row must not change hash of row 0"
+        );
     }
 
     /// Changing a cell's fg color must change the hash.
