@@ -332,6 +332,47 @@ pub fn capture_session(
 }
 
 // ---------------------------------------------------------------------------
+// discover_workspaces — produce WorkspaceEntry vec for the switcher UI
+// ---------------------------------------------------------------------------
+
+/// Scan the workspaces directory and return a [`Vec<WorkspaceEntry>`] suitable
+/// for use in the workspace switcher overlay.
+///
+/// Skips `.toml` files whose stem starts with `_` (auto-save/reserved files).
+/// Results are sorted alphabetically by name.  Returns an empty `Vec` if the
+/// directory does not exist.
+pub fn discover_workspaces() -> Vec<crate::palette::WorkspaceEntry> {
+    let dir = workspaces_dir();
+    let read_dir = match std::fs::read_dir(&dir) {
+        Ok(rd) => rd,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut results = Vec::new();
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+
+        if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+            continue;
+        }
+
+        let stem = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+
+        if stem.starts_with('_') {
+            continue;
+        }
+
+        results.push(crate::palette::WorkspaceEntry { name: stem, path });
+    }
+
+    results.sort_by(|a, b| a.name.cmp(&b.name));
+    results
+}
+
+// ---------------------------------------------------------------------------
 // list_workspaces — scan workspaces directory
 // ---------------------------------------------------------------------------
 
@@ -879,5 +920,102 @@ type = "leaf"
         );
 
         cleanup_tempdir(&base);
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 3 (PLAN-3.1) — discover_workspaces tests
+    // -----------------------------------------------------------------------
+
+    /// Helper: run discover_workspaces logic against a custom directory.
+    fn discover_workspaces_in(dir: &Path) -> Vec<crate::palette::WorkspaceEntry> {
+        let read_dir = match std::fs::read_dir(dir) {
+            Ok(rd) => rd,
+            Err(_) => return Vec::new(),
+        };
+
+        let mut results = Vec::new();
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+                continue;
+            }
+            let stem = match path.file_stem().and_then(|s| s.to_str()) {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            if stem.starts_with('_') {
+                continue;
+            }
+            results.push(crate::palette::WorkspaceEntry { name: stem, path });
+        }
+        results.sort_by(|a, b| a.name.cmp(&b.name));
+        results
+    }
+
+    #[test]
+    fn discover_finds_toml_files_as_entries() {
+        let dir = tempdir_for_test("discover_toml");
+        std::fs::write(dir.join("alpha.toml"), b"").ok();
+        std::fs::write(dir.join("beta.toml"), b"").ok();
+        std::fs::write(dir.join("notes.txt"), b"").ok();
+
+        let results = discover_workspaces_in(&dir);
+        let names: Vec<&str> = results.iter().map(|e| e.name.as_str()).collect();
+
+        assert!(names.contains(&"alpha"), "alpha.toml must appear");
+        assert!(names.contains(&"beta"), "beta.toml must appear");
+        assert!(!names.contains(&"notes"), "notes.txt must be filtered out");
+
+        cleanup_tempdir(&dir);
+    }
+
+    #[test]
+    fn discover_ignores_underscore_prefixed_files() {
+        let dir = tempdir_for_test("discover_underscore");
+        std::fs::write(dir.join("my-workspace.toml"), b"").ok();
+        std::fs::write(dir.join("_autosave.toml"), b"").ok();
+        std::fs::write(dir.join("_session.toml"), b"").ok();
+
+        let results = discover_workspaces_in(&dir);
+        let names: Vec<&str> = results.iter().map(|e| e.name.as_str()).collect();
+
+        assert!(names.contains(&"my-workspace"));
+        assert!(!names.contains(&"_autosave"), "_autosave must be filtered");
+        assert!(!names.contains(&"_session"), "_session must be filtered");
+
+        cleanup_tempdir(&dir);
+    }
+
+    #[test]
+    fn discover_returns_empty_for_nonexistent_directory() {
+        let dir = std::path::PathBuf::from("/tmp/arcterm_nonexistent_dir_xyz_12345");
+        let results = discover_workspaces_in(&dir);
+        assert!(results.is_empty(), "nonexistent dir must return empty vec");
+    }
+
+    #[test]
+    fn discover_sorts_alphabetically() {
+        let dir = tempdir_for_test("discover_sort");
+        std::fs::write(dir.join("zebra.toml"), b"").ok();
+        std::fs::write(dir.join("alpha.toml"), b"").ok();
+        std::fs::write(dir.join("mango.toml"), b"").ok();
+
+        let results = discover_workspaces_in(&dir);
+        let names: Vec<&str> = results.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "mango", "zebra"], "must be sorted alphabetically");
+
+        cleanup_tempdir(&dir);
+    }
+
+    #[test]
+    fn discover_entry_path_points_to_toml_file() {
+        let dir = tempdir_for_test("discover_path");
+        std::fs::write(dir.join("myws.toml"), b"").ok();
+
+        let results = discover_workspaces_in(&dir);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].path.to_string_lossy().ends_with("myws.toml"));
+
+        cleanup_tempdir(&dir);
     }
 }
