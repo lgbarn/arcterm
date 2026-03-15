@@ -10,4 +10,5 @@ winit.workspace = true
 glyphon.workspace = true
 pollster.workspace = true
 log.workspace = true
+env_logger.workspace = true
 arcterm-core = { path = "../arcterm-core" }
