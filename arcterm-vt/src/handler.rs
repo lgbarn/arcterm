@@ -1,6 +1,55 @@
 //! Handler trait for semantic terminal operations, plus the Grid implementation.
 
+use std::collections::HashMap;
+
 use arcterm_core::{Cell, CursorPos, Grid, TermModes};
+
+// ---------------------------------------------------------------------------
+// ContentType — semantic classification for OSC 7770 structured content
+// ---------------------------------------------------------------------------
+
+/// Classifies the type of structured content carried in an OSC 7770 block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContentType {
+    CodeBlock,
+    Diff,
+    Plan,
+    Markdown,
+    Json,
+    Error,
+    Progress,
+    Image,
+}
+
+// ---------------------------------------------------------------------------
+// StructuredContentAccumulator — collects chars during an OSC 7770 block
+// ---------------------------------------------------------------------------
+
+/// Accumulates characters written inside an OSC 7770 `start` / `end` pair.
+///
+/// While an accumulator is active, every `put_char` call both writes to the
+/// terminal grid (so the content is rendered normally) and appends to
+/// `buffer` so the full text is available for structured processing.
+#[derive(Debug, Clone)]
+pub struct StructuredContentAccumulator {
+    /// The semantic type of this content block.
+    pub content_type: ContentType,
+    /// Key/value attributes parsed from the OSC 7770 params (e.g. `lang=rust`).
+    pub attrs: HashMap<String, String>,
+    /// Raw text accumulated since the `start` OSC was received.
+    pub buffer: String,
+}
+
+impl StructuredContentAccumulator {
+    /// Create a new, empty accumulator for the given content type and attrs.
+    pub fn new(content_type: ContentType, attrs: HashMap<String, String>) -> Self {
+        Self {
+            content_type,
+            attrs,
+            buffer: String::new(),
+        }
+    }
+}
 
 /// Semantic terminal operations. All methods have default no-op implementations
 /// so implementations only override what they need.
@@ -138,6 +187,32 @@ pub trait Handler {
 
     /// Return to numeric keypad mode (ESC >).
     fn set_keypad_numeric_mode(&mut self) {}
+
+    // -------------------------------------------------------------------------
+    // OSC 7770 — structured content (Phase 4)
+    // -------------------------------------------------------------------------
+
+    /// Begin a structured content block of the given type with optional attrs.
+    fn structured_content_start(
+        &mut self,
+        _content_type: ContentType,
+        _attrs: HashMap<String, String>,
+    ) {
+    }
+
+    /// End the current structured content block and move it to completed.
+    fn structured_content_end(&mut self) {}
+
+    // -------------------------------------------------------------------------
+    // Kitty graphics protocol (APC, Phase 4)
+    // -------------------------------------------------------------------------
+
+    /// Dispatch a Kitty Graphics Protocol command.
+    ///
+    /// `payload` is the raw bytes between the APC introducer (`ESC _`) and the
+    /// String Terminator (`ESC \`), with the delimiters stripped.  The default
+    /// implementation is a no-op so existing Handler implementors are unaffected.
+    fn kitty_graphics_command(&mut self, _payload: &[u8]) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +232,10 @@ pub struct GridState {
     pub saved_cursor: Option<CursorPos>,
     /// Normal-screen grid saved when entering alt screen.
     pub normal_screen: Option<Grid>,
+    /// Active OSC 7770 accumulator, set between start and end signals.
+    pub accumulator: Option<StructuredContentAccumulator>,
+    /// Completed structured content blocks in receive order.
+    pub completed_blocks: Vec<StructuredContentAccumulator>,
 }
 
 impl GridState {
@@ -169,6 +248,8 @@ impl GridState {
             scroll_bottom: bottom,
             saved_cursor: None,
             normal_screen: None,
+            accumulator: None,
+            completed_blocks: Vec::new(),
         }
     }
 
@@ -243,7 +324,26 @@ impl GridState {
 
 impl Handler for GridState {
     fn put_char(&mut self, c: char) {
+        // Always render to the grid.
         self.grid.put_char_at_cursor(c);
+        // If a structured content block is active, also append to its buffer.
+        if let Some(acc) = self.accumulator.as_mut() {
+            acc.buffer.push(c);
+        }
+    }
+
+    fn structured_content_start(
+        &mut self,
+        content_type: ContentType,
+        attrs: HashMap<String, String>,
+    ) {
+        self.accumulator = Some(StructuredContentAccumulator::new(content_type, attrs));
+    }
+
+    fn structured_content_end(&mut self) {
+        if let Some(acc) = self.accumulator.take() {
+            self.completed_blocks.push(acc);
+        }
     }
 
     fn newline(&mut self) {
@@ -926,5 +1026,151 @@ mod tests {
         assert!(gs.modes.app_cursor_keys);
         Handler::reset_mode(&mut gs, 1, true);
         assert!(!gs.modes.app_cursor_keys);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Task 1 (Phase 4): StructuredContentAccumulator + Handler methods
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod phase4_task1_tests {
+    use super::*;
+    use arcterm_core::{Grid, GridSize};
+    use std::collections::HashMap;
+
+    fn make_gs() -> GridState {
+        GridState::new(Grid::new(GridSize::new(24, 80)))
+    }
+
+    // --- ContentType enum ---
+
+    #[test]
+    fn content_type_variants_exist() {
+        let _types = [
+            ContentType::CodeBlock,
+            ContentType::Diff,
+            ContentType::Plan,
+            ContentType::Markdown,
+            ContentType::Json,
+            ContentType::Error,
+            ContentType::Progress,
+            ContentType::Image,
+        ];
+    }
+
+    // --- StructuredContentAccumulator construction ---
+
+    #[test]
+    fn accumulator_can_be_constructed() {
+        let mut attrs = HashMap::new();
+        attrs.insert("lang".to_string(), "rust".to_string());
+        let acc = StructuredContentAccumulator::new(ContentType::CodeBlock, attrs.clone());
+        assert!(matches!(acc.content_type, ContentType::CodeBlock));
+        assert_eq!(acc.attrs.get("lang").map(|s| s.as_str()), Some("rust"));
+        assert!(acc.buffer.is_empty());
+    }
+
+    #[test]
+    fn accumulator_buffer_starts_empty() {
+        let acc = StructuredContentAccumulator::new(ContentType::Json, HashMap::new());
+        assert_eq!(acc.buffer, "");
+    }
+
+    // --- GridState accumulator field and completed_blocks ---
+
+    #[test]
+    fn grid_state_has_accumulator_field_none_by_default() {
+        let gs = make_gs();
+        assert!(gs.accumulator.is_none());
+    }
+
+    #[test]
+    fn grid_state_has_completed_blocks_empty_by_default() {
+        let gs = make_gs();
+        assert!(gs.completed_blocks.is_empty());
+    }
+
+    // --- structured_content_start / structured_content_end via Handler ---
+
+    #[test]
+    fn structured_content_start_sets_accumulator() {
+        let mut gs = make_gs();
+        let mut attrs = HashMap::new();
+        attrs.insert("lang".to_string(), "python".to_string());
+        Handler::structured_content_start(&mut gs, ContentType::CodeBlock, attrs);
+        assert!(gs.accumulator.is_some());
+        let acc = gs.accumulator.as_ref().unwrap();
+        assert!(matches!(acc.content_type, ContentType::CodeBlock));
+        assert_eq!(acc.attrs.get("lang").map(|s| s.as_str()), Some("python"));
+    }
+
+    #[test]
+    fn structured_content_end_moves_accumulator_to_completed() {
+        let mut gs = make_gs();
+        Handler::structured_content_start(&mut gs, ContentType::Markdown, HashMap::new());
+        Handler::structured_content_end(&mut gs);
+        assert!(gs.accumulator.is_none());
+        assert_eq!(gs.completed_blocks.len(), 1);
+        assert!(matches!(gs.completed_blocks[0].content_type, ContentType::Markdown));
+    }
+
+    #[test]
+    fn structured_content_end_without_start_is_noop() {
+        let mut gs = make_gs();
+        // Must not panic or add a completed block.
+        Handler::structured_content_end(&mut gs);
+        assert!(gs.completed_blocks.is_empty());
+    }
+
+    // --- put_char during accumulation appends to buffer AND writes to grid ---
+
+    #[test]
+    fn put_char_during_accumulation_appends_to_buffer() {
+        let mut gs = make_gs();
+        Handler::structured_content_start(&mut gs, ContentType::CodeBlock, HashMap::new());
+        Handler::put_char(&mut gs, 'H');
+        Handler::put_char(&mut gs, 'i');
+        assert_eq!(gs.accumulator.as_ref().unwrap().buffer, "Hi");
+    }
+
+    #[test]
+    fn put_char_during_accumulation_also_writes_to_grid() {
+        let mut gs = make_gs();
+        Handler::structured_content_start(&mut gs, ContentType::CodeBlock, HashMap::new());
+        Handler::put_char(&mut gs, 'X');
+        // The char must appear in the grid at the cursor position (0,0).
+        assert_eq!(gs.grid.cells[0][0].c, 'X');
+    }
+
+    #[test]
+    fn put_char_without_accumulation_does_not_affect_accumulator() {
+        let mut gs = make_gs();
+        Handler::put_char(&mut gs, 'Z');
+        assert!(gs.accumulator.is_none());
+        assert_eq!(gs.grid.cells[0][0].c, 'Z');
+    }
+
+    // --- Multiple blocks ---
+
+    #[test]
+    fn multiple_blocks_accumulate_independently() {
+        let mut gs = make_gs();
+
+        // First block.
+        Handler::structured_content_start(&mut gs, ContentType::CodeBlock, HashMap::new());
+        Handler::put_char(&mut gs, 'A');
+        Handler::structured_content_end(&mut gs);
+
+        // Second block.
+        Handler::structured_content_start(&mut gs, ContentType::Json, HashMap::new());
+        Handler::put_char(&mut gs, 'B');
+        Handler::structured_content_end(&mut gs);
+
+        assert_eq!(gs.completed_blocks.len(), 2);
+        assert_eq!(gs.completed_blocks[0].buffer, "A");
+        assert_eq!(gs.completed_blocks[1].buffer, "B");
+        assert!(matches!(gs.completed_blocks[0].content_type, ContentType::CodeBlock));
+        assert!(matches!(gs.completed_blocks[1].content_type, ContentType::Json));
     }
 }
