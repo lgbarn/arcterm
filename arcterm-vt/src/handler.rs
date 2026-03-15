@@ -511,7 +511,12 @@ impl Handler for GridState {
     fn set_scroll_region(&mut self, top: usize, bottom: usize) {
         let max_row = self.grid.size.rows.saturating_sub(1);
         self.scroll_top = top.min(max_row);
-        self.scroll_bottom = bottom.min(max_row);
+        // usize::MAX sentinel means "default to last row".
+        self.scroll_bottom = if bottom == usize::MAX {
+            max_row
+        } else {
+            bottom.min(max_row)
+        };
         // DECSTBM moves the cursor to the top-left corner.
         self.grid.set_cursor(CursorPos { row: 0, col: 0 });
     }

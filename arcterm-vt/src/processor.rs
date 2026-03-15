@@ -50,7 +50,7 @@ impl<H: Handler> vte::Perform for Performer<'_, H> {
             0x09 => self.handler.tab(),
             0x0A => self.handler.line_feed(),
             0x0D => self.handler.carriage_return(),
-            _ => {} // other control codes ignored in Phase 1
+            _ => {} // other control codes ignored
         }
     }
 
@@ -58,7 +58,7 @@ impl<H: Handler> vte::Perform for Performer<'_, H> {
     fn csi_dispatch(
         &mut self,
         params: &vte::Params,
-        _intermediates: &[u8],
+        intermediates: &[u8],
         ignore: bool,
         action: char,
     ) {
@@ -72,6 +72,9 @@ impl<H: Handler> vte::Perform for Performer<'_, H> {
         // For most CSI sequences we only need the first sub-param of each param
         // (i.e. item[0]).  For SGR we need them all flattened.
         let raw: Vec<&[u16]> = params.iter().collect();
+
+        // Detect whether this is a DEC private mode sequence (ESC[?...h/l).
+        let private = intermediates.contains(&0x3F); // '?'
 
         match action {
             // CUU — cursor up
@@ -122,20 +125,34 @@ impl<H: Handler> vte::Perform for Performer<'_, H> {
                 let mode = raw.first().and_then(|p| p.first()).copied().unwrap_or(0);
                 self.handler.erase_in_line(mode);
             }
+            // IL — insert lines
+            'L' => {
+                let n = raw.first().and_then(|p| p.first()).copied().unwrap_or(1);
+                self.handler.insert_lines(n.max(1) as usize);
+            }
+            // DL — delete lines
+            'M' => {
+                let n = raw.first().and_then(|p| p.first()).copied().unwrap_or(1);
+                self.handler.delete_lines(n.max(1) as usize);
+            }
             // SGR — select graphic rendition
             'm' => {
                 // Flatten params+subparams into a single &[u16] slice.
-                // Each &[u16] sub-slice from vte contains a primary param
-                // followed by colon-separated sub-params (e.g. [38, 2, 255, 128, 0]
-                // arrives as [[38], [2], [255], [128], [0]] in standard mode,
-                // or as [[38:2:255:128:0]] in colon-subparam mode).
-                // We flatten everything so apply_sgr sees one contiguous slice.
                 let flat: Vec<u16> = raw.iter().flat_map(|sub| sub.iter().copied()).collect();
                 if flat.is_empty() {
                     self.handler.set_sgr(&[0]);
                 } else {
                     self.handler.set_sgr(&flat);
                 }
+            }
+            // DSR — device status report
+            'n' => {
+                let n = raw.first().and_then(|p| p.first()).copied().unwrap_or(0);
+                self.handler.device_status_report(n);
+            }
+            // DA — device attributes (primary)
+            'c' => {
+                self.handler.device_attributes();
             }
             // SU — scroll up
             'S' => {
@@ -146,6 +163,80 @@ impl<H: Handler> vte::Perform for Performer<'_, H> {
             'T' => {
                 let n = raw.first().and_then(|p| p.first()).copied().unwrap_or(1);
                 self.handler.scroll_down(n.max(1) as usize);
+            }
+            // ICH — insert character (blank spaces at cursor)
+            '@' => {
+                let n = raw.first().and_then(|p| p.first()).copied().unwrap_or(1);
+                self.handler.insert_chars(n.max(1) as usize);
+            }
+            // CHA — cursor horizontal absolute (1-based)
+            'G' => {
+                let col = raw
+                    .first()
+                    .and_then(|p| p.first())
+                    .copied()
+                    .unwrap_or(1)
+                    .max(1) as usize
+                    - 1;
+                self.handler.cursor_horizontal_absolute(col);
+            }
+            // DCH — delete character
+            'P' => {
+                let n = raw.first().and_then(|p| p.first()).copied().unwrap_or(1);
+                self.handler.delete_chars(n.max(1) as usize);
+            }
+            // ECH — erase characters
+            'X' => {
+                let n = raw.first().and_then(|p| p.first()).copied().unwrap_or(1);
+                self.handler.erase_chars(n.max(1) as usize);
+            }
+            // VPA — cursor vertical absolute (1-based)
+            'd' => {
+                let row = raw
+                    .first()
+                    .and_then(|p| p.first())
+                    .copied()
+                    .unwrap_or(1)
+                    .max(1) as usize
+                    - 1;
+                self.handler.cursor_vertical_absolute(row);
+            }
+            // SM / RM — set/reset mode
+            'h' => {
+                for param_group in &raw {
+                    let mode = param_group.first().copied().unwrap_or(0);
+                    self.handler.set_mode(mode, private);
+                }
+            }
+            'l' => {
+                for param_group in &raw {
+                    let mode = param_group.first().copied().unwrap_or(0);
+                    self.handler.reset_mode(mode, private);
+                }
+            }
+            // DECSTBM — set top and bottom margins (scroll region), 1-based
+            'r' => {
+                let top = raw
+                    .first()
+                    .and_then(|p| p.first())
+                    .copied()
+                    .unwrap_or(1)
+                    .max(1) as usize
+                    - 1;
+                // Default bottom is the last row — but we don't know grid size
+                // here; use a sentinel of u16::MAX and let the handler clamp.
+                let bottom_raw = raw
+                    .get(1)
+                    .and_then(|p| p.first())
+                    .copied()
+                    .unwrap_or(0);
+                // bottom=0 means "default" (full screen) — pass usize::MAX.
+                let bottom = if bottom_raw == 0 {
+                    usize::MAX
+                } else {
+                    (bottom_raw as usize).saturating_sub(1)
+                };
+                self.handler.set_scroll_region(top, bottom);
             }
             _ => {} // unhandled CSI sequence — silently ignored
         }
@@ -177,5 +268,19 @@ impl<H: Handler> vte::Perform for Performer<'_, H> {
     }
     fn put(&mut self, _byte: u8) {}
     fn unhook(&mut self) {}
-    fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
+
+    // ESC dispatch (2-byte escape sequences).
+    fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, byte: u8) {
+        match byte {
+            // DECSC — save cursor position
+            0x37 => self.handler.save_cursor_position(),
+            // DECRC — restore cursor position
+            0x38 => self.handler.restore_cursor_position(),
+            // DECKPAM — set keypad application mode
+            0x3D => self.handler.set_keypad_application_mode(),
+            // DECKPNM — set keypad numeric mode
+            0x3E => self.handler.set_keypad_numeric_mode(),
+            _ => {}
+        }
+    }
 }

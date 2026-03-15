@@ -715,3 +715,181 @@ mod edge_case_tests {
         assert_eq!(g.cursor().col, 0, "BS at col 0 must stay at col 0");
     }
 }
+
+// =============================================================================
+// Phase 2 processor tests — DEC private modes, extended CSI/ESC (Task 2 TDD)
+// =============================================================================
+
+#[cfg(test)]
+mod phase2_processor_tests {
+    use arcterm_core::{CursorPos, Grid, GridSize};
+
+    use crate::{GridState, Handler, Processor};
+
+    fn make_gs(rows: usize, cols: usize) -> GridState {
+        GridState::new(Grid::new(GridSize::new(rows, cols)))
+    }
+
+    fn feed_gs(gs: &mut GridState, bytes: &[u8]) {
+        let mut proc = Processor::new();
+        proc.advance(gs, bytes);
+    }
+
+    // -------------------------------------------------------------------------
+    // DEC private mode set: ESC[?25h → cursor visible
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn dec_private_mode_set_25_cursor_visible() {
+        let mut gs = make_gs(24, 80);
+        gs.modes.cursor_visible = false;
+        feed_gs(&mut gs, b"\x1b[?25h");
+        assert!(gs.modes.cursor_visible, "mode 25h must make cursor visible");
+    }
+
+    #[test]
+    fn dec_private_mode_reset_25_cursor_hidden() {
+        let mut gs = make_gs(24, 80);
+        feed_gs(&mut gs, b"\x1b[?25l");
+        assert!(!gs.modes.cursor_visible, "mode 25l must hide cursor");
+    }
+
+    // -------------------------------------------------------------------------
+    // DEC private mode set: ESC[?1h → app cursor keys
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn dec_private_mode_set_1_app_cursor_keys() {
+        let mut gs = make_gs(24, 80);
+        feed_gs(&mut gs, b"\x1b[?1h");
+        assert!(gs.modes.app_cursor_keys, "mode 1h must set app cursor keys");
+    }
+
+    #[test]
+    fn dec_private_mode_reset_1_normal_cursor_keys() {
+        let mut gs = make_gs(24, 80);
+        gs.modes.app_cursor_keys = true;
+        feed_gs(&mut gs, b"\x1b[?1l");
+        assert!(!gs.modes.app_cursor_keys, "mode 1l must clear app cursor keys");
+    }
+
+    // -------------------------------------------------------------------------
+    // DECSTBM: ESC[5;20r → scroll region rows 4..19 (0-indexed)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn decstbm_sets_scroll_region() {
+        let mut gs = make_gs(24, 80);
+        feed_gs(&mut gs, b"\x1b[5;20r");
+        assert_eq!(gs.scroll_top, 4, "scroll_top must be 4 (1-based 5 → 0-based 4)");
+        assert_eq!(gs.scroll_bottom, 19, "scroll_bottom must be 19 (1-based 20 → 0-based 19)");
+        // DECSTBM moves cursor to home
+        assert_eq!(gs.grid.cursor(), CursorPos { row: 0, col: 0 });
+    }
+
+    #[test]
+    fn decstbm_no_params_resets_to_full_screen() {
+        let mut gs = make_gs(24, 80);
+        // First set a restricted region
+        feed_gs(&mut gs, b"\x1b[5;20r");
+        // Then reset with no params (ESC[r or ESC[1;24r)
+        feed_gs(&mut gs, b"\x1b[r");
+        assert_eq!(gs.scroll_top, 0);
+        assert_eq!(gs.scroll_bottom, 23);
+    }
+
+    // -------------------------------------------------------------------------
+    // ESC 7 / ESC 8: save and restore cursor position
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn esc_7_saves_cursor_position() {
+        let mut gs = make_gs(24, 80);
+        gs.grid.set_cursor(CursorPos { row: 5, col: 10 });
+        feed_gs(&mut gs, b"\x1b7");
+        assert_eq!(gs.saved_cursor, Some(CursorPos { row: 5, col: 10 }));
+    }
+
+    #[test]
+    fn esc_8_restores_cursor_position() {
+        let mut gs = make_gs(24, 80);
+        gs.grid.set_cursor(CursorPos { row: 5, col: 10 });
+        feed_gs(&mut gs, b"\x1b7");
+        gs.grid.set_cursor(CursorPos { row: 0, col: 0 });
+        feed_gs(&mut gs, b"\x1b8");
+        assert_eq!(gs.grid.cursor(), CursorPos { row: 5, col: 10 });
+    }
+
+    // -------------------------------------------------------------------------
+    // DCH: ESC[3P → delete 3 characters at cursor
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn csi_dch_deletes_chars_at_cursor() {
+        let mut gs = make_gs(5, 10);
+        // Write "ABCDEFGHIJ" in row 0
+        for (i, c) in b"ABCDEFGHIJ".iter().enumerate() {
+            gs.grid.cells[0][i].c = *c as char;
+        }
+        gs.grid.set_cursor(CursorPos { row: 0, col: 2 });
+        feed_gs(&mut gs, b"\x1b[3P");
+        // After deleting 3 chars at col 2: "AB" + "FGHIJ" + 3 spaces
+        assert_eq!(gs.grid.cells[0][0].c, 'A');
+        assert_eq!(gs.grid.cells[0][1].c, 'B');
+        assert_eq!(gs.grid.cells[0][2].c, 'F');
+        assert_eq!(gs.grid.cells[0][3].c, 'G');
+        assert_eq!(gs.grid.cells[0][7].c, ' ', "vacated cells must be space");
+    }
+
+    // -------------------------------------------------------------------------
+    // ICH: ESC[2@ → insert 2 blank chars at cursor
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn csi_ich_inserts_blank_chars_at_cursor() {
+        let mut gs = make_gs(5, 10);
+        for (i, c) in b"ABCDEFGHIJ".iter().enumerate() {
+            gs.grid.cells[0][i].c = *c as char;
+        }
+        gs.grid.set_cursor(CursorPos { row: 0, col: 2 });
+        feed_gs(&mut gs, b"\x1b[2@");
+        // After inserting 2 blank chars at col 2: "AB  CDEFGH" (IJ dropped)
+        assert_eq!(gs.grid.cells[0][0].c, 'A');
+        assert_eq!(gs.grid.cells[0][1].c, 'B');
+        assert_eq!(gs.grid.cells[0][2].c, ' ', "inserted blank");
+        assert_eq!(gs.grid.cells[0][3].c, ' ', "inserted blank");
+        assert_eq!(gs.grid.cells[0][4].c, 'C');
+        assert_eq!(gs.grid.cells[0][5].c, 'D');
+    }
+
+    // -------------------------------------------------------------------------
+    // CHA: ESC[5G → cursor to column 4 (0-indexed)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn csi_cha_moves_cursor_to_column() {
+        let mut gs = make_gs(24, 80);
+        gs.grid.set_cursor(CursorPos { row: 3, col: 0 });
+        feed_gs(&mut gs, b"\x1b[5G");
+        assert_eq!(gs.grid.cursor(), CursorPos { row: 3, col: 4 });
+    }
+
+    // -------------------------------------------------------------------------
+    // ESC = / ESC > keypad mode
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn esc_equals_sets_app_keypad_mode() {
+        let mut gs = make_gs(24, 80);
+        feed_gs(&mut gs, b"\x1b=");
+        assert!(gs.modes.app_keypad, "ESC= must set app keypad mode");
+    }
+
+    #[test]
+    fn esc_greater_clears_app_keypad_mode() {
+        let mut gs = make_gs(24, 80);
+        gs.modes.app_keypad = true;
+        feed_gs(&mut gs, b"\x1b>");
+        assert!(!gs.modes.app_keypad, "ESC> must clear app keypad mode");
+    }
+}
