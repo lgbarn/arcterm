@@ -351,6 +351,110 @@ impl Grid {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Line and character insert/delete
+    // -------------------------------------------------------------------------
+
+    /// Insert `n` blank lines at the cursor row, within the scroll region.
+    ///
+    /// Lines at and below the cursor are shifted down; lines that fall off the
+    /// bottom of the scroll region are discarded.
+    pub fn insert_lines(&mut self, n: usize) {
+        let cur_row = self.cursor.row;
+        let bottom = self.scroll_region
+            .map(|(_, b)| b)
+            .unwrap_or(self.size.rows.saturating_sub(1));
+
+        if cur_row > bottom {
+            return;
+        }
+
+        let region_rows = bottom + 1 - cur_row;
+        let n = n.min(region_rows);
+
+        for _ in 0..n {
+            // Remove last row of the affected region, insert blank at cur_row.
+            self.cells.remove(bottom);
+            self.cells.insert(cur_row, (0..self.size.cols).map(|_| Cell::default()).collect());
+        }
+        self.dirty = true;
+    }
+
+    /// Delete `n` lines at the cursor row, within the scroll region.
+    ///
+    /// Lines below the deleted lines are shifted up; blank lines are inserted
+    /// at the bottom of the scroll region.
+    pub fn delete_lines(&mut self, n: usize) {
+        let cur_row = self.cursor.row;
+        let bottom = self.scroll_region
+            .map(|(_, b)| b)
+            .unwrap_or(self.size.rows.saturating_sub(1));
+
+        if cur_row > bottom {
+            return;
+        }
+
+        let region_rows = bottom + 1 - cur_row;
+        let n = n.min(region_rows);
+
+        for _ in 0..n {
+            self.cells.remove(cur_row);
+            self.cells.insert(bottom, (0..self.size.cols).map(|_| Cell::default()).collect());
+        }
+        self.dirty = true;
+    }
+
+    /// Insert `n` blank characters at the cursor column, shifting existing
+    /// characters right. Characters that fall off the right edge are discarded.
+    pub fn insert_chars(&mut self, n: usize) {
+        let row = self.cursor.row.min(self.size.rows.saturating_sub(1));
+        let col = self.cursor.col.min(self.size.cols.saturating_sub(1));
+        let cols = self.size.cols;
+        let n = n.min(cols - col);
+
+        // Shift characters right.
+        for c in (col..cols - n).rev() {
+            self.cells[row][c + n] = self.cells[row][c].clone();
+        }
+        // Clear the inserted positions.
+        for c in col..(col + n) {
+            self.cells[row][c] = Cell::default();
+        }
+        self.dirty = true;
+    }
+
+    /// Delete `n` characters at the cursor column, shifting remaining
+    /// characters left. Blank characters are inserted at the right edge.
+    pub fn delete_chars(&mut self, n: usize) {
+        let row = self.cursor.row.min(self.size.rows.saturating_sub(1));
+        let col = self.cursor.col.min(self.size.cols.saturating_sub(1));
+        let cols = self.size.cols;
+        let n = n.min(cols - col);
+
+        // Shift characters left.
+        for c in col..(cols - n) {
+            self.cells[row][c] = self.cells[row][c + n].clone();
+        }
+        // Clear the right end.
+        for c in (cols - n)..cols {
+            self.cells[row][c] = Cell::default();
+        }
+        self.dirty = true;
+    }
+
+    /// Erase `n` characters starting at the cursor column by replacing them
+    /// with blank cells. Does not shift other characters.
+    pub fn erase_chars(&mut self, n: usize) {
+        let row = self.cursor.row.min(self.size.rows.saturating_sub(1));
+        let col = self.cursor.col.min(self.size.cols.saturating_sub(1));
+        let cols = self.size.cols;
+        let end = (col + n).min(cols);
+        for c in col..end {
+            self.cells[row][c] = Cell::default();
+        }
+        self.dirty = true;
+    }
+
     /// Write a character at the cursor, applying current_attrs, then advance.
     ///
     /// If advancing past the last column: move to the start of the next row.
