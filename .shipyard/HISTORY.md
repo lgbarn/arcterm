@@ -71,3 +71,17 @@
 - **Phase:** 4
 - **Status:** planned
 - **Message:** 6 plans across 3 waves. Verdict: READY. OSC 7770 protocol, syntect highlighting, auto-detection, Kitty graphics (with APC pre-scanner workaround).
+
+## 2026-03-15 — Phase 4 Build Complete
+- **Phase:** 4
+- **Status:** complete
+- **Plans:** 6/6 complete (1.1, 1.2, 2.1, 2.2, 3.1, 3.2)
+- **Tests:** 398 passing (176 app, 51 core, 6 pty, 38 render, 127 vt)
+- **Key Features:**
+  - OSC 7770 structured output protocol
+  - APC pre-scanner for Kitty graphics (vte APC workaround)
+  - Syntect code highlighting, diff/JSON/markdown renderers
+  - Auto-detection with conservative regex heuristics
+  - Kitty graphics: parser, chunk assembler, textured wgpu quads
+  - Terminal upgraded to GridState + ApcScanner pipeline
+  - Copy button on code blocks
