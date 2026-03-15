@@ -27,3 +27,8 @@
   - Plan 3.1 (App): required retry for input/exit handling
   - Plan 3.2 (CI): required retry for config completeness
   - Clippy violations fixed post-verification
+
+## 2026-03-15 — Phase 2 Planned
+- **Phase:** 2
+- **Status:** planned
+- **Message:** 7 plans across 3 waves. Verdict: CAUTION (file conflicts manageable via wave ordering). Research identified bg color rendering gap and DEC private mode gaps.
