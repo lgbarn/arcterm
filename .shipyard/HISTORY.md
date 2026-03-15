@@ -96,3 +96,8 @@
 - **Status:** complete
 - **Tests:** 400+ passing (216 app, 51 core, 10 pty, 38 render, 127 vt)
 - **Key Features:** Workspace TOML model, CWD capture, clap CLI, auto-save/restore, workspace switcher, Leader+s save
+
+## 2026-03-15 — Phase 6 Planned
+- **Phase:** 6
+- **Status:** planned
+- **Message:** 3 plans across 3 waves. Verdict: CONDITIONAL PASS. wasmtime 42, wit-bindgen Component Model, plugin manifest, event bus, CLI, example plugins.
