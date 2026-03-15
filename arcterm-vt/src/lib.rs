@@ -724,7 +724,7 @@ mod edge_case_tests {
 mod phase2_processor_tests {
     use arcterm_core::{CursorPos, Grid, GridSize};
 
-    use crate::{GridState, Handler, Processor};
+    use crate::{GridState, Processor};
 
     fn make_gs(rows: usize, cols: usize) -> GridState {
         GridState::new(Grid::new(GridSize::new(rows, cols)))
@@ -902,7 +902,7 @@ mod phase2_processor_tests {
 mod phase2_integration_tests {
     use arcterm_core::{CursorPos, Grid, GridSize};
 
-    use crate::{GridState, Handler, Processor};
+    use crate::{GridState, Processor};
 
     fn make_gs(rows: usize, cols: usize) -> GridState {
         GridState::new(Grid::new(GridSize::new(rows, cols)))
