@@ -2,3 +2,11 @@
 xt = "test --package arcterm-core --package arcterm-vt --package arcterm-pty"
 xr = "run --package arcterm-app"
 xc = "clippy --workspace --all-targets -- -D warnings"
+
+[build]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[target.aarch64-apple-darwin]
+# Default linker is fine on Apple Silicon
