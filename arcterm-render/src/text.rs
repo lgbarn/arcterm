@@ -148,17 +148,18 @@ impl TextRenderer {
         )
     }
 
-    /// Render previously prepared text into the active render pass.
+    /// Render previously prepared text into the active render pass, then trim
+    /// the glyph atlas to reclaim unused cache entries.
+    ///
+    /// The atlas trim is performed inside this method so callers cannot forget
+    /// to invoke it — omitting it would cause unbounded atlas growth.
     pub fn render<'pass>(
-        &'pass self,
+        &'pass mut self,
         pass: &mut wgpu::RenderPass<'pass>,
     ) -> Result<(), glyphon::RenderError> {
-        self.renderer.render(&self.atlas, &self.viewport, pass)
-    }
-
-    /// Trim the glyph atlas (call after frame submission).
-    pub fn trim_atlas(&mut self) {
+        let result = self.renderer.render(&self.atlas, &self.viewport, pass);
         self.atlas.trim();
+        result
     }
 }
 

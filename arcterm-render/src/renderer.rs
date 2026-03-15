@@ -54,7 +54,23 @@ impl Renderer {
         // Prepare text — suppress errors on atlas full (rare on first frame).
         let _ = self.text.prepare_grid(&self.gpu.device, &self.gpu.queue, grid, sf);
 
-        let (frame, view) = self.gpu.begin_frame();
+        let (frame, view) = match self.gpu.begin_frame() {
+            Ok(pair) => pair,
+            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                // Surface was lost (common on macOS during occlusion/restoration).
+                // Reconfigure with current dimensions and skip this frame.
+                self.gpu.resize(w, h);
+                return;
+            }
+            Err(wgpu::SurfaceError::OutOfMemory) => {
+                log::error!("GPU out of memory — skipping frame");
+                return;
+            }
+            Err(e) => {
+                log::warn!("begin_frame error: {e:?} — skipping frame");
+                return;
+            }
+        };
 
         let mut encoder =
             self.gpu
@@ -86,7 +102,6 @@ impl Renderer {
 
         self.gpu.queue.submit(Some(encoder.finish()));
         frame.present();
-        self.text.trim_atlas();
     }
 
     /// Calculate how many columns × rows fit the window at the given scale.

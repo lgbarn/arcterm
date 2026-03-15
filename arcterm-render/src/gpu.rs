@@ -85,14 +85,17 @@ impl GpuState {
     }
 
     /// Acquire the next swapchain texture and create a view for rendering.
-    pub fn begin_frame(&self) -> (wgpu::SurfaceTexture, wgpu::TextureView) {
-        let texture = self
-            .surface
-            .get_current_texture()
-            .expect("failed to acquire next swapchain texture");
+    ///
+    /// Returns `Err(SurfaceError::Lost)` when the surface is lost (e.g. window
+    /// occlusion on macOS).  Callers should handle that by calling `resize` with
+    /// the current dimensions and retrying.
+    pub fn begin_frame(
+        &self,
+    ) -> Result<(wgpu::SurfaceTexture, wgpu::TextureView), wgpu::SurfaceError> {
+        let texture = self.surface.get_current_texture()?;
         let view = texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        (texture, view)
+        Ok((texture, view))
     }
 }

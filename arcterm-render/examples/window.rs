@@ -103,6 +103,14 @@ impl ApplicationHandler for App {
             _ => {}
         }
     }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        // Request a redraw every time the event loop is about to wait, so the
+        // window renders continuously rather than only on reactive events.
+        if let Some(state) = &self.state {
+            state.window.request_redraw();
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
