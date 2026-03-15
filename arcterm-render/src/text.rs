@@ -7,6 +7,8 @@ use glyphon::{
 };
 use wgpu::MultisampleState;
 
+use crate::palette::RenderPalette;
+
 /// Cell dimensions measured from the font metrics.
 #[derive(Clone, Copy, Debug)]
 pub struct CellSize {
@@ -80,6 +82,7 @@ impl TextRenderer {
         queue: &wgpu::Queue,
         grid: &Grid,
         scale_factor: f32,
+        palette: &RenderPalette,
     ) -> Result<(), glyphon::PrepareError> {
         let rows = grid.rows_for_viewport();
         let num_rows = rows.len();
@@ -132,9 +135,9 @@ impl TextRenderer {
                     let s = cell.c.to_string();
                     let fg = if cell.attrs.reverse {
                         // Reverse: text draws with the cell's background color.
-                        ansi_color_to_glyphon(cell.attrs.bg, false)
+                        ansi_color_to_glyphon(cell.attrs.bg, false, palette)
                     } else {
-                        ansi_color_to_glyphon(cell.attrs.fg, true)
+                        ansi_color_to_glyphon(cell.attrs.fg, true, palette)
                     };
                     (s, fg)
                 })
@@ -154,6 +157,7 @@ impl TextRenderer {
         }
 
         // Build TextArea slice from the now-stable row_buffers.
+        let default_fg = palette.fg_glyphon();
         let text_areas: Vec<TextArea> = self
             .row_buffers
             .iter()
@@ -164,7 +168,7 @@ impl TextRenderer {
                 top: row_idx as f32 * cell_h,
                 scale: scale_factor,
                 bounds: TextBounds::default(),
-                default_color: Color::rgb(0xd0, 0xd0, 0xd0),
+                default_color: default_fg,
                 custom_glyphs: &[],
             })
             .collect();
@@ -224,66 +228,23 @@ fn measure_cell(font_system: &mut FontSystem, font_size: f32, line_height: f32) 
     }
 }
 
-/// Map a terminal Color to a glyphon Color.
-/// `is_fg` controls the default: near-white for foreground, dark for background.
-pub fn ansi_color_to_glyphon(color: TermColor, is_fg: bool) -> Color {
+/// Map a terminal Color to a glyphon Color using the active palette.
+///
+/// `is_fg` controls the default: palette foreground for fg, palette
+/// background for bg.
+pub fn ansi_color_to_glyphon(color: TermColor, is_fg: bool, palette: &RenderPalette) -> Color {
     match color {
         TermColor::Default => {
             if is_fg {
-                Color::rgb(0xd0, 0xd0, 0xd0)
+                palette.fg_glyphon()
             } else {
-                Color::rgb(0x1e, 0x1e, 0x2e)
+                let (r, g, b) = palette.background;
+                Color::rgb(r, g, b)
             }
         }
         TermColor::Rgb(r, g, b) => Color::rgb(r, g, b),
-        TermColor::Indexed(n) => indexed_to_glyphon(n),
+        TermColor::Indexed(n) => palette.indexed_glyphon(n),
     }
-}
-
-/// Convert an xterm-256 palette index to a glyphon Color.
-fn indexed_to_glyphon(n: u8) -> Color {
-    let (r, g, b) = indexed_to_rgb(n);
-    Color::rgb(r, g, b)
-}
-
-fn indexed_to_rgb(n: u8) -> (u8, u8, u8) {
-    // First 16: standard ANSI colors.
-    static ANSI16: [(u8, u8, u8); 16] = [
-        (0x00, 0x00, 0x00), // 0  black
-        (0xcc, 0x00, 0x00), // 1  red
-        (0x4e, 0x9a, 0x06), // 2  green
-        (0xc4, 0xa0, 0x00), // 3  yellow
-        (0x34, 0x65, 0xa4), // 4  blue
-        (0x75, 0x50, 0x7b), // 5  magenta
-        (0x06, 0x98, 0x9a), // 6  cyan
-        (0xd3, 0xd7, 0xcf), // 7  white
-        (0x55, 0x57, 0x53), // 8  bright black
-        (0xef, 0x29, 0x29), // 9  bright red
-        (0x8a, 0xe2, 0x34), // 10 bright green
-        (0xfc, 0xe9, 0x4f), // 11 bright yellow
-        (0x72, 0x9f, 0xcf), // 12 bright blue
-        (0xad, 0x7f, 0xa8), // 13 bright magenta
-        (0x34, 0xe2, 0xe2), // 14 bright cyan
-        (0xee, 0xee, 0xec), // 15 bright white
-    ];
-
-    if (n as usize) < ANSI16.len() {
-        return ANSI16[n as usize];
-    }
-
-    // 216-color cube: indices 16–231.
-    if (16..=231).contains(&n) {
-        let idx = n - 16;
-        let b_idx = idx % 6;
-        let g_idx = (idx / 6) % 6;
-        let r_idx = idx / 36;
-        let cube = |i: u8| if i == 0 { 0u8 } else { 55 + i * 40 };
-        return (cube(r_idx), cube(g_idx), cube(b_idx));
-    }
-
-    // Greyscale ramp: indices 232–255.
-    let level = (n - 232) * 10 + 8;
-    (level, level, level)
 }
 
 /// Compute a cheap hash of a row's visual content for dirty-row skipping.
