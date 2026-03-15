@@ -893,3 +893,179 @@ mod phase2_processor_tests {
         assert!(!gs.modes.app_keypad, "ESC> must clear app keypad mode");
     }
 }
+
+// =============================================================================
+// Phase 2 integration tests — vim/htop scenarios (Task 3 TDD)
+// =============================================================================
+
+#[cfg(test)]
+mod phase2_integration_tests {
+    use arcterm_core::{CursorPos, Grid, GridSize};
+
+    use crate::{GridState, Handler, Processor};
+
+    fn make_gs(rows: usize, cols: usize) -> GridState {
+        GridState::new(Grid::new(GridSize::new(rows, cols)))
+    }
+
+    fn feed_gs(gs: &mut GridState, bytes: &[u8]) {
+        let mut proc = Processor::new();
+        proc.advance(gs, bytes);
+    }
+
+    // -------------------------------------------------------------------------
+    // vim startup sequence:
+    //   ESC[?1049h  → enter alt screen
+    //   ESC[2J      → clear entire display
+    //   ESC[1;1H    → cursor home
+    //   ESC[1;24r   → set scroll region rows 0..23
+    //   (text)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn vim_startup_enters_alt_screen_and_sets_scroll_region() {
+        let mut gs = make_gs(24, 80);
+        // Pre-populate the normal screen so we can verify it's saved.
+        gs.grid.cells[0][0].c = 'N';
+
+        // Enter alt screen, clear, home cursor, set scroll region (DECSTBM moves cursor home).
+        feed_gs(&mut gs, b"\x1b[?1049h\x1b[2J\x1b[1;1H\x1b[1;24r");
+
+        // After DECSTBM cursor must be at (0,0).
+        assert_eq!(gs.grid.cursor(), CursorPos { row: 0, col: 0 },
+            "DECSTBM must move cursor to home");
+
+        // Now write text.
+        feed_gs(&mut gs, b"Hello");
+
+        // Alt screen should be active.
+        assert!(gs.modes.alt_screen, "alt screen must be active after ESC[?1049h");
+        // Normal screen must have been saved — normal_screen is Some.
+        assert!(gs.normal_screen.is_some(), "normal screen must be saved");
+        // Normal screen's cell (0,0) must contain the pre-populated 'N'.
+        assert_eq!(
+            gs.normal_screen.as_ref().unwrap().cells[0][0].c, 'N',
+            "saved normal screen must preserve original content"
+        );
+        // Scroll region set by ESC[1;24r → top=0, bottom=23.
+        assert_eq!(gs.scroll_top, 0);
+        assert_eq!(gs.scroll_bottom, 23);
+        // "Hello" must appear at row 0, col 0 through 4.
+        assert_eq!(gs.grid.cells[0][0].c, 'H');
+        assert_eq!(gs.grid.cells[0][4].c, 'o');
+        // Cursor after "Hello" (5 chars) must be at (0,5).
+        assert_eq!(gs.grid.cursor(), CursorPos { row: 0, col: 5 });
+    }
+
+    // -------------------------------------------------------------------------
+    // vim exit sequence:
+    //   ESC[r       → reset scroll region to full screen
+    //   ESC[?1049l  → leave alt screen, restore normal screen
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn vim_exit_restores_normal_screen() {
+        let mut gs = make_gs(24, 80);
+        // Simulate being in the alt screen with content.
+        gs.grid.cells[5][5].c = 'A'; // Alt screen content.
+        feed_gs(&mut gs, b"\x1b[?1049h"); // Enter alt screen (saves current).
+
+        // Write some content on the alt screen.
+        gs.grid.cells[3][3].c = 'Z';
+
+        // Exit: reset scroll region then leave alt screen.
+        feed_gs(&mut gs, b"\x1b[r\x1b[?1049l");
+
+        // Normal screen restored; alt screen should not be active.
+        assert!(!gs.modes.alt_screen, "alt screen must be inactive after ESC[?1049l");
+        // The restored grid must have the pre-alt-screen content ('A' at (5,5)).
+        assert_eq!(gs.grid.cells[5][5].c, 'A', "normal screen content must be restored");
+        // Scroll region must be reset to full screen.
+        assert_eq!(gs.scroll_top, 0);
+        assert_eq!(gs.scroll_bottom, 23);
+    }
+
+    // -------------------------------------------------------------------------
+    // htop status bar: scroll region excludes last row, scrolling only in region
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn htop_scroll_region_excludes_last_row() {
+        let mut gs = make_gs(24, 80);
+        // Set scroll region to rows 0..22 (lines 1-23, 1-based), leaving row 23 (last) outside.
+        feed_gs(&mut gs, b"\x1b[1;23r");
+        assert_eq!(gs.scroll_top, 0);
+        assert_eq!(gs.scroll_bottom, 22, "scroll region bottom must be row 22 (0-indexed)");
+
+        // Fill rows 0..22 with 'R', row 23 with 'S'.
+        for row in 0..23usize {
+            for col in 0..80usize {
+                gs.grid.cells[row][col].c = 'R';
+            }
+        }
+        for col in 0..80usize {
+            gs.grid.cells[23][col].c = 'S';
+        }
+
+        // Position cursor at the bottom of the scroll region (row 22) and send LF.
+        gs.grid.set_cursor(CursorPos { row: 22, col: 0 });
+        feed_gs(&mut gs, b"\n");
+
+        // Row 23 (the status bar, outside the scroll region) must be untouched.
+        assert_eq!(gs.grid.cells[23][0].c, 'S', "row 23 (status bar) must not be scrolled");
+        // Row 22 must now be blank (new row scrolled in at the bottom of region).
+        assert_eq!(gs.grid.cells[22][0].c, ' ', "new blank row at scroll region bottom");
+        // Row 0 must have been scrolled out — content of original row 1 is now at row 0.
+        assert_eq!(gs.grid.cells[0][0].c, 'R', "rows 0-21 must still be 'R' after scroll");
+    }
+
+    // -------------------------------------------------------------------------
+    // Multi-mode set: ESC[?1;25;2004h → multiple modes set at once
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn multi_mode_set_sets_all_modes() {
+        let mut gs = make_gs(24, 80);
+        // Start with all modes off.
+        gs.modes.app_cursor_keys = false;
+        gs.modes.cursor_visible = false;
+        gs.modes.bracketed_paste = false;
+
+        feed_gs(&mut gs, b"\x1b[?1;25;2004h");
+
+        assert!(gs.modes.app_cursor_keys, "mode 1 must be set");
+        assert!(gs.modes.cursor_visible, "mode 25 must be set");
+        assert!(gs.modes.bracketed_paste, "mode 2004 must be set");
+    }
+
+    // -------------------------------------------------------------------------
+    // Scroll region respects region boundaries during scroll_up
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn scroll_up_respects_scroll_region_boundaries() {
+        let mut gs = make_gs(10, 5);
+        // Set scroll region to rows 2..5 (0-indexed).
+        feed_gs(&mut gs, b"\x1b[3;6r"); // 1-based: rows 3 to 6
+
+        // Fill all cells distinctly.
+        for row in 0..10usize {
+            for col in 0..5usize {
+                gs.grid.cells[row][col].c = (b'0' + row as u8) as char;
+            }
+        }
+
+        // Scroll region up by 1 (CSI 1 S).
+        feed_gs(&mut gs, b"\x1b[1S");
+
+        // Rows outside the scroll region (0, 1, 6..9) must be untouched.
+        assert_eq!(gs.grid.cells[0][0].c, '0', "row 0 outside region must be unchanged");
+        assert_eq!(gs.grid.cells[1][0].c, '1', "row 1 outside region must be unchanged");
+        assert_eq!(gs.grid.cells[6][0].c, '6', "row 6 outside region must be unchanged");
+
+        // Inside the region (rows 2..5): row 2 should now have what was row 3.
+        assert_eq!(gs.grid.cells[2][0].c, '3', "row 2 should be former row 3 after scroll up");
+        // Row 5 (bottom of region) should be blank.
+        assert_eq!(gs.grid.cells[5][0].c, ' ', "row 5 (region bottom) should be blank");
+    }
+}
