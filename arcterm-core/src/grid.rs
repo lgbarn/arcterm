@@ -1,5 +1,7 @@
 //! Terminal grid and cursor types.
 
+use std::collections::VecDeque;
+
 use crate::cell::{Cell, CellAttrs, Color};
 
 /// Position of the cursor in the terminal grid.
@@ -33,6 +35,14 @@ pub struct Grid {
     pub current_attrs: CellAttrs,
     /// Window title (OSC 0/2).
     pub title: Option<String>,
+    /// Scrollback buffer: rows that have scrolled off the top of the screen.
+    /// Index 0 is the most recently scrolled row (closest to the visible area).
+    pub scrollback: VecDeque<Vec<Cell>>,
+    /// Maximum number of rows kept in the scrollback buffer.
+    pub max_scrollback: usize,
+    /// Active scroll region: (top, bottom) row indices, 0-indexed inclusive.
+    /// When set, scroll_up/scroll_down operate only within this range.
+    pub scroll_region: Option<(usize, usize)>,
 }
 
 impl Grid {
@@ -48,6 +58,9 @@ impl Grid {
             dirty: true,
             current_attrs: CellAttrs::default(),
             title: None,
+            scrollback: VecDeque::new(),
+            max_scrollback: 10_000,
+            scroll_region: None,
         }
     }
 
@@ -97,32 +110,99 @@ impl Grid {
         self.title.as_deref()
     }
 
-    /// Scroll content up by `n` rows: remove top `n` rows, append `n` blank rows at bottom.
+    /// Scroll content up by `n` rows.
+    ///
+    /// - With no scroll region: remove the top `n` rows, push them into the
+    ///   scrollback buffer (capped at `max_scrollback`), then append `n` blank
+    ///   rows at the bottom.
+    /// - With a partial scroll region: only rows within `[top, bottom]` are moved;
+    ///   no rows are added to the scrollback buffer.
     pub fn scroll_up(&mut self, n: usize) {
-        let n = n.min(self.size.rows);
-        if n == 0 {
-            return;
+        if let Some((top, bottom)) = self.scroll_region {
+            // Partial scroll region — no scrollback.
+            let region_height = (bottom + 1).saturating_sub(top);
+            let n = n.min(region_height);
+            if n == 0 { return; }
+            for _ in 0..n {
+                self.cells.remove(top);
+                self.cells.insert(bottom, (0..self.size.cols).map(|_| Cell::default()).collect());
+            }
+            self.dirty = true;
+        } else {
+            // Full-screen scroll — push to scrollback.
+            let n = n.min(self.size.rows);
+            if n == 0 { return; }
+            let drained: Vec<Vec<Cell>> = self.cells.drain(0..n).collect();
+            for _ in 0..n {
+                self.cells.push((0..self.size.cols).map(|_| Cell::default()).collect());
+            }
+            // Prepend drained rows to scrollback (most-recent first).
+            for row in drained.into_iter().rev() {
+                self.scrollback.push_front(row);
+            }
+            // Cap scrollback.
+            while self.scrollback.len() > self.max_scrollback {
+                self.scrollback.pop_back();
+            }
+            self.dirty = true;
         }
-        self.cells.drain(0..n);
-        for _ in 0..n {
-            self.cells
-                .push((0..self.size.cols).map(|_| Cell::default()).collect());
-        }
-        self.dirty = true;
     }
 
-    /// Scroll content down by `n` rows: remove bottom `n` rows, insert `n` blank rows at top.
+    /// Scroll content down by `n` rows.
+    ///
+    /// - With no scroll region: remove the bottom `n` rows, insert `n` blank rows at top.
+    /// - With a partial scroll region: only rows within `[top, bottom]` are moved.
     pub fn scroll_down(&mut self, n: usize) {
-        let n = n.min(self.size.rows);
-        if n == 0 {
-            return;
+        if let Some((top, bottom)) = self.scroll_region {
+            let region_height = (bottom + 1).saturating_sub(top);
+            let n = n.min(region_height);
+            if n == 0 { return; }
+            for _ in 0..n {
+                // Remove the last row of the region, insert a blank at the top.
+                self.cells.remove(bottom);
+                self.cells.insert(top, (0..self.size.cols).map(|_| Cell::default()).collect());
+            }
+            self.dirty = true;
+        } else {
+            let n = n.min(self.size.rows);
+            if n == 0 { return; }
+            self.cells.truncate(self.size.rows - n);
+            for _ in 0..n {
+                self.cells.insert(0, (0..self.size.cols).map(|_| Cell::default()).collect());
+            }
+            self.dirty = true;
         }
-        self.cells.truncate(self.size.rows - n);
-        for _ in 0..n {
-            self.cells
-                .insert(0, (0..self.size.cols).map(|_| Cell::default()).collect());
+    }
+
+    /// Set the scroll region to [top, bottom] (0-indexed, inclusive).
+    pub fn set_scroll_region(&mut self, top: usize, bottom: usize) {
+        self.scroll_region = Some((top, bottom));
+    }
+
+    /// Clear the scroll region (revert to full-screen scrolling).
+    pub fn clear_scroll_region(&mut self) {
+        self.scroll_region = None;
+    }
+
+    /// Return the number of rows currently in the scrollback buffer.
+    pub fn scrollback_len(&self) -> usize {
+        self.scrollback.len()
+    }
+
+    /// Perform a newline within the active scroll region.
+    ///
+    /// If the cursor is at the bottom of the region, scroll the region up.
+    /// Otherwise, just move the cursor down one row.
+    /// Cursor column is preserved.
+    pub fn newline_in_region(&mut self) {
+        let bottom = self.scroll_region.map(|(_, b)| b).unwrap_or(self.size.rows.saturating_sub(1));
+        if self.cursor.row >= bottom {
+            self.scroll_up(1);
+            // cursor stays at the region bottom
+            self.cursor.row = bottom;
+        } else {
+            self.cursor.row += 1;
         }
-        self.dirty = true;
     }
 
     /// Write a character at the cursor, applying current_attrs, then advance.
@@ -149,10 +229,13 @@ impl Grid {
         if next_col >= self.size.cols {
             // Wrap to next row.
             let next_row = row + 1;
-            if next_row >= self.size.rows {
-                // Scroll up, stay on last row.
+            let bottom = self.scroll_region
+                .map(|(_, b)| b)
+                .unwrap_or(self.size.rows.saturating_sub(1));
+            if next_row > bottom {
+                // At or past the bottom of the scroll region — scroll up.
                 self.scroll_up(1);
-                self.cursor.row = self.size.rows.saturating_sub(1);
+                self.cursor.row = bottom;
             } else {
                 self.cursor.row = next_row;
             }
@@ -503,5 +586,91 @@ mod tests {
         let mut g = Grid::new(GridSize::new(5, 10));
         g.apply_sgr(&[38, 2, 255, 128, 0]);
         assert_eq!(g.current_attrs.fg, Color::Rgb(255, 128, 0));
+    }
+
+    // -------------------------------------------------------------------------
+    // Task 1: Scrollback buffer and scroll regions
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn scroll_up_pushes_to_scrollback() {
+        let mut g = Grid::new(GridSize::new(3, 3));
+        g.cell_mut(0, 0).set_char('A');
+        g.scroll_up(1);
+        assert_eq!(g.scrollback_len(), 1, "one row must be in scrollback after scroll_up");
+        // The scrollback row should contain 'A'
+        assert_eq!(g.scrollback[0][0].c, 'A');
+    }
+
+    #[test]
+    fn scrollback_caps_at_max_scrollback() {
+        let mut g = Grid::new(GridSize::new(3, 3));
+        g.max_scrollback = 5;
+        for _ in 0..10 {
+            g.scroll_up(1);
+        }
+        assert_eq!(g.scrollback_len(), 5, "scrollback must be capped at max_scrollback");
+    }
+
+    #[test]
+    fn scroll_up_with_region_only_affects_region_rows() {
+        let mut g = Grid::new(GridSize::new(5, 3));
+        g.cell_mut(0, 0).set_char('A');
+        g.cell_mut(1, 0).set_char('B');
+        g.cell_mut(2, 0).set_char('C');
+        g.cell_mut(3, 0).set_char('D');
+        g.cell_mut(4, 0).set_char('E');
+        g.set_scroll_region(1, 3); // rows 1-3 inclusive
+        g.scroll_up(1);
+        // rows outside region must be unchanged
+        assert_eq!(g.cell(0, 0).c, 'A', "row 0 outside region must not change");
+        assert_eq!(g.cell(4, 0).c, 'E', "row 4 outside region must not change");
+        // within region: row 1 was B, row 2 was C, row 3 was D; scroll_up shifts
+        assert_eq!(g.cell(1, 0).c, 'C');
+        assert_eq!(g.cell(2, 0).c, 'D');
+        assert_eq!(g.cell(3, 0).c, ' ');
+        // scroll region scroll_up must NOT push to scrollback
+        assert_eq!(g.scrollback_len(), 0, "region scroll must not push to scrollback");
+    }
+
+    #[test]
+    fn scroll_down_with_region_only_affects_region_rows() {
+        let mut g = Grid::new(GridSize::new(5, 3));
+        g.cell_mut(0, 0).set_char('A');
+        g.cell_mut(1, 0).set_char('B');
+        g.cell_mut(2, 0).set_char('C');
+        g.cell_mut(3, 0).set_char('D');
+        g.cell_mut(4, 0).set_char('E');
+        g.set_scroll_region(1, 3);
+        g.scroll_down(1);
+        assert_eq!(g.cell(0, 0).c, 'A', "row 0 outside region must not change");
+        assert_eq!(g.cell(4, 0).c, 'E', "row 4 outside region must not change");
+        assert_eq!(g.cell(1, 0).c, ' ');
+        assert_eq!(g.cell(2, 0).c, 'B');
+        assert_eq!(g.cell(3, 0).c, 'C');
+    }
+
+    #[test]
+    fn newline_at_bottom_of_region_scrolls_region_only() {
+        let mut g = Grid::new(GridSize::new(5, 3));
+        g.cell_mut(0, 0).set_char('A');
+        g.cell_mut(1, 0).set_char('B');
+        g.cell_mut(2, 0).set_char('C');
+        g.cell_mut(3, 0).set_char('D');
+        g.cell_mut(4, 0).set_char('E');
+        g.set_scroll_region(1, 3);
+        // place cursor at bottom of region
+        g.cursor = CursorPos { row: 3, col: 0 };
+        g.newline_in_region();
+        // region rows 1-3 scroll: B gone, C→row1, D→row2, blank→row3
+        assert_eq!(g.cell(0, 0).c, 'A', "row 0 outside region unchanged");
+        assert_eq!(g.cell(4, 0).c, 'E', "row 4 outside region unchanged");
+        assert_eq!(g.cell(1, 0).c, 'C');
+        assert_eq!(g.cell(2, 0).c, 'D');
+        assert_eq!(g.cell(3, 0).c, ' ');
+        // cursor stays at bottom of region
+        assert_eq!(g.cursor.row, 3);
+        // no scrollback for region scroll
+        assert_eq!(g.scrollback_len(), 0);
     }
 }

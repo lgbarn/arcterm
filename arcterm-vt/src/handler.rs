@@ -685,22 +685,8 @@ impl Handler for Grid {
     }
 
     fn newline(&mut self) {
-        // newline = move down, scroll if needed (does NOT reset column)
-        let next_row = self.cursor().row + 1;
-        if next_row >= self.size.rows {
-            self.scroll_up(1);
-            // cursor stays at last row after scroll
-            let last = self.size.rows.saturating_sub(1);
-            self.set_cursor(CursorPos {
-                row: last,
-                col: self.cursor().col,
-            });
-        } else {
-            self.set_cursor(CursorPos {
-                row: next_row,
-                col: self.cursor().col,
-            });
-        }
+        // Delegate to the scroll-region-aware method on Grid.
+        self.newline_in_region();
     }
 
     fn carriage_return(&mut self) {
