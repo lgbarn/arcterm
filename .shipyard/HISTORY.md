@@ -52,3 +52,17 @@
 - **Phase:** 3
 - **Status:** planned
 - **Message:** 8 plans across 3 waves. Verdict: READY. Full Neovim integration included. Research confirmed no new GPU infrastructure needed.
+
+## 2026-03-15 — Phase 3 Build Complete
+- **Phase:** 3
+- **Status:** complete
+- **Plans:** 7/8 complete (1.1, 1.2, 2.1, 2.2, 3.1, 3.2, 3.3; 3.4 acceptance deferred)
+- **Tests:** 298 passing (158 app, 51 core, 6 pty, 6 render, 77 vt)
+- **Key Features:**
+  - Binary tree pane layout with directional navigation
+  - TabManager with add/close/switch
+  - Multi-pane rendering (single render pass)
+  - Leader key state machine (Ctrl+a, configurable)
+  - Neovim-aware pane crossing via msgpack-RPC
+  - Command palette with fuzzy search
+  - Click-to-focus, tab bar, border drag resize
