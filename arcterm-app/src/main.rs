@@ -13,6 +13,7 @@
 //! 7. `echo -e "\033[31mred\033[0m"` — red text appears, then colour resets.
 //! 8. Rapid output (`cat /dev/urandom | head -c 1M | base64`) — no hang or crash.
 
+mod config;
 mod input;
 mod selection;
 mod terminal;
