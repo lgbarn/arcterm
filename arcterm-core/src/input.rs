@@ -81,3 +81,100 @@ impl std::ops::BitOr for Modifiers {
         Self(self.0 | rhs.0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn modifiers_none_has_no_flags() {
+        let m = Modifiers::none();
+        assert!(!m.has_shift());
+        assert!(!m.has_ctrl());
+        assert!(!m.has_alt());
+        assert!(!m.has_super());
+    }
+
+    #[test]
+    fn modifiers_ctrl_is_ctrl_only() {
+        let m = Modifiers::ctrl();
+        assert!(!m.has_shift());
+        assert!(m.has_ctrl());
+        assert!(!m.has_alt());
+        assert!(!m.has_super());
+    }
+
+    #[test]
+    fn modifiers_shift_is_shift_only() {
+        let m = Modifiers::shift();
+        assert!(m.has_shift());
+        assert!(!m.has_ctrl());
+    }
+
+    #[test]
+    fn modifiers_alt_is_alt_only() {
+        let m = Modifiers::alt();
+        assert!(!m.has_shift());
+        assert!(!m.has_ctrl());
+        assert!(m.has_alt());
+        assert!(!m.has_super());
+    }
+
+    #[test]
+    fn modifiers_bitor_combines_flags() {
+        let m = Modifiers::ctrl() | Modifiers::shift();
+        assert!(m.has_ctrl());
+        assert!(m.has_shift());
+        assert!(!m.has_alt());
+    }
+
+    #[test]
+    fn modifiers_super_flag() {
+        let m = Modifiers(Modifiers::SUPER);
+        assert!(m.has_super());
+        assert!(!m.has_ctrl());
+    }
+
+    #[test]
+    fn modifiers_default_is_none() {
+        let m = Modifiers::default();
+        assert_eq!(m, Modifiers::none());
+    }
+
+    #[test]
+    fn input_event_key_variant() {
+        let ev = InputEvent::Key(KeyCode::Char('a'), Modifiers::none());
+        match ev {
+            InputEvent::Key(KeyCode::Char('a'), m) => assert_eq!(m, Modifiers::none()),
+            _ => panic!("unexpected variant"),
+        }
+    }
+
+    #[test]
+    fn input_event_resize_variant() {
+        let ev = InputEvent::Resize(GridSize::new(24, 80));
+        match ev {
+            InputEvent::Resize(gs) => {
+                assert_eq!(gs.rows, 24);
+                assert_eq!(gs.cols, 80);
+            }
+            _ => panic!("unexpected variant"),
+        }
+    }
+
+    #[test]
+    fn input_event_paste_variant() {
+        let ev = InputEvent::Paste("hello".to_string());
+        match ev {
+            InputEvent::Paste(s) => assert_eq!(s, "hello"),
+            _ => panic!("unexpected variant"),
+        }
+    }
+
+    #[test]
+    fn keycode_function_keys() {
+        let f1 = KeyCode::F(1);
+        let f12 = KeyCode::F(12);
+        assert_ne!(f1, f12);
+    }
+}

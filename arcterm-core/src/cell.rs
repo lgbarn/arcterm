@@ -53,3 +53,62 @@ impl Cell {
         self.dirty = true;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cell_default_is_space() {
+        let cell = Cell::default();
+        assert_eq!(cell.c, ' ');
+        assert_eq!(cell.attrs, CellAttrs::default());
+        assert!(cell.dirty, "default cell must be marked dirty");
+    }
+
+    #[test]
+    fn cell_set_char_marks_dirty() {
+        let mut cell = Cell::default();
+        cell.dirty = false; // simulate a clean cell
+        cell.set_char('A');
+        assert_eq!(cell.c, 'A');
+        assert!(cell.dirty, "set_char must mark the cell dirty");
+    }
+
+    #[test]
+    fn cell_reset_restores_defaults() {
+        let mut cell = Cell::default();
+        cell.set_char('Z');
+        cell.attrs.bold = true;
+        cell.dirty = false;
+        cell.reset();
+        assert_eq!(cell.c, ' ');
+        assert_eq!(cell.attrs, CellAttrs::default());
+        assert!(cell.dirty, "reset must mark the cell dirty");
+    }
+
+    #[test]
+    fn color_default_variant() {
+        let c: Color = Color::default();
+        assert_eq!(c, Color::Default);
+    }
+
+    #[test]
+    fn color_indexed_and_rgb() {
+        let idx = Color::Indexed(42);
+        let rgb = Color::Rgb(255, 128, 0);
+        assert_ne!(idx, rgb);
+        assert_ne!(idx, Color::Default);
+    }
+
+    #[test]
+    fn cell_attrs_default_all_false() {
+        let attrs = CellAttrs::default();
+        assert!(!attrs.bold);
+        assert!(!attrs.italic);
+        assert!(!attrs.underline);
+        assert!(!attrs.reverse);
+        assert_eq!(attrs.fg, Color::Default);
+        assert_eq!(attrs.bg, Color::Default);
+    }
+}

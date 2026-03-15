@@ -108,3 +108,106 @@ impl Grid {
         &self.cells
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gridsize_new_stores_dimensions() {
+        let gs = GridSize::new(24, 80);
+        assert_eq!(gs.rows, 24);
+        assert_eq!(gs.cols, 80);
+    }
+
+    #[test]
+    fn grid_new_creates_correct_dimensions() {
+        let g = Grid::new(GridSize::new(10, 20));
+        assert_eq!(g.size.rows, 10);
+        assert_eq!(g.size.cols, 20);
+        assert_eq!(g.rows().len(), 10);
+        assert_eq!(g.rows()[0].len(), 20);
+    }
+
+    #[test]
+    fn grid_new_cursor_at_origin() {
+        let g = Grid::new(GridSize::new(5, 5));
+        assert_eq!(g.cursor, CursorPos { row: 0, col: 0 });
+    }
+
+    #[test]
+    fn grid_new_is_dirty() {
+        let g = Grid::new(GridSize::new(2, 2));
+        assert!(g.dirty);
+    }
+
+    #[test]
+    fn grid_cell_access() {
+        let g = Grid::new(GridSize::new(3, 3));
+        let c = g.cell(0, 0);
+        assert_eq!(c.c, ' ');
+    }
+
+    #[test]
+    fn grid_cell_mut_marks_dirty() {
+        let mut g = Grid::new(GridSize::new(3, 3));
+        g.mark_clean();
+        assert!(!g.dirty);
+        let cell = g.cell_mut(1, 1);
+        cell.set_char('X');
+        assert!(g.dirty, "cell_mut must mark the grid dirty");
+    }
+
+    #[test]
+    fn grid_resize_preserves_content() {
+        let mut g = Grid::new(GridSize::new(3, 3));
+        g.cell_mut(0, 0).set_char('A');
+        g.cell_mut(2, 2).set_char('B');
+        g.resize(GridSize::new(5, 5));
+        assert_eq!(g.cell(0, 0).c, 'A', "content at (0,0) must survive resize");
+        assert_eq!(g.cell(2, 2).c, 'B', "content at (2,2) must survive resize");
+        assert_eq!(g.size.rows, 5);
+        assert_eq!(g.size.cols, 5);
+    }
+
+    #[test]
+    fn grid_resize_shrink() {
+        let mut g = Grid::new(GridSize::new(5, 5));
+        g.cell_mut(0, 0).set_char('A');
+        g.resize(GridSize::new(2, 2));
+        assert_eq!(g.size.rows, 2);
+        assert_eq!(g.size.cols, 2);
+        assert_eq!(g.cell(0, 0).c, 'A');
+    }
+
+    #[test]
+    fn grid_clear_resets_all_cells() {
+        let mut g = Grid::new(GridSize::new(3, 3));
+        g.cell_mut(1, 1).set_char('Z');
+        g.cursor = CursorPos { row: 2, col: 2 };
+        g.clear();
+        assert_eq!(g.cell(1, 1).c, ' ', "clear must reset cell characters");
+        assert_eq!(g.cursor, CursorPos { row: 0, col: 0 }, "clear must reset cursor");
+        assert!(g.dirty, "clear must mark grid dirty");
+    }
+
+    #[test]
+    fn grid_mark_clean() {
+        let mut g = Grid::new(GridSize::new(2, 2));
+        assert!(g.dirty);
+        g.mark_clean();
+        assert!(!g.dirty);
+        for row in g.rows() {
+            for cell in row {
+                assert!(!cell.dirty, "mark_clean must clear all cell dirty flags");
+            }
+        }
+    }
+
+    #[test]
+    fn cursorpos_default_is_origin() {
+        let cp = CursorPos::default();
+        assert_eq!(cp.row, 0);
+        assert_eq!(cp.col, 0);
+    }
+}
