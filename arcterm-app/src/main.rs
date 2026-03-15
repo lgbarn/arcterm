@@ -379,6 +379,44 @@ impl AppState {
         Ok(())
     }
 
+    /// Capture the current session and write it to a named workspace file in
+    /// `workspaces_dir()/<name>.toml`.
+    ///
+    /// The `name` parameter is used as the workspace name and the file stem.
+    /// Called by the Leader+s keybinding handler with a timestamp-generated name.
+    fn save_named_session(&self, name: &str) -> Result<(), workspace::WorkspaceError> {
+        use std::collections::HashMap as HM;
+
+        // Build per-pane metadata from live terminals.
+        let mut pane_metadata: HM<PaneId, workspace::PaneMetadata> = HM::new();
+        for (id, terminal) in &self.panes {
+            let directory = terminal.cwd().and_then(|p| p.to_str().map(str::to_string));
+            pane_metadata.insert(
+                *id,
+                workspace::PaneMetadata { command: None, directory, env: None },
+            );
+        }
+
+        // Capture using the active tab's layout.
+        let win_size = self.window.inner_size();
+        let workspace_file = workspace::capture_session(
+            &self.tab_manager,
+            &pane_metadata,
+            name,
+            Some((win_size.width, win_size.height)),
+        );
+
+        // Ensure the workspaces directory exists.
+        let dir = workspace::workspaces_dir();
+        std::fs::create_dir_all(&dir)?;
+
+        let path = dir.join(format!("{name}.toml"));
+        workspace_file.save_to_file(&path)?;
+        log::info!("Session saved to {}", path.display());
+
+        Ok(())
+    }
+
     // -----------------------------------------------------------------------
     // Geometry helpers
     // -----------------------------------------------------------------------
@@ -1776,6 +1814,40 @@ impl ApplicationHandler for App {
                             log::info!("Workspace switcher: open (stub — PLAN-3.1)");
                         }
 
+                        KeyAction::SaveWorkspace => {
+                            // Generate a timestamp-based name: session-YYYYMMDD-HHMM
+                            // Uses std::time::SystemTime to avoid adding a chrono dependency.
+                            let name = {
+                                use std::time::{SystemTime, UNIX_EPOCH};
+                                let secs = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs();
+                                // Decompose epoch seconds into date/time components.
+                                let mins_total = secs / 60;
+                                let hh = (mins_total / 60) % 24;
+                                let mm = mins_total % 60;
+                                // Days since epoch (Unix epoch = 1970-01-01).
+                                let days = secs / 86400;
+                                // Gregorian calendar decomposition.
+                                // Algorithm: http://howardhinnant.github.io/date_algorithms.html
+                                let z = days as i64 + 719468;
+                                let era = if z >= 0 { z } else { z - 146096 } / 146097;
+                                let doe = z - era * 146097;
+                                let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+                                let y = yoe + era * 400;
+                                let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+                                let mp = (5 * doy + 2) / 153;
+                                let d = doy - (153 * mp + 2) / 5 + 1;
+                                let m = if mp < 10 { mp + 3 } else { mp - 9 };
+                                let y = if m <= 2 { y + 1 } else { y };
+                                format!("session-{y:04}{m:02}{d:02}-{hh:02}{mm:02}")
+                            };
+                            if let Err(e) = state.save_named_session(&name) {
+                                log::error!("Leader+s: failed to save workspace '{name}': {e}");
+                            }
+                        }
+
                         KeyAction::Consumed => {
                             // Key consumed by state machine (leader chord entered).
                             // No PTY write needed.
@@ -1916,6 +1988,7 @@ fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action
         | KeyAction::SwitchTab(_)
         | KeyAction::OpenPalette
         | KeyAction::OpenWorkspaceSwitcher
+        | KeyAction::SaveWorkspace
         | KeyAction::Consumed => {}
     }
 }

@@ -59,6 +59,8 @@ pub enum KeyAction {
     CloseTab,
     /// Open the workspace switcher overlay (Leader+w).
     OpenWorkspaceSwitcher,
+    /// Save the current session to a timestamped workspace file (Leader+s).
+    SaveWorkspace,
     /// Open the command palette.
     OpenPalette,
     /// The key was consumed by the state machine (no PTY bytes).
@@ -219,6 +221,8 @@ impl KeymapHandler {
                         "t" => Some(KeyAction::NewTab),
                         // Leader+w opens the workspace switcher (CONTEXT-5: Leader+w).
                         "w" => Some(KeyAction::OpenWorkspaceSwitcher),
+                        // Leader+s saves the current session to a timestamped workspace file.
+                        "s" => Some(KeyAction::SaveWorkspace),
                         // Leader+W (shift) closes the active tab.
                         "W" => Some(KeyAction::CloseTab),
                         d @ ("1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9") => {
@@ -657,5 +661,18 @@ mod tests {
         press(&mut h, char_key("a"), ctrl());
         press(&mut h, char_key("n"), no_mods());
         assert!(!h.is_leader_pending());
+    }
+
+    // -----------------------------------------------------------------------
+    // PLAN-3.2 Task 1: Leader+s → SaveWorkspace
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn leader_then_s_saves_workspace() {
+        let mut h = KeymapHandler::new(500);
+        press(&mut h, char_key("a"), ctrl());
+        let action = press(&mut h, char_key("s"), no_mods());
+        assert_eq!(action, KeyAction::SaveWorkspace);
+        assert!(!h.is_leader_pending(), "state must reset to Normal after SaveWorkspace");
     }
 }
