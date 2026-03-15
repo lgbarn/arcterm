@@ -47,3 +47,8 @@
   - Mouse selection + clipboard + scroll viewport
   - DSR/DA responses, Mailbox present mode, FPS counter
 - **Retry cycles:** Plans 1.2 (esc_dispatch guard + missing modes), 2.1-2.3 (clippy fixes)
+
+## 2026-03-15 — Phase 3 Planned
+- **Phase:** 3
+- **Status:** planned
+- **Message:** 8 plans across 3 waves. Verdict: READY. Full Neovim integration included. Research confirmed no new GPU infrastructure needed.
