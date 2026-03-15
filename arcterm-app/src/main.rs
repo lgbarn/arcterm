@@ -25,7 +25,7 @@ use std::time::Instant as TraceInstant;
 
 use arcterm_core::{Cell, CellAttrs, Color, CursorPos};
 use arcterm_render::Renderer;
-use selection::{pixel_to_cell, Clipboard, Selection, SelectionMode};
+use selection::{generate_selection_quads, pixel_to_cell, Clipboard, Selection, SelectionMode, SelectionQuad};
 use terminal::Terminal;
 use tokio::sync::mpsc;
 use winit::{
@@ -87,6 +87,12 @@ struct AppState {
     last_click_time: Option<Instant>,
     /// Consecutive click count: 1 = single, 2 = double, 3 = triple.
     click_count: u32,
+
+    // ---- selection rendering ----
+    /// Pre-computed quads for the current selection.
+    /// Updated every `RedrawRequested`. Stored here for future quad-pipeline
+    /// integration — not yet submitted to the GPU.
+    selection_quads: Vec<SelectionQuad>,
 }
 
 struct App {
@@ -141,6 +147,7 @@ impl ApplicationHandler for App {
             last_cursor_position: (0.0, 0.0),
             last_click_time: None,
             click_count: 0,
+            selection_quads: Vec::new(),
         });
     }
 
@@ -181,6 +188,13 @@ impl ApplicationHandler for App {
         }
 
         if got_data {
+            // New PTY output: if we're scrolled back into history, clear any
+            // active selection (content has shifted) and reset to the live view.
+            let grid = state.terminal.grid_mut();
+            if grid.scroll_offset > 0 {
+                state.selection.clear();
+                grid.scroll_offset = 0;
+            }
             state.window.request_redraw();
         }
     }
@@ -298,11 +312,32 @@ impl ApplicationHandler for App {
             }
 
             // -----------------------------------------------------------------
-            // Keyboard — handle Cmd+C and Cmd+V; forward everything else.
+            // Redraw — render frame and recompute selection quads.
             // -----------------------------------------------------------------
             WindowEvent::RedrawRequested => {
                 #[cfg(feature = "latency-trace")]
                 let t0 = TraceInstant::now();
+
+                // Recompute selection quads for the current frame dimensions.
+                {
+                    let grid = state.terminal.grid();
+                    let cell_w = state.renderer.text.cell_size.width;
+                    let cell_h = state.renderer.text.cell_size.height;
+                    let scale = state.window.scale_factor() as f32;
+                    state.selection_quads = generate_selection_quads(
+                        &state.selection,
+                        grid.size.rows,
+                        grid.size.cols,
+                        cell_w,
+                        cell_h,
+                        scale,
+                    );
+                    log::trace!(
+                        "selection quads: {} rect(s) for mode {:?}",
+                        state.selection_quads.len(),
+                        state.selection.mode
+                    );
+                }
 
                 if state.shell_exited {
                     let mut display = state.terminal.grid().clone();

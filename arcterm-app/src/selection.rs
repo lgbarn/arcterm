@@ -3,6 +3,73 @@
 use arcterm_core::{Cell, Grid};
 
 // ---------------------------------------------------------------------------
+// SelectionQuad — a pixel-space rectangle representing one selected cell row
+// ---------------------------------------------------------------------------
+
+/// A rectangle in physical pixel coordinates that should be drawn as a
+/// selection highlight.  One quad is emitted per contiguous selected row span.
+///
+/// x, y, width, height are all in physical pixels (after HiDPI scaling).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SelectionQuad {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+/// Generate the list of `SelectionQuad`s for the current selection.
+///
+/// # Parameters
+/// - `selection`: the active selection (may be `SelectionMode::None`).
+/// - `rows`: total visible rows in the viewport.
+/// - `cols`: total columns in the grid.
+/// - `cell_w`: logical cell width in points.
+/// - `cell_h`: logical cell height in points.
+/// - `scale`: HiDPI scale factor (physical pixels per logical point).
+///
+/// Returns an empty `Vec` if there is no active selection.
+pub fn generate_selection_quads(
+    selection: &Selection,
+    rows: usize,
+    cols: usize,
+    cell_w: f32,
+    cell_h: f32,
+    scale: f32,
+) -> Vec<SelectionQuad> {
+    if selection.mode == SelectionMode::None {
+        return Vec::new();
+    }
+
+    let (start, end) = selection.normalized();
+
+    // Clamp to visible viewport.
+    let row_start = start.row.min(rows.saturating_sub(1));
+    let row_end = end.row.min(rows.saturating_sub(1));
+
+    let mut quads = Vec::new();
+
+    for r in row_start..=row_end {
+        let col_start = if r == start.row { start.col } else { 0 };
+        let col_end = if r == end.row { end.col + 1 } else { cols };
+        let col_end = col_end.min(cols);
+
+        if col_start >= col_end {
+            continue;
+        }
+
+        let x = col_start as f32 * cell_w * scale;
+        let y = r as f32 * cell_h * scale;
+        let width = (col_end - col_start) as f32 * cell_w * scale;
+        let height = cell_h * scale;
+
+        quads.push(SelectionQuad { x, y, width, height });
+    }
+
+    quads
+}
+
+// ---------------------------------------------------------------------------
 // CellPos — a position in the terminal grid
 // ---------------------------------------------------------------------------
 
@@ -417,5 +484,64 @@ mod tests {
         let (start, end) = word_boundaries(&row, 0); // 'a'
         assert_eq!(start, 0);
         assert_eq!(end, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // generate_selection_quads
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn quads_empty_when_no_selection() {
+        let sel = Selection::default(); // mode == None
+        let quads = generate_selection_quads(&sel, 24, 80, 8.0, 16.0, 1.0);
+        assert!(quads.is_empty());
+    }
+
+    #[test]
+    fn quads_single_row_single_cell() {
+        let mut sel = Selection::default();
+        sel.start(CellPos { row: 0, col: 2 }, SelectionMode::Character);
+        sel.update(CellPos { row: 0, col: 2 });
+        let quads = generate_selection_quads(&sel, 24, 80, 8.0, 16.0, 1.0);
+        assert_eq!(quads.len(), 1);
+        let q = quads[0];
+        assert!((q.x - 16.0).abs() < 1e-3, "x = col*cell_w = 2*8 = 16");
+        assert!((q.y - 0.0).abs() < 1e-3, "y = row*cell_h = 0*16 = 0");
+        assert!((q.width - 8.0).abs() < 1e-3, "width = 1 cell * 8");
+        assert!((q.height - 16.0).abs() < 1e-3, "height = cell_h = 16");
+    }
+
+    #[test]
+    fn quads_multi_row_produces_one_quad_per_row() {
+        let mut sel = Selection::default();
+        sel.start(CellPos { row: 1, col: 0 }, SelectionMode::Character);
+        sel.update(CellPos { row: 3, col: 4 });
+        let quads = generate_selection_quads(&sel, 24, 80, 8.0, 16.0, 1.0);
+        // Rows 1, 2, 3 → 3 quads
+        assert_eq!(quads.len(), 3);
+    }
+
+    #[test]
+    fn quads_hidpi_scale() {
+        let mut sel = Selection::default();
+        sel.start(CellPos { row: 0, col: 0 }, SelectionMode::Character);
+        sel.update(CellPos { row: 0, col: 1 }); // 2 cells
+        // scale=2 → physical pixels doubled
+        let quads = generate_selection_quads(&sel, 24, 80, 8.0, 16.0, 2.0);
+        assert_eq!(quads.len(), 1);
+        let q = quads[0];
+        assert!((q.width - 32.0).abs() < 1e-3, "width = 2 cells * 8 * 2 = 32");
+        assert!((q.height - 32.0).abs() < 1e-3, "height = 16 * 2 = 32");
+    }
+
+    #[test]
+    fn quads_clamped_to_viewport_rows() {
+        let mut sel = Selection::default();
+        sel.start(CellPos { row: 0, col: 0 }, SelectionMode::Character);
+        // end row beyond viewport
+        sel.update(CellPos { row: 100, col: 5 });
+        let quads = generate_selection_quads(&sel, 5, 10, 8.0, 16.0, 1.0);
+        // Rows 0-4 only (viewport has 5 rows).
+        assert_eq!(quads.len(), 5);
     }
 }
