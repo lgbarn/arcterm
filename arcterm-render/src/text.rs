@@ -27,6 +27,8 @@ pub struct TextRenderer {
     /// Font size in logical pixels.
     font_size: f32,
     line_height: f32,
+    /// Per-row content hashes for dirty-row optimization (Task 3).
+    pub row_hashes: Vec<u64>,
 }
 
 impl TextRenderer {
@@ -58,6 +60,7 @@ impl TextRenderer {
             cell_size,
             font_size,
             line_height,
+            row_hashes: Vec::new(),
         }
     }
 
@@ -67,6 +70,10 @@ impl TextRenderer {
     }
 
     /// Convert a Grid into glyphon TextAreas and upload to the atlas.
+    ///
+    /// Uses `rows_for_viewport()` so scrollback is rendered correctly.
+    /// The cursor row is always re-shaped; other rows are skipped when their
+    /// content hash is unchanged (dirty-row optimization, Task 3).
     pub fn prepare_grid(
         &mut self,
         device: &wgpu::Device,
@@ -74,7 +81,7 @@ impl TextRenderer {
         grid: &Grid,
         scale_factor: f32,
     ) -> Result<(), glyphon::PrepareError> {
-        let rows = grid.rows();
+        let rows = grid.rows_for_viewport();
         let num_rows = rows.len();
         let cell_w = self.cell_size.width;
         let cell_h = self.cell_size.height;
@@ -87,11 +94,24 @@ impl TextRenderer {
         }
         self.row_buffers.truncate(num_rows);
 
-        // Cache cursor position for cursor rendering (inverse video at cursor cell).
+        // Sync hash vec length with row count (resize clears stale hashes).
+        self.row_hashes.resize(num_rows, u64::MAX);
+
         let cursor = grid.cursor;
 
         // Populate each row buffer with per-cell colored spans.
         for (row_idx, row) in rows.iter().enumerate() {
+            let is_cursor_row = row_idx == cursor.row;
+
+            // Compute a cheap content hash for dirty-row skipping (Task 3).
+            let row_hash = hash_row(row, row_idx, cursor);
+
+            if !is_cursor_row && self.row_hashes[row_idx] == row_hash {
+                // Row is unchanged — reuse existing Buffer, skip re-shaping.
+                continue;
+            }
+            self.row_hashes[row_idx] = row_hash;
+
             let buf = &mut self.row_buffers[row_idx];
             let width_px = cell_w * row.len() as f32;
             buf.set_size(
@@ -101,16 +121,17 @@ impl TextRenderer {
             );
 
             // Build per-cell (text_slice, Attrs) spans.
-            // We collect each char as a heap-allocated String so lifetimes work out.
-            // At the cursor cell, swap fg/bg for inverse-video cursor rendering.
+            // The quad pipeline handles background colors and the cursor block,
+            // so here we only need to output the correct foreground color.
+            // For cells with the `reverse` attribute the fg/bg are swapped:
+            // the quad renderer draws the (original) fg as background, so the
+            // text must be drawn in the (original) bg color.
             let span_strings: Vec<(String, Color)> = row
                 .iter()
-                .enumerate()
-                .map(|(col_idx, cell)| {
+                .map(|cell| {
                     let s = cell.c.to_string();
-                    let is_cursor = row_idx == cursor.row && col_idx == cursor.col;
-                    let fg = if is_cursor {
-                        // Inverse video: render cursor cell with bg color as text fg.
+                    let fg = if cell.attrs.reverse {
+                        // Reverse: text draws with the cell's background color.
                         ansi_color_to_glyphon(cell.attrs.bg, false)
                     } else {
                         ansi_color_to_glyphon(cell.attrs.fg, true)
@@ -263,4 +284,47 @@ fn indexed_to_rgb(n: u8) -> (u8, u8, u8) {
     // Greyscale ramp: indices 232–255.
     let level = (n - 232) * 10 + 8;
     (level, level, level)
+}
+
+/// Compute a cheap hash of a row's visual content for dirty-row skipping.
+///
+/// The hash encodes:
+/// - Each cell's character code point.
+/// - Each cell's fg and bg color discriminants and values.
+/// - Each cell's attribute flags (bold, italic, underline, reverse).
+/// - The cursor column when `row_idx` is the cursor row (so cursor movement
+///   always invalidates the row hash).
+pub fn hash_row(
+    row: &[arcterm_core::Cell],
+    row_idx: usize,
+    cursor: arcterm_core::CursorPos,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    use std::collections::hash_map::DefaultHasher;
+
+    let mut h = DefaultHasher::new();
+    row_idx.hash(&mut h);
+    // Include cursor column so that cursor movement within a row is detected.
+    if row_idx == cursor.row {
+        cursor.col.hash(&mut h);
+    }
+    for cell in row {
+        (cell.c as u32).hash(&mut h);
+        hash_color(cell.attrs.fg, &mut h);
+        hash_color(cell.attrs.bg, &mut h);
+        cell.attrs.bold.hash(&mut h);
+        cell.attrs.italic.hash(&mut h);
+        cell.attrs.underline.hash(&mut h);
+        cell.attrs.reverse.hash(&mut h);
+    }
+    h.finish()
+}
+
+fn hash_color(c: TermColor, h: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+    match c {
+        TermColor::Default      => 0u8.hash(h),
+        TermColor::Indexed(n)   => { 1u8.hash(h); n.hash(h); }
+        TermColor::Rgb(r, g, b) => { 2u8.hash(h); r.hash(h); g.hash(h); b.hash(h); }
+    }
 }
