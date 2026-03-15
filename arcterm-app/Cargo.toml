@@ -8,6 +8,10 @@ license.workspace = true
 name = "arcterm-app"
 path = "src/main.rs"
 
+[features]
+## Enables fine-grained timestamp logging for latency measurement.
+latency-trace = []
+
 [dependencies]
 arcterm-core = { path = "../arcterm-core" }
 arcterm-vt = { path = "../arcterm-vt" }
