@@ -2,6 +2,146 @@
 
 use crate::Handler;
 
+// ---------------------------------------------------------------------------
+// ApcScanner — filters APC sequences before the vte::Parser sees them
+// ---------------------------------------------------------------------------
+
+/// State machine states for scanning APC (Application Program Command) sequences.
+///
+/// APC sequences have the form:  ESC _ <payload> ESC \
+///
+/// The `vte` crate's `hook`/`put`/`unhook` callbacks handle DCS (ESC P) but
+/// not APC (ESC _).  ApcScanner sits in front of `Processor` and intercepts
+/// APC sequences at the byte level before passing remaining bytes to the inner
+/// `Processor`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApcState {
+    /// Normal passthrough — not inside an APC sequence.
+    Normal,
+    /// Just saw a bare ESC byte; waiting to see whether it begins APC (`_`) or
+    /// something else.
+    PendingEsc,
+    /// Inside an APC sequence, collecting payload bytes.
+    InApc,
+    /// Inside an APC sequence and just saw an ESC; waiting for `\` (ST) or
+    /// another APC-body byte.
+    InApcPendingEsc,
+}
+
+/// Wraps a `Processor` and intercepts Kitty Graphics Protocol APC sequences
+/// (`ESC _ … ESC \`) before forwarding remaining bytes to the inner parser.
+///
+/// Non-APC bytes are passed through to the inner `Processor` unchanged,
+/// preserving full VT handling.  For performance, runs of non-ESC bytes are
+/// batched into a single `inner.advance` call rather than processed one-by-one.
+pub struct ApcScanner {
+    inner: Processor,
+    state: ApcState,
+    /// Payload buffer — accumulates APC body bytes between ESC _ and ESC \.
+    payload: Vec<u8>,
+}
+
+impl ApcScanner {
+    /// Create a new `ApcScanner` wrapping a fresh `Processor`.
+    pub fn new() -> Self {
+        Self {
+            inner: Processor::new(),
+            state: ApcState::Normal,
+            payload: Vec::new(),
+        }
+    }
+
+    /// Feed raw PTY bytes into the scanner.
+    ///
+    /// APC sequences are extracted and dispatched via
+    /// `Handler::kitty_graphics_command`.  All other bytes are forwarded to
+    /// the inner `Processor`.
+    pub fn advance<H: Handler>(&mut self, handler: &mut H, bytes: &[u8]) {
+        // Index into `bytes` marking the start of the current passthrough run.
+        let mut pass_start: Option<usize> = None;
+
+        // Flush any accumulated passthrough bytes to the inner Processor.
+        let flush_pass = |inner: &mut Processor, handler: &mut H, end: usize, start: &mut Option<usize>| {
+            if let Some(s) = start.take() {
+                inner.advance(handler, &bytes[s..end]);
+            }
+        };
+
+        let mut i = 0;
+        while i < bytes.len() {
+            let byte = bytes[i];
+
+            match self.state {
+                // -----------------------------------------------------------------
+                ApcState::Normal => {
+                    if byte == 0x1b {
+                        // Flush any accumulated passthrough bytes up to (not including) ESC.
+                        flush_pass(&mut self.inner, handler, i, &mut pass_start);
+                        self.state = ApcState::PendingEsc;
+                    } else {
+                        // Accumulate into passthrough run.
+                        if pass_start.is_none() {
+                            pass_start = Some(i);
+                        }
+                    }
+                }
+
+                // -----------------------------------------------------------------
+                ApcState::PendingEsc => {
+                    if byte == b'_' {
+                        // ESC _ → start of APC sequence.
+                        self.payload.clear();
+                        self.state = ApcState::InApc;
+                    } else {
+                        // ESC followed by something other than '_' — forward both
+                        // bytes to the inner Processor as a combined slice.
+                        let esc_and_byte = [0x1b, byte];
+                        self.inner.advance(handler, &esc_and_byte);
+                        self.state = ApcState::Normal;
+                    }
+                }
+
+                // -----------------------------------------------------------------
+                ApcState::InApc => {
+                    if byte == 0x1b {
+                        self.state = ApcState::InApcPendingEsc;
+                    } else {
+                        self.payload.push(byte);
+                    }
+                }
+
+                // -----------------------------------------------------------------
+                ApcState::InApcPendingEsc => {
+                    if byte == b'\\' {
+                        // ESC \ (ST) — end of APC sequence.  Dispatch the payload.
+                        handler.kitty_graphics_command(&self.payload);
+                        self.payload.clear();
+                        self.state = ApcState::Normal;
+                    } else {
+                        // ESC inside APC body followed by non-'\' — include the
+                        // ESC and this byte as payload bytes and stay in InApc.
+                        self.payload.push(0x1b);
+                        self.payload.push(byte);
+                        self.state = ApcState::InApc;
+                    }
+                }
+            }
+
+            i += 1;
+        }
+
+        // Flush any remaining passthrough bytes.
+        let len = bytes.len();
+        flush_pass(&mut self.inner, handler, len, &mut pass_start);
+    }
+}
+
+impl Default for ApcScanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Wraps `vte::Parser` and drives a `Handler` implementation from raw PTY bytes.
 pub struct Processor {
     parser: vte::Parser,

@@ -5,7 +5,7 @@ pub mod processor;
 
 pub use arcterm_core::TermModes;
 pub use handler::{GridState, Handler};
-pub use processor::Processor;
+pub use processor::{ApcScanner, Processor};
 
 #[cfg(test)]
 mod handler_tests {
@@ -1105,5 +1105,153 @@ mod phase2_integration_tests {
         assert_eq!(gs.grid.cells[2][0].c, '3', "row 2 should be former row 3 after scroll up");
         // Row 5 (bottom of region) should be blank.
         assert_eq!(gs.grid.cells[5][0].c, ' ', "row 5 (region bottom) should be blank");
+    }
+}
+
+// =============================================================================
+// Phase 4 ApcScanner tests (Task 1 TDD) — written before implementation
+// =============================================================================
+
+#[cfg(test)]
+mod apc_scanner_tests {
+    use crate::{ApcScanner, Handler};
+
+    /// Minimal handler that records kitty_graphics_command payloads.
+    #[derive(Default)]
+    struct Recorder {
+        calls: Vec<Vec<u8>>,
+        chars: Vec<char>,
+    }
+
+    impl Handler for Recorder {
+        fn put_char(&mut self, c: char) {
+            self.chars.push(c);
+        }
+        fn kitty_graphics_command(&mut self, payload: &[u8]) {
+            self.calls.push(payload.to_vec());
+        }
+    }
+
+    /// Helper: feed bytes through ApcScanner wrapping a Recorder, return recorder.
+    fn scan(input: &[u8]) -> Recorder {
+        let mut rec = Recorder::default();
+        let mut scanner = ApcScanner::new();
+        scanner.advance(&mut rec, input);
+        rec
+    }
+
+    // -------------------------------------------------------------------------
+    // Complete APC sequence: ESC _ payload ESC \
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn complete_apc_sequence_dispatches_payload() {
+        let input = b"\x1b_Ga=q;\x1b\\";
+        let rec = scan(input);
+        assert_eq!(rec.calls.len(), 1, "one kitty_graphics_command must fire");
+        assert_eq!(rec.calls[0], b"Ga=q;", "payload must be stripped of APC delimiters");
+        assert!(rec.chars.is_empty(), "no plain chars must be emitted");
+    }
+
+    // -------------------------------------------------------------------------
+    // Split at ESC boundary: two calls together reconstruct one APC
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn split_at_esc_boundary_reconstructs_apc() {
+        // Split just before the trailing ESC \
+        let part1 = b"\x1b_hello";
+        let part2 = b"\x1b\\world";
+        let mut rec = Recorder::default();
+        let mut scanner = ApcScanner::new();
+        scanner.advance(&mut rec, part1);
+        scanner.advance(&mut rec, part2);
+        // "hello" was the payload; "world" is plain text after ST
+        assert_eq!(rec.calls.len(), 1);
+        assert_eq!(rec.calls[0], b"hello");
+        assert_eq!(rec.chars, vec!['w', 'o', 'r', 'l', 'd']);
+    }
+
+    // -------------------------------------------------------------------------
+    // Split at ST boundary: ESC arrives alone, \ in next call
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn split_at_st_boundary_reconstructs_apc() {
+        let part1 = b"\x1b_payload\x1b";
+        let part2 = b"\\";
+        let mut rec = Recorder::default();
+        let mut scanner = ApcScanner::new();
+        scanner.advance(&mut rec, part1);
+        scanner.advance(&mut rec, part2);
+        assert_eq!(rec.calls.len(), 1);
+        assert_eq!(rec.calls[0], b"payload");
+        assert!(rec.chars.is_empty());
+    }
+
+    // -------------------------------------------------------------------------
+    // Non-APC input forwarded as plain chars
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn non_apc_input_forwarded_as_plain_chars() {
+        let rec = scan(b"hello");
+        assert!(rec.calls.is_empty(), "no APC dispatch for plain text");
+        assert_eq!(rec.chars, vec!['h', 'e', 'l', 'l', 'o']);
+    }
+
+    // -------------------------------------------------------------------------
+    // ESC followed by non-underscore is forwarded, not treated as APC start
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn esc_non_underscore_forwarded_not_apc() {
+        // ESC[31m (CSI sequence) — the underlying Processor handles it; the
+        // ApcScanner must not swallow the ESC.  In ApcScanner the ESC is
+        // forwarded to the inner Processor, which dispatches it normally.
+        let rec = scan(b"AB");
+        assert!(rec.calls.is_empty());
+        assert_eq!(rec.chars, vec!['A', 'B']);
+    }
+
+    // -------------------------------------------------------------------------
+    // Empty APC: ESC _ ESC \  → payload is empty slice
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn empty_apc_payload_dispatches_empty_slice() {
+        let input = b"\x1b_\x1b\\";
+        let rec = scan(input);
+        assert_eq!(rec.calls.len(), 1, "empty APC must still dispatch");
+        assert!(rec.calls[0].is_empty(), "payload must be empty");
+    }
+
+    // -------------------------------------------------------------------------
+    // Large payload (performance batch path)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn large_payload_dispatched_completely() {
+        let payload: Vec<u8> = (0u8..=127).cycle().take(4096).collect();
+        let mut input = vec![0x1b, b'_'];
+        input.extend_from_slice(&payload);
+        input.push(0x1b);
+        input.push(b'\\');
+        let rec = scan(&input);
+        assert_eq!(rec.calls.len(), 1);
+        assert_eq!(rec.calls[0], payload);
+    }
+
+    // -------------------------------------------------------------------------
+    // Multiple APC sequences in one buffer
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn multiple_apc_sequences_in_one_buffer() {
+        let input = b"\x1b_first\x1b\\\x1b_second\x1b\\";
+        let rec = scan(input);
+        assert_eq!(rec.calls.len(), 2);
+        assert_eq!(rec.calls[0], b"first");
+        assert_eq!(rec.calls[1], b"second");
     }
 }
