@@ -170,6 +170,7 @@ name = "arcterm-render"
 version = "0.1.0"
 dependencies = [
  "arcterm-core",
+ "env_logger",
  "glyphon",
  "log",
  "pollster",
