@@ -811,4 +811,73 @@ type = "leaf"
         results.sort_by(|a, b| a.0.cmp(&b.0));
         results
     }
+
+    // -----------------------------------------------------------------------
+    // PLAN-2.2 Task 3 — auto-save path and filtering tests
+    // -----------------------------------------------------------------------
+
+    /// `_last_session.toml` must be filtered out of the workspace listing.
+    /// Only user-named workspaces (no leading `_`) should appear.
+    #[test]
+    fn list_workspaces_skips_underscore_files() {
+        let dir = tempdir_for_test("plan22_skip_underscore");
+        // Write the auto-save file and one user workspace.
+        std::fs::write(dir.join("_last_session.toml"), b"").ok();
+        std::fs::write(dir.join("my-project.toml"), b"").ok();
+
+        let results = list_workspaces_in(&dir);
+        let names: Vec<&str> = results.iter().map(|(n, _)| n.as_str()).collect();
+
+        assert!(
+            names.contains(&"my-project"),
+            "my-project.toml must appear in listing, got: {names:?}"
+        );
+        assert!(
+            !names.contains(&"_last_session"),
+            "_last_session.toml must be excluded from listing, got: {names:?}"
+        );
+
+        cleanup_tempdir(&dir);
+    }
+
+    /// The auto-save path must be inside the arcterm workspaces directory
+    /// and use the reserved `_last_session.toml` filename.
+    #[test]
+    fn last_session_path_is_in_workspaces_dir() {
+        let path = workspaces_dir().join("_last_session.toml");
+        let s = path.to_string_lossy();
+
+        assert!(
+            s.contains("arcterm"),
+            "_last_session path must contain 'arcterm': {s}"
+        );
+        assert!(
+            s.contains("workspaces"),
+            "_last_session path must contain 'workspaces': {s}"
+        );
+        assert!(
+            s.ends_with("_last_session.toml"),
+            "_last_session path must end with '_last_session.toml': {s}"
+        );
+    }
+
+    /// `WorkspaceFile::save_to_file` must create parent directories if they
+    /// do not exist (the workspaces dir may not exist on first run).
+    #[test]
+    fn save_to_file_creates_parent_dirs() {
+        let base = tempdir_for_test("plan22_parent_dirs");
+        // Nested directory that does not yet exist.
+        let nested = base.join("a").join("b").join("c");
+        let target = nested.join("session.toml");
+
+        let ws = WorkspaceFile::default();
+        ws.save_to_file(&target).expect("save_to_file must create parent dirs");
+
+        assert!(
+            target.exists(),
+            "workspace file must exist at {target:?} after save"
+        );
+
+        cleanup_tempdir(&base);
+    }
 }
