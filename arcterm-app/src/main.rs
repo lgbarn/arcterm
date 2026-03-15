@@ -16,6 +16,7 @@
 mod colors;
 mod config;
 mod input;
+mod layout;
 mod selection;
 mod tab;
 mod terminal;
