@@ -221,6 +221,7 @@ name = "arcterm-pty"
 version = "0.1.0"
 dependencies = [
  "arcterm-core",
+ "libc",
  "portable-pty",
  "tokio",
 ]
