@@ -51,7 +51,7 @@ impl Terminal {
         size: GridSize,
         shell: Option<String>,
     ) -> Result<(Self, mpsc::Receiver<Vec<u8>>), PtyError> {
-        let (pty, rx) = PtySession::new(size, shell)?;
+        let (pty, rx) = PtySession::new(size, shell, None)?;
         let scanner = ApcScanner::new();
         let grid_state = GridState::new(Grid::new(size));
         Ok((

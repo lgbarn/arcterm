@@ -9,6 +9,9 @@
 //! session-specific state (opaque `PaneId(u64)` counters) does not leak into
 //! persisted files.
 
+// Public API consumed by downstream CLI subcommands (Phase 5 Wave 2+).
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};

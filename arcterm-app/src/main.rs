@@ -24,6 +24,7 @@ mod palette;
 mod selection;
 mod tab;
 mod terminal;
+mod workspace;
 
 use std::collections::HashMap;
 use std::sync::Arc;
