@@ -22,6 +22,7 @@ mod selection;
 mod tab;
 mod terminal;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use winit::event_loop::ControlFlow;
@@ -29,9 +30,12 @@ use winit::event_loop::ControlFlow;
 #[cfg(feature = "latency-trace")]
 use std::time::Instant as TraceInstant;
 
-use arcterm_core::{Cell, CellAttrs, Color, CursorPos};
-use arcterm_render::{RenderPalette, Renderer};
+use arcterm_core::{Cell, CellAttrs, Color, CursorPos, GridSize};
+use arcterm_render::{OverlayQuad, PaneRenderInfo, RenderPalette, Renderer};
+use keymap::{KeyAction, KeymapHandler};
+use layout::{Axis, Direction, PaneId, PaneNode, PixelRect};
 use selection::{generate_selection_quads, pixel_to_cell, Clipboard, Selection, SelectionMode, SelectionQuad};
+use tab::TabManager;
 use terminal::Terminal;
 use tokio::sync::mpsc;
 use winit::{
@@ -48,6 +52,22 @@ const MULTI_CLICK_INTERVAL_MS: u64 = 400;
 
 /// Lines scrolled per mouse-wheel tick.
 const SCROLL_LINES_PER_TICK: usize = 3;
+
+/// Width of pane borders in physical pixels (logical border_width * scale).
+const BORDER_PX: f32 = 2.0;
+
+/// Border color for unfocused pane borders (dark grey, RGBA).
+const BORDER_COLOR_NORMAL: [u8; 4] = [60, 60, 60, 255];
+
+/// Border color for the split containing the focused pane (accent, RGBA).
+const BORDER_COLOR_FOCUS: [u8; 4] = [130, 100, 200, 255];
+
+/// Amount to adjust the split ratio per resize keypress.
+const RESIZE_DELTA: f32 = 0.05;
+
+/// Border drag threshold in physical pixels — within this distance of a border
+/// edge the cursor is treated as "on the border" for drag-to-resize.
+const BORDER_DRAG_THRESHOLD: f32 = 4.0;
 
 fn main() {
     env_logger::init();
@@ -78,21 +98,28 @@ fn main() {
 struct AppState {
     window: Arc<Window>,
     renderer: Renderer,
-    terminal: Terminal,
-    pty_rx: mpsc::Receiver<Vec<u8>>,
-    /// Set to `true` once the PTY channel closes (shell has exited).
+
+    // ---- multiplexer core ----
+    /// All open terminal instances, keyed by pane ID.
+    panes: HashMap<PaneId, Terminal>,
+    /// PTY byte channels for every open pane.
+    pty_channels: HashMap<PaneId, mpsc::Receiver<Vec<u8>>>,
+    /// Tab manager: tab labels, per-tab focused pane, per-tab zoom state.
+    tab_manager: TabManager,
+    /// Layout trees for each tab, index-aligned with `tab_manager.tabs`.
+    tab_layouts: Vec<PaneNode>,
+    /// Leader-key state machine.
+    keymap: KeymapHandler,
+
+    /// Set to `true` once ALL PTY channels close (all panes have exited).
     shell_exited: bool,
 
     // ---- configuration ----
-    /// Loaded configuration; kept for reference and future use.
     config: config::ArctermConfig,
-    /// Receives updated configurations from the file-system watcher thread.
-    /// `None` if the watcher could not be started.
     config_rx: Option<std::sync::mpsc::Receiver<config::ArctermConfig>>,
 
     // ---- selection & clipboard ----
     selection: Selection,
-    /// Clipboard instance; `None` if the system clipboard is unavailable.
     clipboard: Option<Clipboard>,
     /// Last known physical cursor position (pixels).
     last_cursor_position: (f64, f64),
@@ -101,24 +128,118 @@ struct AppState {
     /// Consecutive click count: 1 = single, 2 = double, 3 = triple.
     click_count: u32,
 
+    // ---- border drag state ----
+    /// If Some, we are dragging the border that contains this pane to resize.
+    drag_pane: Option<PaneId>,
+
     // ---- selection rendering ----
-    /// Pre-computed quads for the current selection.
-    /// Updated every `RedrawRequested`. Stored here for future quad-pipeline
-    /// integration — not yet submitted to the GPU.
     selection_quads: Vec<SelectionQuad>,
 
     // ---- performance / control flow ----
-    /// Number of consecutive `about_to_wait` cycles that yielded no PTY data.
     idle_cycles: u32,
-    /// Timestamp of the last FPS log line.
     fps_last_log: Instant,
-    /// Number of frames rendered since `fps_last_log`.
     fps_frame_count: u32,
+
+    /// Whether the command palette stub flag is set.
+    palette_open: bool,
+}
+
+impl AppState {
+    // -----------------------------------------------------------------------
+    // Active-tab helpers
+    // -----------------------------------------------------------------------
+
+    /// The `PaneId` of the focused pane in the active tab.
+    fn focused_pane(&self) -> PaneId {
+        // tab::PaneId = u64; layout::PaneId wraps u64.
+        PaneId(self.tab_manager.active_tab().focus)
+    }
+
+    /// Set the focused pane on the active tab.
+    fn set_focused_pane(&mut self, id: PaneId) {
+        self.tab_manager.active_tab_mut().focus = id.0;
+    }
+
+    /// The layout tree for the active tab.
+    fn active_layout(&self) -> &PaneNode {
+        &self.tab_layouts[self.tab_manager.active]
+    }
+
+    /// A mutable reference to the layout tree for the active tab.
+    #[allow(dead_code)] // Available for future use
+    fn active_layout_mut(&mut self) -> &mut PaneNode {
+        let active = self.tab_manager.active;
+        &mut self.tab_layouts[active]
+    }
+
+    // -----------------------------------------------------------------------
+    // Geometry helpers
+    // -----------------------------------------------------------------------
+
+    /// Compute the pixel rect available for pane content (below tab bar when shown).
+    fn pane_area(&self) -> PixelRect {
+        let w = self.renderer.gpu.surface_config.width as f32;
+        let h = self.renderer.gpu.surface_config.height as f32;
+        let sf = self.window.scale_factor() as f32;
+
+        let tab_h = if self.config.multiplexer.show_tab_bar && self.tab_manager.tab_count() > 1 {
+            arcterm_render::tab_bar_height(&self.renderer.text.cell_size, sf)
+        } else {
+            0.0
+        };
+
+        PixelRect { x: 0.0, y: tab_h, width: w, height: h - tab_h }
+    }
+
+    /// Compute pixel rects for all panes in the active tab.
+    fn compute_pane_rects(&self) -> HashMap<PaneId, PixelRect> {
+        let available = self.pane_area();
+        let tab = self.tab_manager.active_tab();
+
+        if let Some(zoomed_id) = tab.zoomed {
+            self.active_layout().compute_zoomed_rect(PaneId(zoomed_id), available)
+        } else {
+            self.active_layout().compute_rects(available, BORDER_PX)
+        }
+    }
+
+    /// Given a rect, compute the grid size (rows × cols) for a pane.
+    fn grid_size_for_rect(&self, rect: PixelRect) -> GridSize {
+        let sf = self.window.scale_factor() as f32;
+        let cell_w = self.renderer.text.cell_size.width * sf;
+        let cell_h = self.renderer.text.cell_size.height * sf;
+        if cell_w <= 0.0 || cell_h <= 0.0 || rect.width <= 0.0 || rect.height <= 0.0 {
+            return GridSize::new(1, 1);
+        }
+        let cols = (rect.width / cell_w).floor() as usize;
+        let rows = (rect.height / cell_h).floor() as usize;
+        GridSize::new(rows.max(1), cols.max(1))
+    }
+
+    // -----------------------------------------------------------------------
+    // Spawn a new pane
+    // -----------------------------------------------------------------------
+
+    /// Spawn a new Terminal + PTY, insert into the pane and channel maps, and
+    /// return its `PaneId`.  The grid is sized to `size`.
+    fn spawn_pane(&mut self, size: GridSize) -> PaneId {
+        let id = PaneId::next();
+        match Terminal::new(size, self.config.shell.clone()) {
+            Ok((mut terminal, rx)) => {
+                terminal.grid_mut().max_scrollback = self.config.scrollback_lines;
+                self.panes.insert(id, terminal);
+                self.pty_channels.insert(id, rx);
+            }
+            Err(e) => {
+                log::error!("Failed to create PTY for pane {:?}: {e}", id);
+            }
+        }
+        id
+    }
 }
 
 struct App {
     state: Option<AppState>,
-    /// Current keyboard modifier state, updated by ModifiersChanged events.
     modifiers: ModifiersState,
     #[cfg(feature = "latency-trace")]
     cold_start: TraceInstant,
@@ -134,9 +255,7 @@ impl ApplicationHandler for App {
             .with_inner_size(LogicalSize::new(1024u32, 768u32))
             .with_title("Arcterm");
 
-        // Load configuration first so all values are available for wiring.
         let cfg = config::ArctermConfig::load();
-        // Start the hot-reload watcher (best-effort; None if unavailable).
         let config_rx = config::watch_config();
         log::info!(
             "config: font_size={}, scrollback_lines={}, color_scheme={}",
@@ -151,29 +270,41 @@ impl ApplicationHandler for App {
                 .expect("failed to create window"),
         );
 
-        // Pass font_size from config to the renderer.
         let mut renderer = Renderer::new(window.clone(), cfg.font_size);
 
-        // Apply the colour palette resolved from config.
         let palette = palette_from_config(&cfg);
         log::info!("config: color_scheme={:?}", cfg.color_scheme);
         renderer.set_palette(palette);
 
-        let size = renderer.grid_size_for_window(
-            window.inner_size().width,
-            window.inner_size().height,
+        // Compute initial grid size for a full-window single pane.
+        let win_size = window.inner_size();
+        let initial_size = renderer.grid_size_for_window(
+            win_size.width,
+            win_size.height,
             window.scale_factor(),
         );
 
-        // Pass optional shell override from config to the terminal / PTY.
+        // Spawn the first pane.
+        let first_id = PaneId::next();
         let (mut terminal, pty_rx) =
-            Terminal::new(size, cfg.shell.clone()).unwrap_or_else(|e| {
+            Terminal::new(initial_size, cfg.shell.clone()).unwrap_or_else(|e| {
                 log::error!("Failed to create PTY session: {e}");
                 std::process::exit(1);
             });
-
-        // Apply scrollback limit from config.
         terminal.grid_mut().max_scrollback = cfg.scrollback_lines;
+
+        let mut panes = HashMap::new();
+        panes.insert(first_id, terminal);
+
+        let mut pty_channels = HashMap::new();
+        pty_channels.insert(first_id, pty_rx);
+
+        // TabManager uses tab::PaneId = u64; pass the raw inner value.
+        let tab_manager = TabManager::new(first_id.0);
+        // Matching layout tree for the first (only) tab.
+        let tab_layouts = vec![PaneNode::Leaf { pane_id: first_id }];
+
+        let keymap = KeymapHandler::new(cfg.multiplexer.leader_timeout_ms);
 
         let clipboard = Clipboard::new()
             .map_err(|e| log::warn!("Clipboard unavailable: {e}"))
@@ -182,8 +313,11 @@ impl ApplicationHandler for App {
         self.state = Some(AppState {
             window,
             renderer,
-            terminal,
-            pty_rx,
+            panes,
+            pty_channels,
+            tab_manager,
+            tab_layouts,
+            keymap,
             shell_exited: false,
             config: cfg,
             config_rx,
@@ -192,10 +326,12 @@ impl ApplicationHandler for App {
             last_cursor_position: (0.0, 0.0),
             last_click_time: None,
             click_count: 0,
+            drag_pane: None,
             selection_quads: Vec::new(),
             idle_cycles: 0,
             fps_last_log: Instant::now(),
             fps_frame_count: 0,
+            palette_open: false,
         });
     }
 
@@ -209,14 +345,12 @@ impl ApplicationHandler for App {
         }
 
         // ------------------------------------------------------------------
-        // Config hot-reload: drain all pending config updates.
+        // Config hot-reload
         // ------------------------------------------------------------------
         if let Some(rx) = &state.config_rx {
             loop {
                 match rx.try_recv() {
                     Ok(new_cfg) => {
-                        // Font size changes require a renderer restart because
-                        // glyphon font metrics are baked in at construction time.
                         if (new_cfg.font_size - state.config.font_size).abs() > f32::EPSILON {
                             log::info!(
                                 "config: font_size changed ({} → {}): restart required",
@@ -225,18 +359,18 @@ impl ApplicationHandler for App {
                             );
                         }
 
-                        // Scrollback limit can be updated at runtime.
                         if new_cfg.scrollback_lines != state.config.scrollback_lines {
                             log::info!(
                                 "config: scrollback_lines changed ({} → {})",
                                 state.config.scrollback_lines,
                                 new_cfg.scrollback_lines,
                             );
-                            state.terminal.grid_mut().max_scrollback = new_cfg.scrollback_lines;
+                            // Update all live panes.
+                            for terminal in state.panes.values_mut() {
+                                terminal.grid_mut().max_scrollback = new_cfg.scrollback_lines;
+                            }
                         }
 
-                        // Colour scheme or per-slot overrides changed: rebuild
-                        // and apply the palette immediately.
                         if new_cfg.color_scheme != state.config.color_scheme
                             || new_cfg.colors.foreground != state.config.colors.foreground
                             || new_cfg.colors.background != state.config.colors.background
@@ -279,49 +413,74 @@ impl ApplicationHandler for App {
             }
         }
 
+        // ------------------------------------------------------------------
+        // Poll ALL PTY channels (all tabs, all panes).
+        // ------------------------------------------------------------------
         let mut got_data = false;
-        loop {
-            match state.pty_rx.try_recv() {
-                Ok(bytes) => {
-                    #[cfg(feature = "latency-trace")]
-                    let t0 = TraceInstant::now();
+        let mut closed_panes: Vec<PaneId> = Vec::new();
 
-                    state.terminal.process_pty_output(&bytes);
-                    got_data = true;
+        // Collect pane IDs to avoid borrow checker conflicts.
+        let pane_ids: Vec<PaneId> = state.pty_channels.keys().copied().collect();
 
-                    #[cfg(feature = "latency-trace")]
-                    log::debug!(
-                        "[latency] PTY output processed: {} bytes in {:?}",
-                        bytes.len(),
-                        t0.elapsed()
-                    );
-                }
-                Err(mpsc::error::TryRecvError::Empty) => break,
-                Err(mpsc::error::TryRecvError::Disconnected) => {
-                    log::info!("PTY channel closed — shell has exited");
-                    state.shell_exited = true;
-                    state.window.request_redraw();
-                    break;
+        for id in pane_ids {
+            'drain: loop {
+                let Some(rx) = state.pty_channels.get_mut(&id) else {
+                    break 'drain;
+                };
+                match rx.try_recv() {
+                    Ok(bytes) => {
+                        #[cfg(feature = "latency-trace")]
+                        let t0 = TraceInstant::now();
+
+                        if let Some(terminal) = state.panes.get_mut(&id) {
+                            terminal.process_pty_output(&bytes);
+                        }
+                        got_data = true;
+
+                        #[cfg(feature = "latency-trace")]
+                        log::debug!(
+                            "[latency] PTY output processed: {} bytes in {:?}",
+                            bytes.len(),
+                            t0.elapsed()
+                        );
+                    }
+                    Err(mpsc::error::TryRecvError::Empty) => break 'drain,
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        log::info!("PTY channel closed for pane {:?}", id);
+                        closed_panes.push(id);
+                        break 'drain;
+                    }
                 }
             }
         }
 
+        // Remove closed pane channels.
+        for id in closed_panes {
+            state.pty_channels.remove(&id);
+        }
+
+        // When ALL channels are gone, the session has ended.
+        if state.pty_channels.is_empty() {
+            log::info!("All PTY channels closed — shell has exited");
+            state.shell_exited = true;
+            state.window.request_redraw();
+        }
+
         if got_data {
-            // New PTY output: if we're scrolled back into history, clear any
-            // active selection (content has shifted) and reset to the live view.
-            let grid = state.terminal.grid_mut();
-            if grid.scroll_offset > 0 {
-                state.selection.clear();
-                grid.scroll_offset = 0;
+            // Clear selection and scroll-to-live on the focused pane only.
+            let focused = state.focused_pane();
+            if let Some(terminal) = state.panes.get_mut(&focused) {
+                let grid = terminal.grid_mut();
+                if grid.scroll_offset > 0 {
+                    state.selection.clear();
+                    grid.scroll_offset = 0;
+                }
             }
             state.window.request_redraw();
-            // Reset idle counter — we have active data.
             state.idle_cycles = 0;
             event_loop.set_control_flow(ControlFlow::Poll);
         } else {
-            // No data this cycle; count idle cycles.
             state.idle_cycles = state.idle_cycles.saturating_add(1);
-            // After 3 empty cycles switch to Wait (event-driven) to save CPU.
             if state.idle_cycles >= 3 {
                 event_loop.set_control_flow(ControlFlow::Wait);
             } else {
@@ -329,21 +488,27 @@ impl ApplicationHandler for App {
             }
         }
 
-        // Drain any pending DSR/DA replies and write them to the PTY.
-        {
-            let replies = state.terminal.take_pending_replies();
-            for reply in replies {
-                state.terminal.write_input(&reply);
+        // Drain pending DSR/DA replies for ALL panes and write them back.
+        let pane_ids: Vec<PaneId> = state.panes.keys().copied().collect();
+        for id in pane_ids {
+            if let Some(terminal) = state.panes.get_mut(&id) {
+                let replies = terminal.take_pending_replies();
+                for reply in replies {
+                    terminal.write_input(&reply);
+                }
             }
         }
 
-        // Wire window title from grid to the OS window.
+        // Wire window title from focused pane.
         {
-            let title = state.terminal.grid().title().map(|t| t.to_string());
-            if let Some(t) = title
-                && !t.is_empty()
-            {
-                state.window.set_title(&t);
+            let focused = state.focused_pane();
+            if let Some(terminal) = state.panes.get(&focused) {
+                let title = terminal.grid().title().map(|t| t.to_string());
+                if let Some(t) = title
+                    && !t.is_empty()
+                {
+                    state.window.set_title(&t);
+                }
             }
         }
     }
@@ -367,104 +532,223 @@ impl ApplicationHandler for App {
                 self.modifiers = mods.state();
             }
 
+            // -----------------------------------------------------------------
+            // Window resize — recompute rects and resize all panes.
+            // -----------------------------------------------------------------
             WindowEvent::Resized(size) => {
                 if size.width == 0 || size.height == 0 {
                     return;
                 }
                 state.renderer.resize(size.width, size.height);
-                let new_grid_size = state.renderer.grid_size_for_window(
-                    size.width,
-                    size.height,
-                    state.window.scale_factor(),
-                );
-                state.terminal.resize(new_grid_size);
+
+                // Resize every pane to its new rect.
+                let rects = state.compute_pane_rects();
+                for (id, rect) in &rects {
+                    let new_size = state.grid_size_for_rect(*rect);
+                    if let Some(terminal) = state.panes.get_mut(id) {
+                        terminal.resize(new_size);
+                    }
+                }
                 state.window.request_redraw();
             }
 
             // -----------------------------------------------------------------
-            // Mouse cursor movement — extend an in-progress drag selection.
+            // Mouse cursor movement — extend drag selection OR border drag.
             // -----------------------------------------------------------------
             WindowEvent::CursorMoved { position, .. } => {
                 state.last_cursor_position = (position.x, position.y);
-                // Only extend selection when left button is being held down.
-                // We detect this by checking if mode != None (set on press,
-                // cleared on release).
+
+                // Border drag resize.
+                if let Some(drag_id) = state.drag_pane {
+                    let rects = state.compute_pane_rects();
+                    if let Some(drag_rect) = rects.get(&drag_id) {
+                        let px = position.x as f32;
+                        // Determine delta based on whether it's closer to left/right or top/bottom edge.
+                        let left_dist = (px - drag_rect.x).abs();
+                        let right_dist = (px - (drag_rect.x + drag_rect.width)).abs();
+                        let is_right_edge = right_dist < left_dist;
+
+                        let delta = if is_right_edge {
+                            // Dragging the right edge: moving right increases ratio.
+                            let available_w = rects.values().map(|r| r.width).sum::<f32>() + rects.len() as f32 * BORDER_PX;
+                            if available_w > 0.0 {
+                                // Compute fraction of new position vs total width.
+                                let new_ratio = (px - drag_rect.x) / (available_w - BORDER_PX);
+                                let old_ratio = drag_rect.width / (available_w - BORDER_PX);
+                                new_ratio - old_ratio
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            0.0
+                        };
+
+                        if delta.abs() > 0.001 {
+                            let active = state.tab_manager.active;
+                            state.tab_layouts[active].resize_split(drag_id, delta);
+                            state.window.request_redraw();
+                        }
+                    }
+                    return;
+                }
+
+                // Extend drag selection.
                 if state.selection.mode != SelectionMode::None {
-                    let cell = cursor_to_cell(state, position.x, position.y);
-                    state.selection.update(cell);
-                    state.window.request_redraw();
+                    let focused = state.focused_pane();
+                    let rects = state.compute_pane_rects();
+                    if let Some(rect) = rects.get(&focused) {
+                        let cell = cursor_to_cell_in_rect(state, position.x, position.y, *rect);
+                        state.selection.update(cell);
+                        state.window.request_redraw();
+                    }
                 }
             }
 
             // -----------------------------------------------------------------
-            // Mouse button press/release — start/stop selection, copy on triple.
+            // Mouse button press/release — click-to-focus, selection, border drag.
             // -----------------------------------------------------------------
             WindowEvent::MouseInput { state: btn_state, button, .. } => {
                 if button == MouseButton::Left {
                     match btn_state {
                         ElementState::Pressed => {
-                            let now = Instant::now();
-                            let multi = state
-                                .last_click_time
-                                .map(|prev| {
-                                    now.duration_since(prev) < Duration::from_millis(MULTI_CLICK_INTERVAL_MS)
-                                })
-                                .unwrap_or(false);
-
-                            if multi {
-                                state.click_count = (state.click_count + 1).min(3);
-                            } else {
-                                state.click_count = 1;
-                            }
-                            state.last_click_time = Some(now);
-
                             let (px, py) = state.last_cursor_position;
-                            let cell = cursor_to_cell(state, px, py);
-                            let mode = match state.click_count {
-                                1 => SelectionMode::Character,
-                                2 => SelectionMode::Word,
-                                _ => SelectionMode::Line,
+                            let pxf = px as f32;
+                            let pyf = py as f32;
+
+                            let rects = state.compute_pane_rects();
+
+                            // --- Tab bar click ---
+                            let sf = state.window.scale_factor() as f32;
+                            let tab_h = if state.config.multiplexer.show_tab_bar && state.tab_manager.tab_count() > 1 {
+                                arcterm_render::tab_bar_height(&state.renderer.text.cell_size, sf)
+                            } else {
+                                0.0
                             };
-                            state.selection.start(cell, mode);
-                            state.window.request_redraw();
+
+                            if tab_h > 0.0 && pyf < tab_h {
+                                let win_w = state.renderer.gpu.surface_config.width as f32;
+                                let tab_count = state.tab_manager.tab_count();
+                                let tab_w = win_w / tab_count as f32;
+                                let clicked_tab = (pxf / tab_w).floor() as usize;
+                                let clicked_tab = clicked_tab.min(tab_count - 1);
+                                state.tab_manager.switch_to(clicked_tab);
+                                state.window.request_redraw();
+                                return;
+                            }
+
+                            // --- Border drag detection ---
+                            let mut on_border = false;
+                            for (&id, rect) in &rects {
+                                // Check if we're near the right edge of this pane (which is a border).
+                                let right_edge = rect.x + rect.width;
+                                if (pxf - right_edge).abs() < BORDER_DRAG_THRESHOLD
+                                    && pyf >= rect.y
+                                    && pyf < rect.y + rect.height
+                                {
+                                    state.drag_pane = Some(id);
+                                    on_border = true;
+                                    break;
+                                }
+                                // Check bottom edge.
+                                let bottom_edge = rect.y + rect.height;
+                                if (pyf - bottom_edge).abs() < BORDER_DRAG_THRESHOLD
+                                    && pxf >= rect.x
+                                    && pxf < rect.x + rect.width
+                                {
+                                    state.drag_pane = Some(id);
+                                    on_border = true;
+                                    break;
+                                }
+                            }
+
+                            if on_border {
+                                return;
+                            }
+
+                            // --- Click-to-focus ---
+                            let clicked_pane = rects.iter().find_map(|(&id, rect)| {
+                                if rect.contains(pxf, pyf) { Some(id) } else { None }
+                            });
+
+                            if let Some(new_focus) = clicked_pane {
+                                let current_focus = state.focused_pane();
+                                if new_focus != current_focus {
+                                    state.set_focused_pane(new_focus);
+                                    state.selection.clear();
+                                    state.window.request_redraw();
+                                }
+                            }
+
+                            // --- Selection ---
+                            let focused = state.focused_pane();
+                            if let Some(&focus_rect) = rects.get(&focused)
+                                && focus_rect.contains(pxf, pyf)
+                            {
+                                let now = Instant::now();
+                                let multi = state
+                                    .last_click_time
+                                    .map(|prev| {
+                                        now.duration_since(prev) < Duration::from_millis(MULTI_CLICK_INTERVAL_MS)
+                                    })
+                                    .unwrap_or(false);
+
+                                if multi {
+                                    state.click_count = (state.click_count + 1).min(3);
+                                } else {
+                                    state.click_count = 1;
+                                }
+                                state.last_click_time = Some(now);
+
+                                let cell = cursor_to_cell_in_rect(state, px, py, focus_rect);
+                                let mode = match state.click_count {
+                                    1 => SelectionMode::Character,
+                                    2 => SelectionMode::Word,
+                                    _ => SelectionMode::Line,
+                                };
+                                state.selection.start(cell, mode);
+                                state.window.request_redraw();
+                            }
                         }
                         ElementState::Released => {
+                            // Stop border drag.
+                            state.drag_pane = None;
                             // Keep the selection visible but stop extending it.
-                            // Mode remains set so renders show the highlight.
                         }
                     }
                 }
             }
 
             // -----------------------------------------------------------------
-            // Mouse wheel — scroll the viewport.
+            // Mouse wheel — scroll the focused pane's viewport.
             // -----------------------------------------------------------------
             WindowEvent::MouseWheel { delta, .. } => {
                 let lines: i32 = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y as i32,
                     MouseScrollDelta::PixelDelta(pos) => {
-                        // Convert pixel delta to approximate line count.
                         let cell_h = state.renderer.text.cell_size.height as f64;
                         (pos.y / cell_h).round() as i32
                     }
                 };
 
                 if lines != 0 {
-                    let grid = state.terminal.grid_mut();
-                    let max_offset = grid.scrollback.len();
-                    let current = grid.scroll_offset as i32;
-                    let new_offset = (current - lines * SCROLL_LINES_PER_TICK as i32)
-                        .clamp(0, max_offset as i32) as usize;
-                    grid.scroll_offset = new_offset;
-                    state.window.request_redraw();
+                    let focused = state.focused_pane();
+                    if let Some(terminal) = state.panes.get_mut(&focused) {
+                        let grid = terminal.grid_mut();
+                        let max_offset = grid.scrollback.len();
+                        let current = grid.scroll_offset as i32;
+                        let new_offset = (current - lines * SCROLL_LINES_PER_TICK as i32)
+                            .clamp(0, max_offset as i32) as usize;
+                        grid.scroll_offset = new_offset;
+                        state.window.request_redraw();
+                    }
                 }
             }
 
             // -----------------------------------------------------------------
-            // Redraw — render frame and recompute selection quads.
+            // Redraw — render all panes, borders, and tab bar.
             // -----------------------------------------------------------------
             WindowEvent::RedrawRequested => {
-                // FPS counter: log every 5 s at debug level.
+                // FPS counter.
                 state.fps_frame_count += 1;
                 let fps_elapsed = state.fps_last_log.elapsed();
                 if fps_elapsed >= Duration::from_secs(5) {
@@ -477,68 +761,151 @@ impl ApplicationHandler for App {
                 #[cfg(feature = "latency-trace")]
                 let t0 = TraceInstant::now();
 
-                // Recompute selection quads for the current frame dimensions.
+                let scale = state.window.scale_factor();
+                let sf = scale as f32;
+                let rects = state.compute_pane_rects();
+                let focused = state.focused_pane();
+
+                // Recompute selection quads for the focused pane.
                 {
-                    let grid = state.terminal.grid();
-                    let cell_w = state.renderer.text.cell_size.width;
-                    let cell_h = state.renderer.text.cell_size.height;
-                    let scale = state.window.scale_factor() as f32;
-                    state.selection_quads = generate_selection_quads(
-                        &state.selection,
-                        grid.size.rows,
-                        grid.size.cols,
-                        cell_w,
-                        cell_h,
-                        scale,
-                    );
-                    log::trace!(
-                        "selection quads: {} rect(s) for mode {:?}",
-                        state.selection_quads.len(),
-                        state.selection.mode
-                    );
+                    if let (Some(&focus_rect), Some(terminal)) =
+                        (rects.get(&focused), state.panes.get(&focused))
+                    {
+                        let grid = terminal.grid();
+                        let cell_w = state.renderer.text.cell_size.width;
+                        let cell_h = state.renderer.text.cell_size.height;
+                        state.selection_quads = generate_selection_quads(
+                            &state.selection,
+                            grid.size.rows,
+                            grid.size.cols,
+                            cell_w,
+                            cell_h,
+                            sf,
+                        );
+                        let _ = focus_rect; // rect is used contextually for offset in future
+                        log::trace!(
+                            "selection quads: {} rect(s) for mode {:?}",
+                            state.selection_quads.len(),
+                            state.selection.mode
+                        );
+                    }
                 }
 
-                if state.shell_exited {
-                    let mut display = state.terminal.grid().clone();
-                    let last_row = display.size.rows.saturating_sub(1);
-                    let msg = "[ Shell exited — press any key to close ]";
-                    let banner_attrs = CellAttrs {
-                        fg: Color::Indexed(11),
-                        bg: Color::Indexed(0),
-                        bold: true,
-                        ..CellAttrs::default()
-                    };
-                    if let Some(row) = display.cells.get_mut(last_row) {
-                        for cell in row.iter_mut() {
-                            *cell = Cell {
-                                c: ' ',
-                                attrs: banner_attrs,
-                                dirty: true,
-                            };
-                        }
-                        for (col, ch) in msg.chars().enumerate() {
-                            if col >= display.size.cols {
-                                break;
-                            }
-                            row[col] = Cell {
-                                c: ch,
-                                attrs: banner_attrs,
-                                dirty: true,
-                            };
+                // Collect overlay quads: borders + tab bar.
+                let mut overlay_quads: Vec<OverlayQuad> = Vec::new();
+
+                // Tab bar (only when > 1 tab and show_tab_bar is true).
+                if state.config.multiplexer.show_tab_bar && state.tab_manager.tab_count() > 1 {
+                    let win_w = state.renderer.gpu.surface_config.width as f32;
+                    let tab_quads = arcterm_render::render_tab_bar_quads(
+                        state.tab_manager.tab_count(),
+                        state.tab_manager.active,
+                        &state.renderer.text.cell_size,
+                        sf,
+                        win_w,
+                        &state.renderer.palette,
+                    );
+                    for q in tab_quads {
+                        overlay_quads.push(OverlayQuad {
+                            rect: q.rect,
+                            color: q.color,
+                        });
+                    }
+                }
+
+                // Pane borders from the active layout tree.
+                {
+                    let available = state.pane_area();
+                    let tab = state.tab_manager.active_tab();
+                    // Only draw borders when NOT zoomed (zoomed = single pane fills area).
+                    if tab.zoomed.is_none() {
+                        let border_quads = state.active_layout().compute_border_quads(
+                            available,
+                            BORDER_PX,
+                            focused,
+                            BORDER_COLOR_NORMAL,
+                            BORDER_COLOR_FOCUS,
+                        );
+                        for bq in border_quads {
+                            overlay_quads.push(OverlayQuad {
+                                rect: [bq.rect.x, bq.rect.y, bq.rect.width, bq.rect.height],
+                                color: [
+                                    bq.color[0] as f32 / 255.0,
+                                    bq.color[1] as f32 / 255.0,
+                                    bq.color[2] as f32 / 255.0,
+                                    bq.color[3] as f32 / 255.0,
+                                ],
+                            });
                         }
                     }
-                    display.cursor = CursorPos {
-                        row: last_row.saturating_sub(1),
-                        col: 0,
-                    };
-                    state
-                        .renderer
-                        .render_frame(&display, state.window.scale_factor());
-                } else {
-                    state
-                        .renderer
-                        .render_frame(state.terminal.grid(), state.window.scale_factor());
                 }
+
+                // Build pane render infos.
+                let mut pane_infos: Vec<PaneRenderInfo<'_>> = Vec::new();
+
+                if state.shell_exited {
+                    // Show exit banner on the focused pane (or first available).
+                    let target_id = focused;
+                    if let Some(terminal) = state.panes.get(&target_id) {
+                        let mut display = terminal.grid().clone();
+                        let last_row = display.size.rows.saturating_sub(1);
+                        let msg = "[ Shell exited — press any key to close ]";
+                        let banner_attrs = CellAttrs {
+                            fg: Color::Indexed(11),
+                            bg: Color::Indexed(0),
+                            bold: true,
+                            ..CellAttrs::default()
+                        };
+                        if let Some(row) = display.cells.get_mut(last_row) {
+                            for cell in row.iter_mut() {
+                                *cell = Cell {
+                                    c: ' ',
+                                    attrs: banner_attrs,
+                                    dirty: true,
+                                };
+                            }
+                            for (col, ch) in msg.chars().enumerate() {
+                                if col >= display.size.cols {
+                                    break;
+                                }
+                                row[col] = Cell {
+                                    c: ch,
+                                    attrs: banner_attrs,
+                                    dirty: true,
+                                };
+                            }
+                        }
+                        display.cursor = CursorPos {
+                            row: last_row.saturating_sub(1),
+                            col: 0,
+                        };
+                        // Render immediately as a single-pane frame.
+                        state.renderer.render_frame(&display, scale);
+                        return;
+                    }
+                }
+
+                // Normal multi-pane render.
+                // We need to collect grid refs while panes is borrowed.
+                // Use a Vec of (rect, grid_clone) to avoid lifetime issues.
+                let pane_frames: Vec<(PixelRect, arcterm_core::Grid)> = rects
+                    .iter()
+                    .filter_map(|(id, rect)| {
+                        if rect.width <= 0.0 || rect.height <= 0.0 {
+                            return None;
+                        }
+                        state.panes.get(id).map(|t| (*rect, t.grid().clone()))
+                    })
+                    .collect();
+
+                for (rect, grid) in &pane_frames {
+                    pane_infos.push(PaneRenderInfo {
+                        grid,
+                        rect: [rect.x, rect.y, rect.width, rect.height],
+                    });
+                }
+
+                state.renderer.render_multipane(&pane_infos, &overlay_quads, scale);
 
                 #[cfg(feature = "latency-trace")]
                 {
@@ -554,52 +921,51 @@ impl ApplicationHandler for App {
                 }
             }
 
+            // -----------------------------------------------------------------
+            // Keyboard input — routed through KeymapHandler.
+            // -----------------------------------------------------------------
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed {
                     #[cfg(feature = "latency-trace")]
                     let t0 = TraceInstant::now();
 
-                    // macOS: super key is the Command key.
                     let super_key = self.modifiers.super_key();
 
-                    // Cmd+C — copy selection to clipboard.
+                    // Cmd+C — copy selection to clipboard (before keymap).
                     if super_key {
                         use winit::keyboard::Key;
                         if let Key::Character(ref s) = event.logical_key {
                             match s.as_str() {
                                 "c" | "C" => {
-                                    let text = state
-                                        .selection
-                                        .extract_text(state.terminal.grid());
-                                    if !text.is_empty()
-                                        && let Some(cb) = &mut state.clipboard
-                                        && let Err(e) = cb.copy(&text)
-                                    {
-                                        log::warn!("Clipboard copy failed: {e}");
+                                    let focused = state.focused_pane();
+                                    if let Some(terminal) = state.panes.get(&focused) {
+                                        let text = state.selection.extract_text(terminal.grid());
+                                        if !text.is_empty()
+                                            && let Some(cb) = &mut state.clipboard
+                                            && let Err(e) = cb.copy(&text)
+                                        {
+                                            log::warn!("Clipboard copy failed: {e}");
+                                        }
                                     }
                                     return;
                                 }
-                                // Cmd+V — paste from clipboard.
                                 "v" | "V" => {
                                     if let Some(cb) = &mut state.clipboard {
                                         match cb.paste() {
                                             Ok(text) => {
-                                                let bracketed =
-                                                    state.terminal.grid().modes.bracketed_paste;
-                                                if bracketed {
-                                                    let mut payload =
-                                                        b"\x1b[200~".to_vec();
-                                                    payload.extend_from_slice(
-                                                        text.as_bytes(),
-                                                    );
-                                                    payload.extend_from_slice(b"\x1b[201~");
-                                                    state.terminal.write_input(&payload);
-                                                } else {
-                                                    state
-                                                        .terminal
-                                                        .write_input(text.as_bytes());
+                                                let focused = state.focused_pane();
+                                                if let Some(terminal) = state.panes.get_mut(&focused) {
+                                                    let bracketed = terminal.grid().modes.bracketed_paste;
+                                                    if bracketed {
+                                                        let mut payload = b"\x1b[200~".to_vec();
+                                                        payload.extend_from_slice(text.as_bytes());
+                                                        payload.extend_from_slice(b"\x1b[201~");
+                                                        terminal.write_input(&payload);
+                                                    } else {
+                                                        terminal.write_input(text.as_bytes());
+                                                    }
+                                                    state.window.request_redraw();
                                                 }
-                                                state.window.request_redraw();
                                             }
                                             Err(e) => {
                                                 log::warn!("Clipboard paste failed: {e}");
@@ -613,17 +979,206 @@ impl ApplicationHandler for App {
                         }
                     }
 
-                    let app_cursor = state.terminal.grid().modes.app_cursor_keys;
-                    if let Some(bytes) = input::translate_key_event(&event, self.modifiers, app_cursor) {
-                        #[cfg(feature = "latency-trace")]
-                        log::debug!(
-                            "[latency] key → PTY write ({} bytes) after {:?}",
-                            bytes.len(),
-                            t0.elapsed()
-                        );
+                    // Route through the keymap handler.
+                    let focused_id = state.focused_pane();
+                    let app_cursor = state
+                        .panes
+                        .get(&focused_id)
+                        .map(|t| t.grid().modes.app_cursor_keys)
+                        .unwrap_or(false);
 
-                        state.terminal.write_input(&bytes);
-                        state.window.request_redraw();
+                    let action = state.keymap.handle_key(&event, self.modifiers, app_cursor);
+
+                    match action {
+                        KeyAction::Forward(bytes) => {
+                            #[cfg(feature = "latency-trace")]
+                            log::debug!(
+                                "[latency] key → PTY write ({} bytes) after {:?}",
+                                bytes.len(),
+                                t0.elapsed()
+                            );
+
+                            if let Some(terminal) = state.panes.get_mut(&focused_id) {
+                                terminal.write_input(&bytes);
+                            }
+                            state.window.request_redraw();
+                        }
+
+                        KeyAction::NavigatePane(dir) => {
+                            let rects = state.compute_pane_rects();
+                            if let Some(new_focus) = state.active_layout().focus_in_direction(focused_id, dir, &rects) {
+                                state.set_focused_pane(new_focus);
+                                state.selection.clear();
+                                state.window.request_redraw();
+                            }
+                        }
+
+                        KeyAction::Split(axis) => {
+                            let rects = state.compute_pane_rects();
+                            let focused = focused_id;
+                            let focused_rect = rects.get(&focused).copied().unwrap_or(PixelRect {
+                                x: 0.0,
+                                y: 0.0,
+                                width: 800.0,
+                                height: 600.0,
+                            });
+
+                            // Compute size for the new pane (half of focused pane's rect).
+                            let new_rect = match axis {
+                                Axis::Horizontal => PixelRect {
+                                    width: focused_rect.width / 2.0,
+                                    ..focused_rect
+                                },
+                                Axis::Vertical => PixelRect {
+                                    height: focused_rect.height / 2.0,
+                                    ..focused_rect
+                                },
+                            };
+                            let new_size = state.grid_size_for_rect(new_rect);
+                            let new_id = state.spawn_pane(new_size);
+
+                            // Also resize the original pane to its new half.
+                            let orig_size = state.grid_size_for_rect(new_rect);
+                            if let Some(terminal) = state.panes.get_mut(&focused) {
+                                terminal.resize(orig_size);
+                            }
+
+                            // Update the layout tree.
+                            let active = state.tab_manager.active;
+                            state.tab_layouts[active].split(focused, axis, new_id);
+
+                            // Focus the new pane.
+                            state.set_focused_pane(new_id);
+                            state.window.request_redraw();
+                        }
+
+                        KeyAction::ClosePane => {
+                            let focused = focused_id;
+                            let active = state.tab_manager.active;
+                            let pane_count = state.tab_layouts[active].all_pane_ids().len();
+
+                            if pane_count <= 1 {
+                                // Last pane in the tab — close the tab if possible.
+                                let removed_ids = state.tab_manager.close_tab(active);
+                                // Remove layout for this tab.
+                                if active < state.tab_layouts.len() {
+                                    state.tab_layouts.remove(active);
+                                }
+                                for id in removed_ids {
+                                    let lid = PaneId(id);
+                                    state.panes.remove(&lid);
+                                    state.pty_channels.remove(&lid);
+                                }
+                                // If no tabs left, exit.
+                                if state.tab_manager.tab_count() == 0 {
+                                    event_loop.exit();
+                                    return;
+                                }
+                                // Focus the first pane of the now-active tab.
+                                let new_focus = PaneId(state.tab_manager.active_tab().focus);
+                                state.set_focused_pane(new_focus);
+                            } else {
+                                // Multiple panes: promote sibling.
+                                let replacement = state.tab_layouts[active].close(focused);
+                                if let Some(new_root) = replacement {
+                                    state.tab_layouts[active] = new_root;
+                                }
+
+                                // Remove the terminal and channel.
+                                state.panes.remove(&focused);
+                                state.pty_channels.remove(&focused);
+
+                                // Focus the first remaining pane.
+                                let remaining = state.tab_layouts[active].all_pane_ids();
+                                if let Some(&new_focus) = remaining.first() {
+                                    state.set_focused_pane(new_focus);
+                                }
+                            }
+                            state.selection.clear();
+                            state.window.request_redraw();
+                        }
+
+                        KeyAction::ToggleZoom => {
+                            let focused = focused_id;
+                            let tab = state.tab_manager.active_tab_mut();
+                            if tab.zoomed == Some(focused.0) {
+                                tab.zoomed = None;
+                            } else {
+                                tab.zoomed = Some(focused.0);
+                            }
+                            state.window.request_redraw();
+                        }
+
+                        KeyAction::ResizePane(dir) => {
+                            let focused = focused_id;
+                            let delta = match dir {
+                                Direction::Right | Direction::Down => RESIZE_DELTA,
+                                Direction::Left | Direction::Up => -RESIZE_DELTA,
+                            };
+                            let active = state.tab_manager.active;
+                            state.tab_layouts[active].resize_split(focused, delta);
+                            state.window.request_redraw();
+                        }
+
+                        KeyAction::NewTab => {
+                            // Compute size for a full-window single pane.
+                            let win_size = state.window.inner_size();
+                            let full_size = state.renderer.grid_size_for_window(
+                                win_size.width,
+                                win_size.height,
+                                state.window.scale_factor(),
+                            );
+                            let new_id = state.spawn_pane(full_size);
+                            let tab_idx = state.tab_manager.add_tab(new_id.0);
+                            // Add the layout tree for the new tab.
+                            state.tab_layouts.push(PaneNode::Leaf { pane_id: new_id });
+                            state.tab_manager.switch_to(tab_idx);
+                            state.set_focused_pane(new_id);
+                            state.selection.clear();
+                            state.window.request_redraw();
+                        }
+
+                        KeyAction::SwitchTab(n) => {
+                            // n is 1-indexed.
+                            state.tab_manager.switch_to(n.saturating_sub(1));
+                            // Focus the active pane of the newly-switched-to tab.
+                            let new_focus = PaneId(state.tab_manager.active_tab().focus);
+                            state.set_focused_pane(new_focus);
+                            state.selection.clear();
+                            state.window.request_redraw();
+                        }
+
+                        KeyAction::CloseTab => {
+                            let active = state.tab_manager.active;
+                            let removed_ids = state.tab_manager.close_tab(active);
+                            if !removed_ids.is_empty() {
+                                // Remove layout for this tab.
+                                if active < state.tab_layouts.len() {
+                                    state.tab_layouts.remove(active);
+                                }
+                                for id in removed_ids {
+                                    let lid = PaneId(id);
+                                    state.panes.remove(&lid);
+                                    state.pty_channels.remove(&lid);
+                                }
+                                // Focus active tab's pane.
+                                let new_focus = PaneId(state.tab_manager.active_tab().focus);
+                                state.set_focused_pane(new_focus);
+                                state.selection.clear();
+                                state.window.request_redraw();
+                            }
+                        }
+
+                        KeyAction::OpenPalette => {
+                            state.palette_open = !state.palette_open;
+                            log::info!("Command palette: {}", if state.palette_open { "open" } else { "closed" });
+                            // Stub — future palette UI will render here.
+                        }
+
+                        KeyAction::Consumed => {
+                            // Key consumed by state machine (leader chord entered).
+                            // No PTY write needed.
+                        }
                     }
                 }
             }
@@ -634,14 +1189,23 @@ impl ApplicationHandler for App {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: convert a physical pixel position to a grid CellPos.
+// Helper: convert a physical pixel position to a grid CellPos relative to a
+// pane's origin rect.
 // ---------------------------------------------------------------------------
 
-fn cursor_to_cell(state: &AppState, px: f64, py: f64) -> selection::CellPos {
+fn cursor_to_cell_in_rect(
+    state: &AppState,
+    px: f64,
+    py: f64,
+    pane_rect: PixelRect,
+) -> selection::CellPos {
     let scale = state.window.scale_factor();
     let cell_w = state.renderer.text.cell_size.width as f64;
     let cell_h = state.renderer.text.cell_size.height as f64;
-    pixel_to_cell(px, py, cell_w, cell_h, scale)
+    // Convert pixel position relative to pane origin.
+    let rel_x = px - pane_rect.x as f64;
+    let rel_y = py - pane_rect.y as f64;
+    pixel_to_cell(rel_x, rel_y, cell_w, cell_h, scale)
 }
 
 // ---------------------------------------------------------------------------
@@ -649,10 +1213,6 @@ fn cursor_to_cell(state: &AppState, px: f64, py: f64) -> selection::CellPos {
 // ---------------------------------------------------------------------------
 
 /// Build a [`RenderPalette`] from an [`ArctermConfig`].
-///
-/// Looks up the named colour scheme; falls back to the default palette when
-/// the name is unrecognised.  User overrides from `config.colors` are applied
-/// on top before the palette is converted to a [`RenderPalette`].
 fn palette_from_config(cfg: &config::ArctermConfig) -> RenderPalette {
     let app_palette = colors::ColorPalette::by_name(&cfg.color_scheme)
         .unwrap_or_else(|| {
