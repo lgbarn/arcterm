@@ -44,6 +44,9 @@ pub struct ArctermConfig {
     pub colors: ColorOverrides,
     /// Keybinding overrides.
     pub keybindings: KeybindingConfig,
+    /// Multiplexer settings (leader key, tab bar, pane borders, navigation).
+    #[serde(default)]
+    pub multiplexer: MultiplexerConfig,
 }
 
 impl Default for ArctermConfig {
@@ -61,6 +64,7 @@ impl Default for ArctermConfig {
             padding: 4,
             colors: ColorOverrides::default(),
             keybindings: KeybindingConfig::default(),
+            multiplexer: MultiplexerConfig::default(),
         }
     }
 }
@@ -69,7 +73,7 @@ impl Default for ArctermConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ColorOverrides {
-    // ANSI 0–7 (normal)
+    // ANSI 0-7 (normal)
     pub black: Option<String>,
     pub red: Option<String>,
     pub green: Option<String>,
@@ -78,7 +82,7 @@ pub struct ColorOverrides {
     pub magenta: Option<String>,
     pub cyan: Option<String>,
     pub white: Option<String>,
-    // ANSI 8–15 (bright)
+    // ANSI 8-15 (bright)
     pub bright_black: Option<String>,
     pub bright_red: Option<String>,
     pub bright_green: Option<String>,
@@ -91,6 +95,34 @@ pub struct ColorOverrides {
     pub foreground: Option<String>,
     pub background: Option<String>,
     pub cursor: Option<String>,
+}
+
+/// Multiplexer configuration (leader key, tab bar, pane borders, navigation).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct MultiplexerConfig {
+    /// Leader key chord used to prefix all multiplexer commands (default: "Ctrl+a").
+    pub leader_key: String,
+    /// How long (ms) to wait for a command key after the leader (default: 500).
+    pub leader_timeout_ms: u64,
+    /// Whether the tab bar is shown at the top of the window (default: true).
+    pub show_tab_bar: bool,
+    /// Width of pane divider borders in logical pixels (default: 1.0).
+    pub border_width: f32,
+    /// Whether Ctrl+h/j/k/l navigate between panes (default: true).
+    pub pane_navigation: bool,
+}
+
+impl Default for MultiplexerConfig {
+    fn default() -> Self {
+        Self {
+            leader_key: "Ctrl+a".to_string(),
+            leader_timeout_ms: 500,
+            show_tab_bar: true,
+            border_width: 1.0,
+            pane_navigation: true,
+        }
+    }
 }
 
 /// Keybinding configuration.
@@ -196,9 +228,10 @@ pub fn watch_config() -> Option<mpsc::Receiver<ArctermConfig>> {
     let config_path = ArctermConfig::config_path();
 
     // The directory to watch (parent of config.toml).
-    let watch_dir = config_path.parent().map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(".")
-    });
+    let watch_dir = config_path
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
 
     // Channel for raw notify events.
     let (event_tx, event_rx) = mpsc::channel::<notify::Result<notify::Event>>();
@@ -253,11 +286,11 @@ pub fn watch_config() -> Option<mpsc::Receiver<ArctermConfig>> {
                     continue;
                 }
 
-                log::info!("config: detected change, reloading…");
+                log::info!("config: detected change, reloading...");
                 let new_cfg = ArctermConfig::load();
 
                 if cfg_tx.send(new_cfg).is_err() {
-                    // Receiver dropped — app has exited; stop the thread.
+                    // Receiver dropped -- app has exited; stop the thread.
                     break;
                 }
             }
@@ -276,7 +309,7 @@ pub fn watch_config() -> Option<mpsc::Receiver<ArctermConfig>> {
 mod tests {
     use super::*;
 
-    // ── Default values ────────────────────────────────────────────────────────
+    // -- Default values --------------------------------------------------------
 
     #[test]
     fn defaults_are_sensible() {
@@ -295,7 +328,7 @@ mod tests {
         assert_eq!(cfg.keybindings.paste, "Super+V", "default paste keybinding");
     }
 
-    // ── TOML parsing overrides fields ─────────────────────────────────────────
+    // -- TOML parsing overrides fields -----------------------------------------
 
     #[test]
     fn toml_overrides_fields() {
@@ -336,7 +369,7 @@ mod tests {
         assert_eq!(cfg.keybindings.paste, "Super+V");
     }
 
-    // ── Empty / whitespace-only string returns defaults ───────────────────────
+    // -- Empty / whitespace-only string returns defaults -----------------------
 
     #[test]
     fn empty_toml_returns_defaults() {
@@ -352,7 +385,7 @@ mod tests {
         assert_eq!(cfg.scrollback_lines, 10_000);
     }
 
-    // ── Invalid TOML returns defaults ─────────────────────────────────────────
+    // -- Invalid TOML returns defaults -----------------------------------------
 
     #[test]
     fn invalid_toml_returns_defaults() {
@@ -363,7 +396,7 @@ mod tests {
         assert_eq!(cfg.scrollback_lines, 10_000);
     }
 
-    // ── Partial TOML leaves unset fields at defaults ───────────────────────────
+    // -- Partial TOML leaves unset fields at defaults --------------------------
 
     #[test]
     fn partial_toml_leaves_defaults() {
@@ -374,7 +407,7 @@ mod tests {
         assert_eq!(cfg.color_scheme, "catppuccin-mocha", "unset field keeps default");
     }
 
-    // ── config_path() returns a non-empty path ─────────────────────────────────
+    // -- config_path() returns a non-empty path --------------------------------
 
     #[test]
     fn config_path_is_reasonable() {
@@ -389,5 +422,72 @@ mod tests {
             "path should end with config.toml: {}",
             path.display()
         );
+    }
+
+    // -- MultiplexerConfig defaults --------------------------------------------
+
+    #[test]
+    fn multiplexer_defaults_are_correct() {
+        let cfg = MultiplexerConfig::default();
+        assert_eq!(cfg.leader_key, "Ctrl+a", "default leader_key");
+        assert_eq!(cfg.leader_timeout_ms, 500, "default leader_timeout_ms");
+        assert!(cfg.show_tab_bar, "default show_tab_bar is true");
+        assert!((cfg.border_width - 1.0).abs() < 1e-5, "default border_width");
+        assert!(cfg.pane_navigation, "default pane_navigation is true");
+    }
+
+    #[test]
+    fn arcterm_config_has_multiplexer_with_defaults() {
+        let cfg = ArctermConfig::default();
+        assert_eq!(cfg.multiplexer.leader_key, "Ctrl+a");
+        assert_eq!(cfg.multiplexer.leader_timeout_ms, 500);
+        assert!(cfg.multiplexer.show_tab_bar);
+        assert!((cfg.multiplexer.border_width - 1.0).abs() < 1e-5);
+        assert!(cfg.multiplexer.pane_navigation);
+    }
+
+    // -- MultiplexerConfig TOML overrides --------------------------------------
+
+    #[test]
+    fn multiplexer_toml_overrides_fields() {
+        let toml = r#"
+            [multiplexer]
+            leader_key = "Ctrl+b"
+            leader_timeout_ms = 1000
+            show_tab_bar = false
+            border_width = 2.5
+            pane_navigation = false
+        "#;
+
+        let cfg: ArctermConfig = toml::from_str(toml).expect("valid TOML must parse");
+        assert_eq!(cfg.multiplexer.leader_key, "Ctrl+b");
+        assert_eq!(cfg.multiplexer.leader_timeout_ms, 1000);
+        assert!(!cfg.multiplexer.show_tab_bar);
+        assert!((cfg.multiplexer.border_width - 2.5).abs() < 1e-5);
+        assert!(!cfg.multiplexer.pane_navigation);
+    }
+
+    #[test]
+    fn omitting_multiplexer_section_uses_defaults() {
+        let toml = r#"font_size = 16.0"#;
+        let cfg: ArctermConfig = toml::from_str(toml).expect("valid TOML");
+        assert_eq!(cfg.multiplexer.leader_key, "Ctrl+a");
+        assert_eq!(cfg.multiplexer.leader_timeout_ms, 500);
+        assert!(cfg.multiplexer.show_tab_bar);
+    }
+
+    #[test]
+    fn partial_multiplexer_section_leaves_defaults() {
+        let toml = r#"
+            [multiplexer]
+            leader_key = "Ctrl+Space"
+        "#;
+        let cfg: ArctermConfig = toml::from_str(toml).expect("valid TOML");
+        assert_eq!(cfg.multiplexer.leader_key, "Ctrl+Space");
+        // Unset fields must keep defaults.
+        assert_eq!(cfg.multiplexer.leader_timeout_ms, 500);
+        assert!(cfg.multiplexer.show_tab_bar);
+        assert!((cfg.multiplexer.border_width - 1.0).abs() < 1e-5);
+        assert!(cfg.multiplexer.pane_navigation);
     }
 }
