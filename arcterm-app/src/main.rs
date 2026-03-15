@@ -244,8 +244,16 @@ impl AppState {
     /// Spawn a new Terminal + PTY, insert into the pane and channel maps, and
     /// return its `PaneId`.  The grid is sized to `size`.
     fn spawn_pane(&mut self, size: GridSize) -> PaneId {
+        self.spawn_pane_with_cwd(size, None)
+    }
+
+    /// Spawn a new Terminal + PTY in the given working directory.
+    ///
+    /// Used by workspace restore to recreate panes in their saved directories.
+    /// Pass `cwd = None` to inherit the process's current working directory.
+    fn spawn_pane_with_cwd(&mut self, size: GridSize, cwd: Option<&std::path::Path>) -> PaneId {
         let id = PaneId::next();
-        match Terminal::new(size, self.config.shell.clone()) {
+        match Terminal::new(size, self.config.shell.clone(), cwd) {
             Ok((mut terminal, rx)) => {
                 terminal.grid_mut().max_scrollback = self.config.scrollback_lines;
                 self.panes.insert(id, terminal);
@@ -310,7 +318,7 @@ impl ApplicationHandler for App {
         // Spawn the first pane.
         let first_id = PaneId::next();
         let (mut terminal, pty_rx) =
-            Terminal::new(initial_size, cfg.shell.clone()).unwrap_or_else(|e| {
+            Terminal::new(initial_size, cfg.shell.clone(), None).unwrap_or_else(|e| {
                 log::error!("Failed to create PTY session: {e}");
                 std::process::exit(1);
             });

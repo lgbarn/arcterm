@@ -3,6 +3,7 @@
 use arcterm_core::{Grid, GridSize};
 use arcterm_pty::{PtyError, PtySession};
 use arcterm_vt::{ApcScanner, GridState, KittyChunkAssembler, KittyCommand, StructuredContentAccumulator, parse_kitty_command};
+use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 
 /// Decoded image ready for GPU texture upload.
@@ -44,14 +45,18 @@ impl Terminal {
     /// `shell` optionally overrides the shell binary path.  Pass `None` to
     /// auto-detect via `$SHELL` / platform default.
     ///
+    /// `cwd` optionally sets the working directory for the spawned shell.
+    /// Pass `None` to inherit the current process's working directory.
+    ///
     /// Returns `(terminal, receiver)` where `receiver` delivers raw PTY bytes.
     /// The receiver is returned separately so the `App` layer owns it and can
     /// poll it in `about_to_wait`.
     pub fn new(
         size: GridSize,
         shell: Option<String>,
+        cwd: Option<&Path>,
     ) -> Result<(Self, mpsc::Receiver<Vec<u8>>), PtyError> {
-        let (pty, rx) = PtySession::new(size, shell, None)?;
+        let (pty, rx) = PtySession::new(size, shell, cwd)?;
         let scanner = ApcScanner::new();
         let grid_state = GridState::new(Grid::new(size));
         Ok((
@@ -181,5 +186,16 @@ impl Terminal {
     /// Returns the PID of the child shell process, if available.
     pub fn child_pid(&self) -> Option<u32> {
         self.pty.child_pid()
+    }
+
+    /// Returns the current working directory of the child shell process.
+    ///
+    /// Delegates to `PtySession::cwd()`. Returns `None` if the PID is
+    /// unavailable, the process has exited, or the platform is unsupported.
+    ///
+    /// Used by workspace session save (Wave 2) to capture each pane's CWD.
+    #[allow(dead_code)]
+    pub fn cwd(&self) -> Option<PathBuf> {
+        self.pty.cwd()
     }
 }
