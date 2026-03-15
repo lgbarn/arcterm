@@ -1,10 +1,12 @@
 //! arcterm-vt — VT parser and terminal state machine.
 
 pub mod handler;
+pub mod kitty;
 pub mod processor;
 
 pub use arcterm_core::TermModes;
 pub use handler::{ContentType, GridState, Handler, StructuredContentAccumulator};
+pub use kitty::{KittyAction, KittyChunkAssembler, KittyCommand, KittyFormat, parse_kitty_command};
 pub use processor::{ApcScanner, Processor};
 
 #[cfg(test)]
