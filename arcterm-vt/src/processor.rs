@@ -1,6 +1,8 @@
 //! VT byte-stream processor — bridges vte::Parser to the Handler trait.
 
-use crate::Handler;
+use std::collections::HashMap;
+
+use crate::{handler::ContentType, Handler};
 
 // ---------------------------------------------------------------------------
 // ApcScanner — filters APC sequences before the vte::Parser sees them
@@ -165,6 +167,79 @@ impl Processor {
 impl Default for Processor {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// OSC 7770 — structured content block dispatch
+// ---------------------------------------------------------------------------
+
+/// Parse and dispatch an OSC 7770 sequence to the `Handler`.
+///
+/// The OSC params layout is:
+///   params[0] = b"7770"
+///   params[1] = b"start" | b"end"
+///   params[2..] = b"key=value" pairs; the first must be b"type=<content_type>"
+///
+/// For a `start` command: parse `type=` to a `ContentType`, collect remaining
+/// `key=value` pairs as attrs, and call `handler.structured_content_start()`.
+///
+/// For an `end` command: call `handler.structured_content_end()`.
+///
+/// Any malformed sequence (missing action, missing/unknown type) is silently
+/// ignored.
+fn dispatch_osc7770<H: Handler>(handler: &mut H, params: &[&[u8]]) {
+    // Need at least params[0]=7770 and params[1]=action.
+    if params.len() < 2 {
+        return;
+    }
+
+    match params[1] {
+        b"start" => {
+            // The first param after "start" must be "type=<content_type>".
+            // params[2] is the type param; params[3..] are additional attrs.
+            if params.len() < 3 {
+                return; // no type= param — ignore
+            }
+
+            // Parse params[2] as "type=<value>".
+            let type_param = match std::str::from_utf8(params[2]) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            let content_type_str = match type_param.strip_prefix("type=") {
+                Some(t) => t,
+                None => return, // first param is not type= — ignore
+            };
+
+            let content_type = match content_type_str {
+                "code" => ContentType::CodeBlock,
+                "diff" => ContentType::Diff,
+                "plan" => ContentType::Plan,
+                "markdown" => ContentType::Markdown,
+                "json" => ContentType::Json,
+                "error" => ContentType::Error,
+                "progress" => ContentType::Progress,
+                "image" => ContentType::Image,
+                _ => return, // unknown type — ignore
+            };
+
+            // Parse any remaining params as key=value pairs.
+            let mut attrs: HashMap<String, String> = HashMap::new();
+            for raw in &params[3..] {
+                if let Ok(kv) = std::str::from_utf8(raw)
+                    && let Some((key, val)) = kv.split_once('=')
+                {
+                    attrs.insert(key.to_string(), val.to_string());
+                }
+            }
+
+            handler.structured_content_start(content_type, attrs);
+        }
+        b"end" => {
+            handler.structured_content_end();
+        }
+        _ => {} // unknown action — ignore
     }
 }
 
@@ -384,14 +459,20 @@ impl<H: Handler> vte::Perform for Performer<'_, H> {
 
     // OSC sequences (Operating System Command).
     fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
-        // params[0] is the numeric command identifier, params[1] is the value.
-        if params.len() < 2 {
+        // params[0] is the numeric command identifier; params[1..] are the values.
+        if params.is_empty() {
             return;
         }
         match params[0] {
             b"0" | b"2" => {
+                if params.len() < 2 {
+                    return;
+                }
                 let title = std::str::from_utf8(params[1]).unwrap_or("");
                 self.handler.set_title(title);
+            }
+            b"7770" => {
+                dispatch_osc7770(self.handler, params);
             }
             _ => {}
         }
@@ -430,5 +511,199 @@ impl<H: Handler> vte::Perform for Performer<'_, H> {
             0x3E => self.handler.set_keypad_numeric_mode(),
             _ => {}
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Task 2 (Phase 4): OSC 7770 dispatch
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod phase4_task2_tests {
+    use arcterm_core::{Grid, GridSize};
+
+    use crate::{handler::ContentType, GridState, Processor};
+
+    fn make_gs() -> GridState {
+        GridState::new(Grid::new(GridSize::new(24, 80)))
+    }
+
+    fn feed(gs: &mut GridState, bytes: &[u8]) {
+        let mut proc = Processor::new();
+        proc.advance(gs, bytes);
+    }
+
+    // Helper: build an OSC 7770 start sequence.
+    // ESC ] 7770 ; start ; type=<t> [; key=value]* ST
+    fn osc7770_start(content_type: &str, extra_attrs: &[(&str, &str)]) -> Vec<u8> {
+        let mut s = format!("\x1b]7770;start;type={}", content_type);
+        for (k, v) in extra_attrs {
+            s.push(';');
+            s.push_str(k);
+            s.push('=');
+            s.push_str(v);
+        }
+        s.push_str("\x07"); // BEL terminator
+        s.into_bytes()
+    }
+
+    // Helper: build an OSC 7770 end sequence.
+    fn osc7770_end() -> Vec<u8> {
+        b"\x1b]7770;end\x07".to_vec()
+    }
+
+    // --- complete code block ---
+
+    #[test]
+    fn osc7770_complete_code_block() {
+        let mut gs = make_gs();
+        feed(&mut gs, &osc7770_start("code", &[("lang", "rust")]));
+        feed(&mut gs, b"fn main() {}");
+        feed(&mut gs, &osc7770_end());
+
+        assert_eq!(gs.completed_blocks.len(), 1);
+        let block = &gs.completed_blocks[0];
+        assert!(matches!(block.content_type, ContentType::CodeBlock));
+        assert_eq!(block.attrs.get("lang").map(|s| s.as_str()), Some("rust"));
+        assert_eq!(block.buffer, "fn main() {}");
+        assert!(gs.accumulator.is_none());
+    }
+
+    // --- JSON block ---
+
+    #[test]
+    fn osc7770_json_block() {
+        let mut gs = make_gs();
+        feed(&mut gs, &osc7770_start("json", &[]));
+        feed(&mut gs, b"{\"key\":\"value\"}");
+        feed(&mut gs, &osc7770_end());
+
+        assert_eq!(gs.completed_blocks.len(), 1);
+        let block = &gs.completed_blocks[0];
+        assert!(matches!(block.content_type, ContentType::Json));
+        assert_eq!(block.buffer, "{\"key\":\"value\"}");
+    }
+
+    // --- all content type mappings ---
+
+    #[test]
+    fn osc7770_content_type_diff() {
+        let mut gs = make_gs();
+        feed(&mut gs, &osc7770_start("diff", &[]));
+        feed(&mut gs, &osc7770_end());
+        assert!(matches!(gs.completed_blocks[0].content_type, ContentType::Diff));
+    }
+
+    #[test]
+    fn osc7770_content_type_plan() {
+        let mut gs = make_gs();
+        feed(&mut gs, &osc7770_start("plan", &[]));
+        feed(&mut gs, &osc7770_end());
+        assert!(matches!(gs.completed_blocks[0].content_type, ContentType::Plan));
+    }
+
+    #[test]
+    fn osc7770_content_type_markdown() {
+        let mut gs = make_gs();
+        feed(&mut gs, &osc7770_start("markdown", &[]));
+        feed(&mut gs, &osc7770_end());
+        assert!(matches!(gs.completed_blocks[0].content_type, ContentType::Markdown));
+    }
+
+    #[test]
+    fn osc7770_content_type_error() {
+        let mut gs = make_gs();
+        feed(&mut gs, &osc7770_start("error", &[]));
+        feed(&mut gs, &osc7770_end());
+        assert!(matches!(gs.completed_blocks[0].content_type, ContentType::Error));
+    }
+
+    #[test]
+    fn osc7770_content_type_progress() {
+        let mut gs = make_gs();
+        feed(&mut gs, &osc7770_start("progress", &[]));
+        feed(&mut gs, &osc7770_end());
+        assert!(matches!(gs.completed_blocks[0].content_type, ContentType::Progress));
+    }
+
+    #[test]
+    fn osc7770_content_type_image() {
+        let mut gs = make_gs();
+        feed(&mut gs, &osc7770_start("image", &[]));
+        feed(&mut gs, &osc7770_end());
+        assert!(matches!(gs.completed_blocks[0].content_type, ContentType::Image));
+    }
+
+    // --- end without start is a no-op ---
+
+    #[test]
+    fn osc7770_end_without_start_is_noop() {
+        let mut gs = make_gs();
+        feed(&mut gs, &osc7770_end());
+        assert!(gs.completed_blocks.is_empty());
+        assert!(gs.accumulator.is_none());
+    }
+
+    // --- regular text before and after a block is unaffected ---
+
+    #[test]
+    fn osc7770_regular_text_before_and_after() {
+        let mut gs = make_gs();
+        feed(&mut gs, b"before");
+        feed(&mut gs, &osc7770_start("markdown", &[]));
+        feed(&mut gs, b"inside");
+        feed(&mut gs, &osc7770_end());
+        feed(&mut gs, b"after");
+
+        // Grid should contain "before", "inside", and "after" at appropriate positions.
+        assert_eq!(gs.grid.cells[0][0].c, 'b');
+        assert_eq!(gs.grid.cells[0][5].c, 'e'); // end of "before"
+        // Block buffer contains only "inside".
+        assert_eq!(gs.completed_blocks[0].buffer, "inside");
+    }
+
+    // --- multi-line block accumulation ---
+
+    #[test]
+    fn osc7770_multiline_block() {
+        let mut gs = make_gs();
+        feed(&mut gs, &osc7770_start("code", &[("lang", "python")]));
+        // Simulate multi-line content via CR+LF sequences.
+        feed(&mut gs, b"line1\r\nline2");
+        feed(&mut gs, &osc7770_end());
+
+        let block = &gs.completed_blocks[0];
+        // Buffer should contain the printable characters (CR and LF are control codes,
+        // not printed as characters — only the visible chars are appended via put_char).
+        assert!(block.buffer.contains("line1"));
+        assert!(block.buffer.contains("line2"));
+    }
+
+    // --- multiple key=value attrs ---
+
+    #[test]
+    fn osc7770_multiple_attrs() {
+        let mut gs = make_gs();
+        feed(
+            &mut gs,
+            &osc7770_start("code", &[("lang", "rust"), ("file", "main.rs")]),
+        );
+        feed(&mut gs, &osc7770_end());
+
+        let block = &gs.completed_blocks[0];
+        assert_eq!(block.attrs.get("lang").map(|s| s.as_str()), Some("rust"));
+        assert_eq!(block.attrs.get("file").map(|s| s.as_str()), Some("main.rs"));
+    }
+
+    // --- start missing type= param is ignored ---
+
+    #[test]
+    fn osc7770_start_without_type_is_ignored() {
+        let mut gs = make_gs();
+        // OSC with no type= in params[2].
+        feed(&mut gs, b"\x1b]7770;start\x07");
+        assert!(gs.accumulator.is_none());
+        feed(&mut gs, &osc7770_end());
+        assert!(gs.completed_blocks.is_empty());
     }
 }
