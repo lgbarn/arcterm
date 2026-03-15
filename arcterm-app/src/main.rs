@@ -18,6 +18,7 @@ mod config;
 mod input;
 mod keymap;
 mod layout;
+mod palette;
 mod selection;
 mod tab;
 mod terminal;
