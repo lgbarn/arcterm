@@ -1,3 +1,4 @@
+#![allow(dead_code)] // Wired in Wave 3 (Plan 3.1)
 //! Leader-key state machine and pane-navigation keybindings.
 //!
 //! # Design
