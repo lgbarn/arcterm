@@ -1,0 +1,10 @@
+[package]
+name = "arcterm-pty"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+portable-pty.workspace = true
+tokio.workspace = true
+arcterm-core = { path = "../arcterm-core" }

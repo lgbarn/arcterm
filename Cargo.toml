@@ -1,0 +1,30 @@
+[workspace]
+members = [
+    "arcterm-core",
+    "arcterm-vt",
+    "arcterm-pty",
+    "arcterm-render",
+    "arcterm-app",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT"
+
+[workspace.dependencies]
+vte = "0.15"
+portable-pty = "0.9"
+wgpu = "28"
+winit = "0.30"
+glyphon = "0.10"
+tokio = { version = "1", features = ["full"] }
+pollster = "0.4"
+log = "0.4"
+env_logger = "0.11"
+
+arcterm-core = { path = "arcterm-core" }
+arcterm-vt = { path = "arcterm-vt" }
+arcterm-pty = { path = "arcterm-pty" }
+arcterm-render = { path = "arcterm-render" }
