@@ -78,6 +78,10 @@ struct AppState {
     /// Set to `true` once the PTY channel closes (shell has exited).
     shell_exited: bool,
 
+    // ---- configuration ----
+    /// Loaded configuration (used for hot-reload in Task 3).
+    config: config::ArctermConfig,
+
     // ---- selection & clipboard ----
     selection: Selection,
     /// Clipboard instance; `None` if the system clipboard is unavailable.
@@ -114,13 +118,23 @@ impl ApplicationHandler for App {
             .with_inner_size(LogicalSize::new(1024u32, 768u32))
             .with_title("Arcterm");
 
+        // Load configuration first so all values are available for wiring.
+        let cfg = config::ArctermConfig::load();
+        log::info!(
+            "config: font_size={}, scrollback_lines={}, color_scheme={}",
+            cfg.font_size,
+            cfg.scrollback_lines,
+            cfg.color_scheme,
+        );
+
         let window = Arc::new(
             event_loop
                 .create_window(window_attrs)
                 .expect("failed to create window"),
         );
 
-        let renderer = Renderer::new(window.clone());
+        // Pass font_size from config to the renderer.
+        let renderer = Renderer::new(window.clone(), cfg.font_size);
 
         let size = renderer.grid_size_for_window(
             window.inner_size().width,
@@ -128,10 +142,15 @@ impl ApplicationHandler for App {
             window.scale_factor(),
         );
 
-        let (terminal, pty_rx) = Terminal::new(size).unwrap_or_else(|e| {
-            log::error!("Failed to create PTY session: {e}");
-            std::process::exit(1);
-        });
+        // Pass optional shell override from config to the terminal / PTY.
+        let (mut terminal, pty_rx) =
+            Terminal::new(size, cfg.shell.clone()).unwrap_or_else(|e| {
+                log::error!("Failed to create PTY session: {e}");
+                std::process::exit(1);
+            });
+
+        // Apply scrollback limit from config.
+        terminal.grid_mut().max_scrollback = cfg.scrollback_lines;
 
         let clipboard = Clipboard::new()
             .map_err(|e| log::warn!("Clipboard unavailable: {e}"))
@@ -143,6 +162,7 @@ impl ApplicationHandler for App {
             terminal,
             pty_rx,
             shell_exited: false,
+            config: cfg,
             selection: Selection::default(),
             clipboard,
             last_cursor_position: (0.0, 0.0),

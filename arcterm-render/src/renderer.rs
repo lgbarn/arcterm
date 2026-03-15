@@ -35,13 +35,17 @@ pub struct Renderer {
 
 impl Renderer {
     /// Create the renderer, initializing wgpu, the quad pipeline, and glyphon.
-    pub fn new(window: Arc<Window>) -> Self {
+    ///
+    /// `font_size` is in logical pixels / points.  Pass `FONT_SIZE` (14.0) to
+    /// use the compiled-in default, or a value from configuration to honour the
+    /// user's preference.
+    pub fn new(window: Arc<Window>, font_size: f32) -> Self {
         let gpu = GpuState::new(window);
         let text = TextRenderer::new(
             &gpu.device,
             &gpu.queue,
             gpu.surface_format,
-            FONT_SIZE,
+            font_size,
         );
         let quads = QuadRenderer::new(&gpu.device, gpu.surface_format);
         Self { gpu, text, quads }

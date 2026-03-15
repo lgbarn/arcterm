@@ -51,7 +51,7 @@ impl ApplicationHandler for App {
                 .expect("failed to create window"),
         );
 
-        let renderer = Renderer::new(window.clone());
+        let renderer = Renderer::new(window.clone(), 14.0);
 
         // Build a test grid with "Hello, Arcterm!" and colored rows.
         let size = renderer.grid_size_for_window(

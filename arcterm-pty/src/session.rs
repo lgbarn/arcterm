@@ -42,10 +42,18 @@ pub struct PtySession {
 impl PtySession {
     /// Spawn a new PTY session with the given grid size.
     ///
+    /// `shell_override` allows the caller to specify the shell executable path
+    /// directly.  When `None`, the shell is resolved from the `$SHELL`
+    /// environment variable, falling back to `/bin/bash` on Unix or `cmd.exe`
+    /// on Windows.
+    ///
     /// Returns `(session, receiver)` where `receiver` delivers raw bytes from
     /// the child's stdout.  The receiver is deliberately returned separately so
     /// the application layer owns it.
-    pub fn new(size: GridSize) -> Result<(Self, mpsc::Receiver<Vec<u8>>), PtyError> {
+    pub fn new(
+        size: GridSize,
+        shell_override: Option<String>,
+    ) -> Result<(Self, mpsc::Receiver<Vec<u8>>), PtyError> {
         let pty_system = NativePtySystem::default();
 
         let pty_size = PtySize {
@@ -59,13 +67,15 @@ impl PtySession {
             .openpty(pty_size)
             .map_err(|e| PtyError::SpawnFailed(e.to_string()))?;
 
-        // Detect shell: $SHELL → /bin/bash (Unix) / cmd.exe (Windows).
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| {
-            if cfg!(windows) {
-                "cmd.exe".to_string()
-            } else {
-                "/bin/bash".to_string()
-            }
+        // Resolve the shell: explicit override → $SHELL → platform default.
+        let shell = shell_override.unwrap_or_else(|| {
+            std::env::var("SHELL").unwrap_or_else(|_| {
+                if cfg!(windows) {
+                    "cmd.exe".to_string()
+                } else {
+                    "/bin/bash".to_string()
+                }
+            })
         });
 
         let mut cmd = CommandBuilder::new(&shell);
@@ -183,14 +193,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_shell() {
-        let (mut session, _rx) = PtySession::new(default_size()).expect("PTY spawn must succeed");
+        let (mut session, _rx) = PtySession::new(default_size(), None).expect("PTY spawn must succeed");
         assert!(session.is_alive(), "shell should be alive right after spawn");
     }
 
     #[tokio::test]
     async fn test_write_and_read() {
         let (mut session, mut rx) =
-            PtySession::new(default_size()).expect("PTY spawn must succeed");
+            PtySession::new(default_size(), None).expect("PTY spawn must succeed");
 
         session.write(b"echo hello_pty_test\n").expect("write must succeed");
 
@@ -219,7 +229,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resize() {
-        let (session, _rx) = PtySession::new(default_size()).expect("PTY spawn must succeed");
+        let (session, _rx) = PtySession::new(default_size(), None).expect("PTY spawn must succeed");
         session
             .resize(GridSize::new(40, 120))
             .expect("resize must not return an error");
@@ -229,7 +239,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_exit_detection() {
-        let (mut session, _rx) = PtySession::new(default_size()).expect("PTY spawn must succeed");
+        let (mut session, _rx) = PtySession::new(default_size(), None).expect("PTY spawn must succeed");
         session.write(b"exit\n").expect("write must succeed");
 
         let exited = timeout(Duration::from_secs(5), async {
@@ -251,7 +261,7 @@ mod tests {
     #[tokio::test]
     async fn test_recv_after_exit() {
         let (mut session, mut rx) =
-            PtySession::new(default_size()).expect("PTY spawn must succeed");
+            PtySession::new(default_size(), None).expect("PTY spawn must succeed");
 
         session
             .write(b"echo goodbye && exit\n")
@@ -281,7 +291,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_after_exit() {
-        let (mut session, _rx) = PtySession::new(default_size()).expect("PTY spawn must succeed");
+        let (mut session, _rx) = PtySession::new(default_size(), None).expect("PTY spawn must succeed");
 
         // Send exit command and wait for the shell to terminate.
         session.write(b"exit\n").expect("initial write must succeed");

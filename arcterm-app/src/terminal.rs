@@ -15,11 +15,17 @@ pub struct Terminal {
 impl Terminal {
     /// Spawn a new terminal at the given grid size.
     ///
+    /// `shell` optionally overrides the shell binary path.  Pass `None` to
+    /// auto-detect via `$SHELL` / platform default.
+    ///
     /// Returns `(terminal, receiver)` where `receiver` delivers raw PTY bytes.
     /// The receiver is returned separately so the `App` layer owns it and can
     /// poll it in `about_to_wait`.
-    pub fn new(size: GridSize) -> Result<(Self, mpsc::Receiver<Vec<u8>>), PtyError> {
-        let (pty, rx) = PtySession::new(size)?;
+    pub fn new(
+        size: GridSize,
+        shell: Option<String>,
+    ) -> Result<(Self, mpsc::Receiver<Vec<u8>>), PtyError> {
+        let (pty, rx) = PtySession::new(size, shell)?;
         let processor = Processor::new();
         let grid = Grid::new(size);
         Ok((
