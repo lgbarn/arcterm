@@ -34,7 +34,8 @@ impl std::error::Error for PtyError {}
 /// A live PTY session running a child shell.
 pub struct PtySession {
     master: Box<dyn portable_pty::MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    /// `None` after `shutdown()` has been called.
+    writer: Option<Box<dyn Write + Send>>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
 }
 
@@ -112,7 +113,7 @@ impl PtySession {
         Ok((
             PtySession {
                 master,
-                writer,
+                writer: Some(writer),
                 child,
             },
             rx,
@@ -120,9 +121,19 @@ impl PtySession {
     }
 
     /// Write raw bytes to the shell's stdin.
+    ///
+    /// Returns `Err(BrokenPipe)` if `shutdown()` has already been called.
     pub fn write(&mut self, data: &[u8]) -> io::Result<()> {
-        self.writer.write_all(data)?;
-        self.writer.flush()
+        match self.writer.as_mut() {
+            Some(w) => {
+                w.write_all(data)?;
+                w.flush()
+            }
+            None => Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "PTY session has been shut down",
+            )),
+        }
     }
 
     /// Resize the PTY to the new grid dimensions.
@@ -147,10 +158,11 @@ impl PtySession {
     ///
     /// After `shutdown()` returns, `is_alive()` will be `false` and the
     /// reader thread will have terminated because the master PTY closed.
+    /// Subsequent calls to `write()` will return `Err(BrokenPipe)`.
     pub fn shutdown(&mut self) {
-        // Replace writer with a no-op sink — this closes the write end,
-        // signalling EOF to the shell.
-        let _ = std::mem::replace(&mut self.writer, Box::new(io::sink()));
+        // Explicitly take and drop the writer so the underlying file descriptor
+        // is closed unambiguously, signalling EOF to the shell.
+        drop(self.writer.take());
         let _ = self.child.wait();
     }
 }
@@ -264,6 +276,40 @@ mod tests {
         assert!(
             !session.is_alive(),
             "is_alive() must be false after shell exited"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_after_exit() {
+        let (mut session, _rx) = PtySession::new(default_size()).expect("PTY spawn must succeed");
+
+        // Send exit command and wait for the shell to terminate.
+        session.write(b"exit\n").expect("initial write must succeed");
+
+        let exited = timeout(Duration::from_secs(5), async {
+            loop {
+                if !session.is_alive() {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+
+        assert!(
+            exited.unwrap_or(false),
+            "shell must exit within 5 s before testing write-after-exit"
+        );
+
+        // A small extra delay ensures the OS has fully closed the PTY fd.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Writing to a dead shell must return an error (broken pipe or similar).
+        let result = session.write(b"this should fail\n");
+        assert!(
+            result.is_err(),
+            "write after shell exit must return an error; got: {:?}",
+            result
         );
     }
 }
