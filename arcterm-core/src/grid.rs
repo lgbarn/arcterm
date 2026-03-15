@@ -83,6 +83,9 @@ pub struct Grid {
     /// How many rows above the current screen bottom the viewport is scrolled.
     /// 0 = live view; >0 = scrolled back into scrollback history.
     pub scroll_offset: usize,
+    /// Outbound replies queued by DSR/DA handlers. Drained by the application
+    /// layer after each `process_pty_output` call and written back to the PTY.
+    pub pending_replies: Vec<Vec<u8>>,
 }
 
 impl Grid {
@@ -105,6 +108,7 @@ impl Grid {
             saved_cursor: None,
             alt_grid: None,
             scroll_offset: 0,
+            pending_replies: Vec::new(),
         }
     }
 

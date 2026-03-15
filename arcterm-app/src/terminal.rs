@@ -43,6 +43,13 @@ impl Terminal {
         self.processor.advance(&mut self.grid, bytes);
     }
 
+    /// Drain and return all pending DSR/DA reply bytes queued by the VT processor.
+    ///
+    /// The caller is responsible for writing each reply to the PTY.
+    pub fn take_pending_replies(&mut self) -> Vec<Vec<u8>> {
+        std::mem::take(&mut self.grid.pending_replies)
+    }
+
     /// Write raw input bytes to the PTY (shell stdin).
     ///
     /// Errors (e.g. broken pipe after shell exit) are logged and swallowed

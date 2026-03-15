@@ -105,7 +105,8 @@ impl PtySession {
         std::thread::Builder::new()
             .name("pty-reader".to_string())
             .spawn(move || {
-                let mut buf = [0u8; 4096];
+                // 16 KiB buffer reduces syscall overhead for high-throughput output.
+                let mut buf = [0u8; 16384];
                 loop {
                     match reader.read(&mut buf) {
                         Ok(0) => break,

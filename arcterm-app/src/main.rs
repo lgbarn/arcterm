@@ -13,6 +13,7 @@
 //! 7. `echo -e "\033[31mred\033[0m"` — red text appears, then colour resets.
 //! 8. Rapid output (`cat /dev/urandom | head -c 1M | base64`) — no hang or crash.
 
+mod colors;
 mod config;
 mod input;
 mod selection;
@@ -20,6 +21,7 @@ mod terminal;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use winit::event_loop::ControlFlow;
 
 #[cfg(feature = "latency-trace")]
 use std::time::Instant as TraceInstant;
@@ -101,6 +103,14 @@ struct AppState {
     /// Updated every `RedrawRequested`. Stored here for future quad-pipeline
     /// integration — not yet submitted to the GPU.
     selection_quads: Vec<SelectionQuad>,
+
+    // ---- performance / control flow ----
+    /// Number of consecutive `about_to_wait` cycles that yielded no PTY data.
+    idle_cycles: u32,
+    /// Timestamp of the last FPS log line.
+    fps_last_log: Instant,
+    /// Number of frames rendered since `fps_last_log`.
+    fps_frame_count: u32,
 }
 
 struct App {
@@ -175,10 +185,13 @@ impl ApplicationHandler for App {
             last_click_time: None,
             click_count: 0,
             selection_quads: Vec::new(),
+            idle_cycles: 0,
+            fps_last_log: Instant::now(),
+            fps_frame_count: 0,
         });
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let Some(state) = &mut self.state else {
             return;
         };
@@ -261,6 +274,36 @@ impl ApplicationHandler for App {
                 grid.scroll_offset = 0;
             }
             state.window.request_redraw();
+            // Reset idle counter — we have active data.
+            state.idle_cycles = 0;
+            event_loop.set_control_flow(ControlFlow::Poll);
+        } else {
+            // No data this cycle; count idle cycles.
+            state.idle_cycles = state.idle_cycles.saturating_add(1);
+            // After 3 empty cycles switch to Wait (event-driven) to save CPU.
+            if state.idle_cycles >= 3 {
+                event_loop.set_control_flow(ControlFlow::Wait);
+            } else {
+                event_loop.set_control_flow(ControlFlow::Poll);
+            }
+        }
+
+        // Drain any pending DSR/DA replies and write them to the PTY.
+        {
+            let replies = state.terminal.take_pending_replies();
+            for reply in replies {
+                state.terminal.write_input(&reply);
+            }
+        }
+
+        // Wire window title from grid to the OS window.
+        {
+            let title = state.terminal.grid().title().map(|t| t.to_string());
+            if let Some(t) = title {
+                if !t.is_empty() {
+                    state.window.set_title(&t);
+                }
+            }
         }
     }
 
@@ -380,6 +423,16 @@ impl ApplicationHandler for App {
             // Redraw — render frame and recompute selection quads.
             // -----------------------------------------------------------------
             WindowEvent::RedrawRequested => {
+                // FPS counter: log every 5 s at debug level.
+                state.fps_frame_count += 1;
+                let fps_elapsed = state.fps_last_log.elapsed();
+                if fps_elapsed >= Duration::from_secs(5) {
+                    let fps = state.fps_frame_count as f64 / fps_elapsed.as_secs_f64();
+                    log::debug!("fps: {:.1} ({} frames in {:.1}s)", fps, state.fps_frame_count, fps_elapsed.as_secs_f64());
+                    state.fps_frame_count = 0;
+                    state.fps_last_log = Instant::now();
+                }
+
                 #[cfg(feature = "latency-trace")]
                 let t0 = TraceInstant::now();
 
