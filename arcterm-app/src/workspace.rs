@@ -765,6 +765,261 @@ type = "leaf"
     }
 
     // -----------------------------------------------------------------------
+    // PLAN-3.2 Task 2 — Performance benchmark and edge-case tests
+    // -----------------------------------------------------------------------
+
+    /// Parse a 4-pane workspace TOML string and assert that the parse
+    /// completes in under 1 millisecond.
+    ///
+    /// Layout: HSplit(Leaf, VSplit(Leaf, VSplit(Leaf, Leaf)))
+    #[test]
+    fn workspace_toml_parse_under_1ms() {
+        use std::time::Instant;
+
+        let toml_str = r#"
+schema_version = 1
+
+[workspace]
+name = "four-pane-perf"
+directory = "/tmp"
+
+[window]
+width = 1920
+height = 1080
+
+[layout]
+type = "hsplit"
+ratio = 0.5
+
+[layout.left]
+type = "leaf"
+directory = "/tmp"
+
+[layout.right]
+type = "vsplit"
+ratio = 0.5
+
+[layout.right.top]
+type = "leaf"
+directory = "/tmp"
+
+[layout.right.bottom]
+type = "vsplit"
+ratio = 0.5
+
+[layout.right.bottom.top]
+type = "leaf"
+directory = "/tmp"
+
+[layout.right.bottom.bottom]
+type = "leaf"
+directory = "/tmp"
+"#;
+
+        let start = Instant::now();
+        let ws: WorkspaceFile = toml::from_str(toml_str).expect("parse must succeed");
+        let elapsed = start.elapsed();
+
+        // Verify the structure parsed correctly.
+        assert_eq!(ws.workspace.name, "four-pane-perf");
+        assert!(
+            matches!(ws.layout, WorkspacePaneNode::HSplit { .. }),
+            "root must be HSplit"
+        );
+
+        // Parse must complete under 1ms.
+        assert!(
+            elapsed.as_millis() < 1,
+            "TOML parse took {}us, must be < 1ms",
+            elapsed.as_micros()
+        );
+    }
+
+    /// A workspace with a single Leaf layout serializes and deserializes
+    /// correctly, producing exactly one pane node on restore.
+    #[test]
+    fn workspace_file_with_no_panes_defaults_to_single_leaf() {
+        let ws = WorkspaceFile {
+            schema_version: 1,
+            workspace: WorkspaceMeta {
+                name: "single-leaf".to_string(),
+                directory: None,
+            },
+            window: None,
+            layout: WorkspacePaneNode::Leaf {
+                command: None,
+                directory: None,
+                env: None,
+            },
+            environment: HashMap::new(),
+        };
+
+        let toml_str = toml::to_string_pretty(&ws).expect("serialize");
+        let ws2: WorkspaceFile = toml::from_str(&toml_str).expect("deserialize");
+
+        // The restored workspace must have exactly one pane (a Leaf).
+        let (tree, metadata) = ws2.layout.to_pane_tree();
+        let ids = tree.all_pane_ids();
+        assert_eq!(ids.len(), 1, "single Leaf must restore to exactly one pane");
+        assert_eq!(metadata.len(), 1, "single Leaf must produce exactly one PaneMetadata");
+        assert!(
+            matches!(tree, crate::layout::PaneNode::Leaf { .. }),
+            "restored tree must be a Leaf"
+        );
+    }
+
+    /// A workspace with a tilde in the directory field preserves the tilde
+    /// as a literal string — expansion is the caller's responsibility at
+    /// restore time.
+    #[test]
+    fn workspace_with_tilde_in_directory() {
+        let ws = WorkspaceFile {
+            schema_version: 1,
+            workspace: WorkspaceMeta {
+                name: "tilde-test".to_string(),
+                directory: Some("~/projects/test".to_string()),
+            },
+            window: None,
+            layout: WorkspacePaneNode::Leaf {
+                command: None,
+                directory: Some("~/projects/test".to_string()),
+                env: None,
+            },
+            environment: HashMap::new(),
+        };
+
+        let toml_str = toml::to_string_pretty(&ws).expect("serialize");
+        let ws2: WorkspaceFile = toml::from_str(&toml_str).expect("deserialize");
+
+        // The tilde must be preserved as a literal string after round-trip.
+        assert_eq!(
+            ws2.workspace.directory.as_deref(),
+            Some("~/projects/test"),
+            "workspace directory tilde must round-trip as a literal string"
+        );
+        match &ws2.layout {
+            WorkspacePaneNode::Leaf { directory, .. } => {
+                assert_eq!(
+                    directory.as_deref(),
+                    Some("~/projects/test"),
+                    "pane directory tilde must round-trip as a literal string"
+                );
+            }
+            other => panic!("expected Leaf layout, got {other:?}"),
+        }
+    }
+
+    /// A workspace with an empty environment HashMap serializes and deserializes
+    /// correctly — the empty map must round-trip (not become a missing field).
+    ///
+    /// Note: `#[serde(skip_serializing_if = "HashMap::is_empty")]` means the
+    /// field is omitted when empty during serialization; on deserialization the
+    /// `#[serde(default)]` attribute restores it as an empty map. This test
+    /// verifies the semantic round-trip (empty-in, empty-out) holds.
+    #[test]
+    fn workspace_with_empty_environment() {
+        let ws = WorkspaceFile {
+            schema_version: 1,
+            workspace: WorkspaceMeta {
+                name: "empty-env".to_string(),
+                directory: None,
+            },
+            window: None,
+            layout: WorkspacePaneNode::Leaf {
+                command: None,
+                directory: None,
+                env: None,
+            },
+            environment: HashMap::new(),
+        };
+
+        let toml_str = toml::to_string_pretty(&ws).expect("serialize");
+        let ws2: WorkspaceFile = toml::from_str(&toml_str).expect("deserialize");
+
+        // An empty environment must round-trip as an empty map (not None or missing).
+        assert_eq!(
+            ws2.environment.len(),
+            0,
+            "empty environment must deserialize as an empty HashMap, got {:?}",
+            ws2.environment
+        );
+    }
+
+    /// A deeply nested tree (4 levels, 8 leaves) serializes to TOML and
+    /// deserializes back to an equal value. Stress-tests the serde enum
+    /// representation for recursive WorkspacePaneNode structures.
+    #[test]
+    fn workspace_large_tree_round_trips() {
+        // Build a tree with 4 levels of nesting and 8 leaves.
+        fn make_leaf() -> WorkspacePaneNode {
+            WorkspacePaneNode::Leaf {
+                command: Some("zsh".to_string()),
+                directory: Some("/tmp".to_string()),
+                env: None,
+            }
+        }
+
+        let tree = WorkspacePaneNode::HSplit {
+            ratio: 0.5,
+            left: Box::new(WorkspacePaneNode::VSplit {
+                ratio: 0.5,
+                top: Box::new(make_leaf()),
+                bottom: Box::new(make_leaf()),
+            }),
+            right: Box::new(WorkspacePaneNode::VSplit {
+                ratio: 0.5,
+                top: Box::new(WorkspacePaneNode::HSplit {
+                    ratio: 0.5,
+                    left: Box::new(make_leaf()),
+                    right: Box::new(make_leaf()),
+                }),
+                bottom: Box::new(WorkspacePaneNode::HSplit {
+                    ratio: 0.5,
+                    left: Box::new(WorkspacePaneNode::VSplit {
+                        ratio: 0.5,
+                        top: Box::new(make_leaf()),
+                        bottom: Box::new(make_leaf()),
+                    }),
+                    right: Box::new(WorkspacePaneNode::VSplit {
+                        ratio: 0.5,
+                        top: Box::new(make_leaf()),
+                        bottom: Box::new(make_leaf()),
+                    }),
+                }),
+            }),
+        };
+
+        let ws = WorkspaceFile {
+            schema_version: 1,
+            workspace: WorkspaceMeta {
+                name: "large-tree".to_string(),
+                directory: None,
+            },
+            window: None,
+            layout: tree.clone(),
+            environment: HashMap::new(),
+        };
+
+        let toml_str = toml::to_string_pretty(&ws).expect("serialize large tree");
+        let ws2: WorkspaceFile = toml::from_str(&toml_str).expect("deserialize large tree");
+
+        // The full layout tree must survive the TOML round-trip intact.
+        assert_eq!(
+            ws.layout, ws2.layout,
+            "large tree must survive TOML round-trip with all nodes equal"
+        );
+
+        // Verify all 8 leaves are recoverable via to_pane_tree.
+        let (_, metadata) = ws2.layout.to_pane_tree();
+        assert_eq!(
+            metadata.len(),
+            8,
+            "8-leaf tree must produce 8 PaneMetadata entries, got {}",
+            metadata.len()
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // Task 3 — list_workspaces tests
     // -----------------------------------------------------------------------
 
