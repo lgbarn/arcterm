@@ -12,6 +12,104 @@
 //! 6. Ctrl+C — sends SIGINT; running process terminates and returns to shell prompt.
 //! 7. `echo -e "\033[31mred\033[0m"` — red text appears, then colour resets.
 //! 8. Rapid output (`cat /dev/urandom | head -c 1M | base64`) — no hang or crash.
+//!
+//! # Phase 5 Integration Test Checklist (PLAN-3.2 Task 3)
+//!
+//! These five scenarios map to the five Phase 5 success criteria (SC-1 through SC-5).
+//! Run them in order after a clean build (`cargo build --release -p arcterm-app`).
+//!
+//! ## SC-1: `arcterm open <workspace>` reads TOML and restores layout
+//!
+//! 1. Create `~/.config/arcterm/workspaces/test-project.toml` with content:
+//!    ```toml
+//!    schema_version = 1
+//!    [workspace]
+//!    name = "test-project"
+//!    directory = "/tmp"
+//!    [layout]
+//!    type = "hsplit"
+//!    ratio = 0.5
+//!    [layout.left]
+//!    type = "leaf"
+//!    command = "echo 'left pane'"
+//!    directory = "/tmp"
+//!    [layout.right]
+//!    type = "leaf"
+//!    command = "echo 'right pane'"
+//!    directory = "/tmp"
+//!    ```
+//! 2. Run `arcterm-app open test-project`.
+//! 3. Verify: window opens with two side-by-side panes. Left pane shows "left pane"
+//!    output. Right pane shows "right pane" output. Both panes' shells are in `/tmp`.
+//!
+//! Pass criteria: correct 2-pane layout, correct output in each pane.
+//!
+//! ## SC-2: Session persistence survives exit and reopen
+//!
+//! 1. Open arcterm with default launch. Split into 2 panes (Ctrl+a, n).
+//!    `cd /tmp` in one pane.
+//! 2. Close the window (Cmd+Q or click close button).
+//! 3. Reopen arcterm with default launch (no arguments).
+//! 4. Verify: the 2-pane layout is restored. One pane's CWD is `/tmp`.
+//!
+//! Pass criteria: layout matches the session at close time. CWD is restored.
+//!
+//! ## SC-3: Leader+w opens fuzzy workspace switcher
+//!
+//! 1. Create 3 workspace files in `~/.config/arcterm/workspaces/`:
+//!    `alpha.toml`, `beta.toml`, `gamma.toml` (contents: minimal single-leaf TOML).
+//! 2. Open arcterm. Press Ctrl+a then w.
+//! 3. Verify: dim overlay appears with a search box and three workspace names listed.
+//! 4. Type "al" — only "alpha" remains visible.
+//! 5. Press Enter — alpha workspace loads.
+//! 6. Reopen switcher (Ctrl+a, w), press Escape — overlay dismisses, current session
+//!    is unchanged.
+//!
+//! Pass criteria: overlay appears with correct entries, filter narrows list, Enter
+//! opens workspace, Escape dismisses without side-effects.
+//!
+//! ## SC-4: Workspace TOML files are human-readable and git-committable
+//!
+//! 1. Inside arcterm, press Ctrl+a then s to save the current session.
+//! 2. Open `~/.config/arcterm/workspaces/session-*.toml` in a text editor or
+//!    `cat` it in a terminal.
+//! 3. Verify: the file is valid TOML with clear `[workspace]`, `[layout]`,
+//!    and (when non-empty) `[environment]` sections. No binary data. The file
+//!    can be `git add`-ed and `git diff`-ed cleanly.
+//!
+//! Pass criteria: file is human-readable TOML, committed cleanly to git.
+//!
+//! ## SC-5: Workspace restore under 500ms for 4-pane layout
+//!
+//! 1. Create `~/.config/arcterm/workspaces/four-pane-test.toml` with 4 panes:
+//!    ```toml
+//!    schema_version = 1
+//!    [workspace]
+//!    name = "four-pane-test"
+//!    [layout]
+//!    type = "hsplit"
+//!    ratio = 0.5
+//!    [layout.left]
+//!    type = "vsplit"
+//!    ratio = 0.5
+//!    [layout.left.top]
+//!    type = "leaf"
+//!    [layout.left.bottom]
+//!    type = "leaf"
+//!    [layout.right]
+//!    type = "vsplit"
+//!    ratio = 0.5
+//!    [layout.right.top]
+//!    type = "leaf"
+//!    [layout.right.bottom]
+//!    type = "leaf"
+//!    ```
+//! 2. Run `RUST_LOG=info arcterm-app open four-pane-test` and observe the log output.
+//! 3. Measure time from process start to first frame render using wall-clock
+//!    observation or the `latency-trace` feature flag.
+//! 4. Verify: restore completes and all 4 panes are interactive in under 500ms.
+//!
+//! Pass criteria: 4-pane workspace is fully interactive within 500ms of launch.
 
 mod colors;
 mod config;
