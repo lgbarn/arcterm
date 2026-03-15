@@ -77,17 +77,20 @@ pub struct ImageTexture {
 ///
 /// Call [`ImageQuadRenderer::new`] once at startup, then per-frame:
 /// 1. [`create_texture`](Self::create_texture) for each new image.
-/// 2. [`render`](Self::render) inside an active `RenderPass`.
+/// 2. [`prepare`](Self::prepare) before the render pass to upload vertices.
+/// 3. [`render`](Self::render) inside the active `RenderPass`.
 pub struct ImageQuadRenderer {
     pipeline: wgpu::RenderPipeline,
     /// Bind group layout shared by all image textures (texture + sampler).
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    /// Per-quad vertex buffer — rewritten each draw call.
+    /// Per-quad vertex buffer — all quads for the frame packed contiguously.
     vertex_buffer: wgpu::Buffer,
     /// Viewport uniform buffer.
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
+    /// Number of images prepared for the current frame (set by `prepare`).
+    prepared_count: usize,
 }
 
 impl ImageQuadRenderer {
@@ -225,6 +228,7 @@ impl ImageQuadRenderer {
             vertex_buffer,
             uniform_buffer,
             uniform_bind_group,
+            prepared_count: 0,
         }
     }
 
@@ -317,51 +321,76 @@ impl ImageQuadRenderer {
         }
     }
 
-    /// Render textured image quads.
+    /// Prepare image quads for rendering.
     ///
-    /// `textures` is a slice of `(image_texture, rect)` pairs where `rect` is
-    /// `[x, y, width, height]` in **physical pixels** (top-left origin, y-down).
+    /// Call this **before** beginning the render pass.  Uploads vertex data and
+    /// the viewport uniform to the GPU.  Returns the number of images prepared.
     ///
-    /// Must be called inside an active `RenderPass` after the queue and surface
-    /// viewport are set.  Call once per frame after uploading the uniform.
-    pub fn render<'pass>(
-        &'pass self,
-        pass: &mut wgpu::RenderPass<'pass>,
+    /// `placements` is a slice of `(image_texture_ref, rect)` pairs where `rect`
+    /// is `[x, y, width, height]` in **physical pixels** (top-left origin, y-down).
+    pub fn prepare(
+        &mut self,
         queue: &wgpu::Queue,
-        textures: &'pass [(ImageTexture, [f32; 4])],
+        placements: &[(&ImageTexture, [f32; 4])],
         viewport_width: u32,
         viewport_height: u32,
-    ) {
-        if textures.is_empty() {
-            return;
+    ) -> usize {
+        let count = placements.len().min(Self::MAX_IMAGES);
+        if count == 0 {
+            self.prepared_count = 0;
+            return 0;
         }
 
-        // Update viewport uniform.
+        // Upload viewport uniform.
         let uniform = ScreenUniform {
             resolution: [viewport_width as f32, viewport_height as f32],
             _pad: [0.0; 2],
         };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniform));
 
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        // Build all vertices for the frame into one contiguous buffer.
+        let mut vertices: Vec<ImageVertex> =
+            Vec::with_capacity(count * Self::VERTS_PER_QUAD);
 
-        for (image, rect) in textures.iter().take(Self::MAX_IMAGES) {
+        for (_, rect) in placements.iter().take(count) {
             let [x, y, w, h] = *rect;
-
-            // Build two-triangle quad (CCW winding, y-down pixel space).
-            // UV: top-left=(0,0), bottom-right=(1,1).
             let tl = ImageVertex { position: [x,     y    ], uv: [0.0, 0.0] };
             let tr = ImageVertex { position: [x + w, y    ], uv: [1.0, 0.0] };
             let bl = ImageVertex { position: [x,     y + h], uv: [0.0, 1.0] };
             let br = ImageVertex { position: [x + w, y + h], uv: [1.0, 1.0] };
-            let verts = [tl, tr, bl, tr, br, bl];
+            vertices.extend_from_slice(&[tl, tr, bl, tr, br, bl]);
+        }
 
-            queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&verts));
+        queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
+        self.prepared_count = count;
+        count
+    }
 
+    /// Record image quad draw calls into the active render pass.
+    ///
+    /// Must be called after [`prepare`](Self::prepare).
+    ///
+    /// `placements` must be the same slice that was passed to `prepare` so
+    /// the vertex offsets and bind groups align.
+    pub fn render<'pass>(
+        &'pass self,
+        pass: &mut wgpu::RenderPass<'pass>,
+        placements: &'pass [(&'pass ImageTexture, [f32; 4])],
+    ) {
+        let count = self.prepared_count.min(placements.len());
+        if count == 0 {
+            return;
+        }
+
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+
+        for (i, (image, _)) in placements.iter().take(count).enumerate() {
+            let vertex_start = (i * Self::VERTS_PER_QUAD) as u32;
+            let vertex_end = vertex_start + Self::VERTS_PER_QUAD as u32;
             pass.set_bind_group(1, &image.bind_group, &[]);
-            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            pass.draw(0..6, 0..1);
+            pass.draw(vertex_start..vertex_end, 0..1);
         }
     }
 }

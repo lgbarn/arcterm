@@ -199,6 +199,7 @@ dependencies = [
  "arcterm-vt",
  "dirs",
  "env_logger",
+ "image",
  "libc",
  "log",
  "notify",

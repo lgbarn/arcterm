@@ -543,7 +543,7 @@ mod phase4_task2_tests {
             s.push('=');
             s.push_str(v);
         }
-        s.push_str("\x07"); // BEL terminator
+        s.push('\x07'); // BEL terminator
         s.into_bytes()
     }
 

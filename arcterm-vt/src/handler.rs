@@ -236,6 +236,12 @@ pub struct GridState {
     pub accumulator: Option<StructuredContentAccumulator>,
     /// Completed structured content blocks in receive order.
     pub completed_blocks: Vec<StructuredContentAccumulator>,
+    /// Raw Kitty APC payloads received since the last drain.
+    ///
+    /// Each entry is the raw bytes between `ESC _` and `ESC \` (as delivered
+    /// by `ApcScanner`).  The app layer drains these via
+    /// [`GridState::take_kitty_payloads`] after each PTY processing batch.
+    pub kitty_payloads: Vec<Vec<u8>>,
 }
 
 impl GridState {
@@ -250,7 +256,13 @@ impl GridState {
             normal_screen: None,
             accumulator: None,
             completed_blocks: Vec::new(),
+            kitty_payloads: Vec::new(),
         }
+    }
+
+    /// Drain and return all Kitty APC payloads received since the last call.
+    pub fn take_kitty_payloads(&mut self) -> Vec<Vec<u8>> {
+        std::mem::take(&mut self.kitty_payloads)
     }
 
     /// Effective scroll bottom, clamped to grid dimensions.
@@ -798,6 +810,20 @@ impl Handler for GridState {
 
     fn set_keypad_numeric_mode(&mut self) {
         self.modes.app_keypad = false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Kitty Graphics Protocol (Phase 4)
+    // -------------------------------------------------------------------------
+
+    /// Store the raw APC payload for the app layer to process.
+    ///
+    /// The app layer drains payloads via [`GridState::take_kitty_payloads`],
+    /// parses them with [`crate::kitty::parse_kitty_command`], feeds them
+    /// through a [`crate::kitty::KittyChunkAssembler`], decodes the image
+    /// bytes, and uploads them to the GPU for rendering.
+    fn kitty_graphics_command(&mut self, payload: &[u8]) {
+        self.kitty_payloads.push(payload.to_vec());
     }
 }
 

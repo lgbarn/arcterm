@@ -2,14 +2,40 @@
 
 use arcterm_core::{Grid, GridSize};
 use arcterm_pty::{PtyError, PtySession};
-use arcterm_vt::{ApcScanner, GridState, StructuredContentAccumulator};
+use arcterm_vt::{ApcScanner, GridState, KittyChunkAssembler, KittyCommand, StructuredContentAccumulator, parse_kitty_command};
 use tokio::sync::mpsc;
+
+/// Decoded image ready for GPU texture upload.
+///
+/// Produced by the Kitty graphics pipeline after receiving a complete
+/// (possibly chunked) APC sequence and decoding PNG/JPEG to raw RGBA bytes.
+#[allow(dead_code)] // Used in Phase 5 image rendering integration
+pub struct PendingImage {
+    /// Parsed Kitty command metadata (action, format, id, etc.).
+    pub command: KittyCommand,
+    /// Raw RGBA pixel data (width × height × 4 bytes).
+    pub rgba: Vec<u8>,
+    /// Image width in pixels.
+    pub width: u32,
+    /// Image height in pixels.
+    pub height: u32,
+}
 
 /// Integrates PTY I/O, VT parsing, and the terminal grid.
 pub struct Terminal {
     pty: PtySession,
     scanner: ApcScanner,
     grid_state: GridState,
+    /// Kitty chunk assembler — buffers multi-chunk APC transfers by image ID.
+    chunk_assembler: KittyChunkAssembler,
+    /// Decoded images ready for GPU texture upload.
+    ///
+    /// Populated by `process_pty_output` when a complete Kitty image transfer
+    /// is received.  The app layer drains these via `take_pending_images`.
+    ///
+    /// TODO(phase-5): move PNG/JPEG decoding to a background thread for
+    /// images larger than 1MB to avoid blocking the PTY processing thread.
+    pub pending_images: Vec<PendingImage>,
 }
 
 impl Terminal {
@@ -33,14 +59,58 @@ impl Terminal {
                 pty,
                 scanner,
                 grid_state,
+                chunk_assembler: KittyChunkAssembler::new(),
+                pending_images: Vec::new(),
             },
             rx,
         ))
     }
 
     /// Feed raw PTY output bytes through the VT processor into the grid.
+    ///
+    /// Also processes any Kitty APC sequences received during this batch:
+    /// payloads are parsed, chunk-assembled, and decoded to RGBA pixels.
+    /// Completed images are stored in `pending_images` for the next render.
     pub fn process_pty_output(&mut self, bytes: &[u8]) {
         self.scanner.advance(&mut self.grid_state, bytes);
+
+        // Drain any Kitty payloads the scanner dispatched into GridState.
+        let payloads = self.grid_state.take_kitty_payloads();
+        for raw in payloads {
+            if let Some(cmd) = parse_kitty_command(&raw)
+                && let Some((meta, decoded_bytes)) = self.chunk_assembler.receive_chunk(&cmd)
+            {
+                // Decode PNG/JPEG to RGBA using the `image` crate.
+                // Synchronous decode is acceptable for Phase 4 basic support
+                // (images under 1MB). For large images, async decode is a
+                // Phase 5 improvement (see TODO above in pending_images).
+                match image::load_from_memory(&decoded_bytes) {
+                    Ok(dyn_img) => {
+                        let rgba_img = dyn_img.to_rgba8();
+                        let width = rgba_img.width();
+                        let height = rgba_img.height();
+                        self.pending_images.push(PendingImage {
+                            command: meta,
+                            rgba: rgba_img.into_raw(),
+                            width,
+                            height,
+                        });
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Kitty image decode failed for image_id={}: {e}",
+                            meta.image_id
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Drain and return all decoded images ready for GPU texture upload.
+    #[allow(dead_code)] // Wired in Phase 5 image rendering
+    pub fn take_pending_images(&mut self) -> Vec<PendingImage> {
+        std::mem::take(&mut self.pending_images)
     }
 
     /// Drain and return all pending DSR/DA reply bytes queued by the VT processor.

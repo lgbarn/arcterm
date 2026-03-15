@@ -34,12 +34,14 @@ use winit::event_loop::ControlFlow;
 use std::time::Instant as TraceInstant;
 
 use arcterm_core::{Cell, CellAttrs, Color, CursorPos, GridSize};
-use arcterm_render::{OverlayQuad, PaneRenderInfo, RenderPalette, Renderer};
+use arcterm_render::{HighlightEngine, OverlayQuad, PaneRenderInfo, RenderPalette, Renderer, StructuredBlock};
+use arcterm_vt::ContentType;
 use keymap::{KeyAction, KeymapHandler};
 use palette::PaletteState;
 use layout::{Axis, Direction, PaneId, PaneNode, PixelRect};
 use selection::{generate_selection_quads, pixel_to_cell, Clipboard, Selection, SelectionMode, SelectionQuad};
 use tab::TabManager;
+use detect::AutoDetector;
 use terminal::Terminal;
 use tokio::sync::mpsc;
 use winit::{
@@ -117,6 +119,16 @@ struct AppState {
 
     /// Set to `true` once ALL PTY channels close (all panes have exited).
     shell_exited: bool,
+
+    // ---- structured output ----
+    /// Highlight engine: owns SyntaxSet + ThemeSet; loaded once at startup.
+    highlight_engine: HighlightEngine,
+    /// Auto-detector per pane: heuristic structured-content detection.
+    auto_detectors: HashMap<PaneId, AutoDetector>,
+    /// Accumulated structured blocks per pane (OSC 7770 + auto-detected).
+    structured_blocks: HashMap<PaneId, Vec<StructuredBlock>>,
+    /// Per-pane pixel rects of code-block copy buttons: (pane_id, rect [x,y,w,h]).
+    copy_button_rects: Vec<(PaneId, [f32; 4], usize)>, // (id, rect, block_idx)
 
     // ---- configuration ----
     config: config::ArctermConfig,
@@ -237,6 +249,8 @@ impl AppState {
                 terminal.grid_mut().max_scrollback = self.config.scrollback_lines;
                 self.panes.insert(id, terminal);
                 self.pty_channels.insert(id, rx);
+                self.auto_detectors.insert(id, AutoDetector::new());
+                self.structured_blocks.insert(id, Vec::new());
             }
             Err(e) => {
                 log::error!("Failed to create PTY for pane {:?}: {e}", id);
@@ -317,6 +331,12 @@ impl ApplicationHandler for App {
             .map_err(|e| log::warn!("Clipboard unavailable: {e}"))
             .ok();
 
+        // Initialize per-pane structured output state for the first pane.
+        let mut auto_detectors = HashMap::new();
+        auto_detectors.insert(first_id, AutoDetector::new());
+        let mut structured_blocks_map: HashMap<PaneId, Vec<StructuredBlock>> = HashMap::new();
+        structured_blocks_map.insert(first_id, Vec::new());
+
         self.state = Some(AppState {
             window,
             renderer,
@@ -326,6 +346,10 @@ impl ApplicationHandler for App {
             tab_layouts,
             keymap,
             shell_exited: false,
+            highlight_engine: HighlightEngine::new(),
+            auto_detectors,
+            structured_blocks: structured_blocks_map,
+            copy_button_rects: Vec::new(),
             config: cfg,
             config_rx,
             selection: Selection::default(),
@@ -442,6 +466,86 @@ impl ApplicationHandler for App {
 
                         if let Some(terminal) = state.panes.get_mut(&id) {
                             terminal.process_pty_output(&bytes);
+
+                            // Drain completed OSC 7770 blocks and render them.
+                            let completed = terminal.take_completed_blocks();
+                            if !completed.is_empty() {
+                                let cursor_row = terminal.grid().cursor.row;
+                                let pane_blocks = state
+                                    .structured_blocks
+                                    .entry(id)
+                                    .or_default();
+                                for acc in completed {
+                                    let attrs: Vec<(String, String)> =
+                                        acc.attrs.into_iter().collect();
+                                    let rendered = state.highlight_engine.render_block(
+                                        acc.content_type.clone(),
+                                        &acc.buffer,
+                                        &attrs,
+                                    );
+                                    let line_count = rendered.len();
+                                    pane_blocks.push(StructuredBlock {
+                                        block_type: acc.content_type,
+                                        start_row: cursor_row.saturating_sub(line_count),
+                                        line_count,
+                                        rendered_lines: rendered,
+                                        raw_content: acc.buffer,
+                                    });
+                                }
+                            }
+
+                            // Drain Kitty inline images decoded by process_pty_output.
+                            let pending = terminal.take_pending_images();
+                            for img in pending {
+                                state.renderer.upload_image(
+                                    img.command.image_id,
+                                    &img.rgba,
+                                    img.width,
+                                    img.height,
+                                );
+                                // Place the image at the current cursor row.
+                                // Full Kitty placement semantics (column, z-index, scale)
+                                // are a Phase 5 enhancement; for now we place images at
+                                // cursor-row-y, pane-left-x, at their natural pixel size.
+                                let sf = state.window.scale_factor() as f32;
+                                let cell_h = state.renderer.text.cell_size.height * sf;
+                                let cursor_row_y = terminal.grid().cursor().row as f32 * cell_h;
+                                let image_w = img.width as f32;
+                                let image_h = img.height as f32;
+                                state.renderer.image_placements.push((
+                                    img.command.image_id,
+                                    [0.0, cursor_row_y, image_w, image_h],
+                                ));
+                            }
+
+                            // Auto-detect structured content in newly-written rows.
+                            let cursor_row = terminal.grid().cursor.row;
+                            let grid_cells = terminal.grid().cells.clone();
+                            if let Some(detector) = state.auto_detectors.get_mut(&id) {
+                                let detections = detector.scan_rows(&grid_cells, cursor_row);
+                                if !detections.is_empty() {
+                                    let pane_blocks = state
+                                        .structured_blocks
+                                        .entry(id)
+                                        .or_default();
+                                    for det in detections {
+                                        let attrs: Vec<(String, String)> = det.attrs.clone();
+                                        let rendered = state.highlight_engine.render_block(
+                                            det.content_type.clone(),
+                                            &det.content,
+                                            &attrs,
+                                        );
+                                        let line_count = rendered.len();
+                                        pane_blocks.push(StructuredBlock {
+                                            block_type: det.content_type,
+                                            start_row: det.start_row,
+                                            line_count,
+                                            rendered_lines: rendered,
+                                            raw_content: det.content,
+                                        });
+                                    }
+                                }
+                            }
                         }
                         got_data = true;
 
@@ -462,9 +566,11 @@ impl ApplicationHandler for App {
             }
         }
 
-        // Remove closed pane channels.
+        // Remove closed pane channels and associated structured-output state.
         for id in closed_panes {
             state.pty_channels.remove(&id);
+            state.auto_detectors.remove(&id);
+            state.structured_blocks.remove(&id);
         }
 
         // When ALL channels are gone, the session has ended.
@@ -641,6 +747,28 @@ impl ApplicationHandler for App {
                                 let clicked_tab = clicked_tab.min(tab_count - 1);
                                 state.tab_manager.switch_to(clicked_tab);
                                 state.window.request_redraw();
+                                return;
+                            }
+
+                            // --- Copy button click ---
+                            // Check if click falls within a code block copy button.
+                            let mut copy_handled = false;
+                            for (pane_id, btn_rect, block_idx) in &state.copy_button_rects {
+                                let [bx, by, bw, bh] = *btn_rect;
+                                if pxf >= bx && pxf <= bx + bw && pyf >= by && pyf <= by + bh {
+                                    // Hit: copy the block's raw content to clipboard.
+                                    if let Some(blocks) = state.structured_blocks.get(pane_id)
+                                        && let Some(block) = blocks.get(*block_idx)
+                                        && let Some(cb) = &mut state.clipboard
+                                        && let Err(e) = cb.copy(&block.raw_content)
+                                    {
+                                        log::warn!("Copy button clipboard write failed: {e}");
+                                    }
+                                    copy_handled = true;
+                                    break;
+                                }
+                            }
+                            if copy_handled {
                                 return;
                             }
 
@@ -895,22 +1023,67 @@ impl ApplicationHandler for App {
 
                 // Normal multi-pane render.
                 // We need to collect grid refs while panes is borrowed.
-                // Use a Vec of (rect, grid_clone) to avoid lifetime issues.
-                let pane_frames: Vec<(PixelRect, arcterm_core::Grid)> = rects
+                // Use a Vec of (rect, grid_clone, blocks_clone) to avoid lifetime issues.
+                let pane_frames: Vec<(PixelRect, arcterm_core::Grid, Vec<StructuredBlock>)> = rects
                     .iter()
                     .filter_map(|(id, rect)| {
                         if rect.width <= 0.0 || rect.height <= 0.0 {
                             return None;
                         }
-                        state.panes.get(id).map(|t| (*rect, t.grid().clone()))
+                        state.panes.get(id).map(|t| {
+                            let blocks = state
+                                .structured_blocks
+                                .get(id)
+                                .cloned()
+                                .unwrap_or_default();
+                            (*rect, t.grid().clone(), blocks)
+                        })
                     })
                     .collect();
 
-                for (rect, grid) in &pane_frames {
+                // Clear stale image placements from the previous frame.
+                // New placements are pushed in about_to_wait when PTY output
+                // delivers Kitty images.  We retain the image_store (GPU textures)
+                // across frames so images can persist on screen.
+                // TODO(phase-5): implement proper placement tracking per image_id.
+                state.renderer.image_placements.retain(|_| false);
+
+                // Recompute copy button rects for this frame.
+                state.copy_button_rects.clear();
+                let cell_h_phys = state.renderer.text.cell_size.height * sf;
+                let cell_w_phys = state.renderer.text.cell_size.width * sf;
+                let _ = cell_w_phys; // may be used for future sizing
+
+                for (i, (rect, _, blocks)) in pane_frames.iter().enumerate() {
+                    let _ = i;
+                    let pw = rect.width;
+                    let py = rect.y;
+                    let px = rect.x;
+                    for (block_idx, block) in blocks.iter().enumerate() {
+                        if matches!(block.block_type, ContentType::CodeBlock) {
+                            let block_y = py + block.start_row as f32 * cell_h_phys;
+                            let btn_size = 14.0_f32 * sf;
+                            let btn_x = px + pw - btn_size - 4.0 * sf;
+                            let btn_y = block_y + 2.0 * sf;
+                            // Find the pane id for this frame.
+                            if let Some((&pane_id, _)) = rects.iter().find(|(_, r)| {
+                                (r.x - rect.x).abs() < 1.0 && (r.y - rect.y).abs() < 1.0
+                            }) {
+                                state.copy_button_rects.push((
+                                    pane_id,
+                                    [btn_x, btn_y, btn_size, btn_size],
+                                    block_idx,
+                                ));
+                            }
+                        }
+                    }
+                }
+
+                for (rect, grid, blocks) in &pane_frames {
                     pane_infos.push(PaneRenderInfo {
                         grid,
                         rect: [rect.x, rect.y, rect.width, rect.height],
-                        structured_blocks: &[],
+                        structured_blocks: blocks,
                     });
                 }
 

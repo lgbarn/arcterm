@@ -1,3 +1,4 @@
+#![allow(dead_code)] // Wired in PLAN-3.1 integration
 //! Auto-detection engine for structured content in terminal output.
 //!
 //! Scans rows of terminal grid output for patterns indicating structured
@@ -114,7 +115,8 @@ impl AutoDetector {
 
         // Run each detector in priority order. Each detector gets the full
         // row list; we filter out already-claimed rows before returning.
-        let detectors: &[fn(&[(usize, String)]) -> Option<DetectionResult>] = &[
+        type Detector = fn(&[(usize, String)]) -> Option<DetectionResult>;
+        let detectors: &[Detector] = &[
             detect_fenced_code_block,
             detect_diff,
             detect_json,
@@ -237,8 +239,7 @@ fn detect_diff(text_rows: &[(usize, String)]) -> Option<DetectionResult> {
         // Find the end of the diff: last line starting with +, -, space, or @.
         let content_start = i + 2 + hunk_pos;
         let mut end_idx = content_start;
-        for j in content_start..n {
-            let (_, l) = &text_rows[j];
+        for (j, (_, l)) in text_rows.iter().enumerate().take(n).skip(content_start) {
             if l.starts_with('+')
                 || l.starts_with('-')
                 || l.starts_with(' ')
@@ -284,8 +285,7 @@ fn detect_json(text_rows: &[(usize, String)]) -> Option<DetectionResult> {
         let mut depth: i32 = 0;
         let mut end_idx = i;
 
-        for j in i..n {
-            let (_, line) = &text_rows[j];
+        for (j, (_, line)) in text_rows.iter().enumerate().take(n).skip(i) {
             for ch in line.chars() {
                 if ch == first_char || ch == if first_char == '{' { '[' } else { '{' } {
                     // only track the outermost type for depth
@@ -390,7 +390,7 @@ fn is_heading(line: &str) -> bool {
     let trimmed = line.trim_start();
     let hashes: String = trimmed.chars().take_while(|&c| c == '#').collect();
     let len = hashes.len();
-    len >= 1 && len <= 6 && trimmed[len..].starts_with(' ')
+    (1..=6).contains(&len) && trimmed[len..].starts_with(' ')
 }
 
 // ---------------------------------------------------------------------------

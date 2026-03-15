@@ -186,7 +186,7 @@ impl HighlightEngine {
                     .unwrap_or_else(|_| content.to_string());
                 pretty
                     .lines()
-                    .map(|line| Self::colorize_json_line(line))
+                    .map(Self::colorize_json_line)
                     .collect()
             }
         }
@@ -427,21 +427,18 @@ impl HighlightEngine {
                     stack.pop();
                     if let Some((lang, text)) = code_block_buf.take() {
                         let lang_ref = lang.as_deref();
-                        let ext = lang_ref.and_then(|l| {
-                            // Map language name to extension for syntect lookup.
-                            Some(match l {
-                                "rust" | "rs" => "rs",
-                                "python" | "py" => "py",
-                                "javascript" | "js" => "js",
-                                "typescript" | "ts" => "ts",
-                                "json" => "json",
-                                "yaml" | "yml" => "yaml",
-                                "toml" => "toml",
-                                "bash" | "sh" => "sh",
-                                "c" => "c",
-                                "cpp" | "c++" => "cpp",
-                                other => other,
-                            })
+                        let ext = lang_ref.map(|l| match l {
+                            "rust" | "rs" => "rs",
+                            "python" | "py" => "py",
+                            "javascript" | "js" => "js",
+                            "typescript" | "ts" => "ts",
+                            "json" => "json",
+                            "yaml" | "yml" => "yaml",
+                            "toml" => "toml",
+                            "bash" | "sh" => "sh",
+                            "c" => "c",
+                            "cpp" | "c++" => "cpp",
+                            other => other,
                         });
                         let highlighted = self.highlight_code(&text, ext);
                         lines.extend(highlighted);

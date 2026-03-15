@@ -17,6 +17,7 @@ arcterm-core = { path = "../arcterm-core" }
 arcterm-vt = { path = "../arcterm-vt" }
 arcterm-pty = { path = "../arcterm-pty" }
 arcterm-render = { path = "../arcterm-render" }
+image.workspace = true
 tokio.workspace = true
 winit.workspace = true
 log.workspace = true
