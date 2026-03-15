@@ -299,10 +299,10 @@ impl ApplicationHandler for App {
         // Wire window title from grid to the OS window.
         {
             let title = state.terminal.grid().title().map(|t| t.to_string());
-            if let Some(t) = title {
-                if !t.is_empty() {
-                    state.window.set_title(&t);
-                }
+            if let Some(t) = title
+                && !t.is_empty()
+            {
+                state.window.set_title(&t);
             }
         }
     }
@@ -572,7 +572,8 @@ impl ApplicationHandler for App {
                         }
                     }
 
-                    if let Some(bytes) = input::translate_key_event(&event, self.modifiers) {
+                    let app_cursor = state.terminal.grid().modes.app_cursor_keys;
+                    if let Some(bytes) = input::translate_key_event(&event, self.modifiers, app_cursor) {
                         #[cfg(feature = "latency-trace")]
                         log::debug!(
                             "[latency] key → PTY write ({} bytes) after {:?}",
