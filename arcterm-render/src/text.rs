@@ -87,6 +87,9 @@ impl TextRenderer {
         }
         self.row_buffers.truncate(num_rows);
 
+        // Cache cursor position for cursor rendering (inverse video at cursor cell).
+        let cursor = grid.cursor;
+
         // Populate each row buffer with per-cell colored spans.
         for (row_idx, row) in rows.iter().enumerate() {
             let buf = &mut self.row_buffers[row_idx];
@@ -99,11 +102,19 @@ impl TextRenderer {
 
             // Build per-cell (text_slice, Attrs) spans.
             // We collect each char as a heap-allocated String so lifetimes work out.
+            // At the cursor cell, swap fg/bg for inverse-video cursor rendering.
             let span_strings: Vec<(String, Color)> = row
                 .iter()
-                .map(|cell| {
+                .enumerate()
+                .map(|(col_idx, cell)| {
                     let s = cell.c.to_string();
-                    let fg = ansi_color_to_glyphon(cell.attrs.fg, true);
+                    let is_cursor = row_idx == cursor.row && col_idx == cursor.col;
+                    let fg = if is_cursor {
+                        // Inverse video: render cursor cell with bg color as text fg.
+                        ansi_color_to_glyphon(cell.attrs.bg, false)
+                    } else {
+                        ansi_color_to_glyphon(cell.attrs.fg, true)
+                    };
                     (s, fg)
                 })
                 .collect();
