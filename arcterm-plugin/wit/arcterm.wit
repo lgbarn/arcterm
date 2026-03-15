@@ -1,0 +1,58 @@
+package arcterm:plugin@0.1.0;
+
+interface types {
+    /// RGB color for terminal rendering.
+    record color {
+        r: u8,
+        g: u8,
+        b: u8,
+    }
+
+    /// A single styled line of terminal output.
+    record styled-line {
+        text: string,
+        fg: option<color>,
+        bg: option<color>,
+        bold: bool,
+        italic: bool,
+    }
+
+    /// The kind of terminal event that occurred.
+    enum event-kind {
+        pane-opened,
+        pane-closed,
+        command-executed,
+        workspace-switched,
+    }
+
+    /// A structured plugin event with an associated string payload.
+    variant plugin-event {
+        pane-opened(string),
+        pane-closed(string),
+        command-executed(string),
+        workspace-switched(string),
+    }
+
+    /// Schema describing an MCP tool the plugin provides.
+    record tool-schema {
+        name: string,
+        description: string,
+        input-schema: string,
+    }
+}
+
+world arcterm-plugin {
+    use types.{color, styled-line, event-kind, plugin-event, tool-schema};
+
+    /// Host-provided functions available to the plugin.
+    import log: func(msg: string);
+    import render-text: func(line: styled-line);
+    import subscribe-event: func(kind: event-kind);
+    import get-config: func(key: string) -> option<string>;
+    import register-mcp-tool: func(schema: tool-schema);
+
+    /// Guest-exported functions the plugin must implement.
+    export load: func();
+    export update: func(event: plugin-event) -> bool;
+    export render: func() -> list<styled-line>;
+}
