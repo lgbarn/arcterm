@@ -4,6 +4,37 @@ use std::collections::VecDeque;
 
 use crate::cell::{Cell, CellAttrs, Color};
 
+/// Active terminal mode flags.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TermModes {
+    pub cursor_visible: bool,
+    pub auto_wrap: bool,
+    pub app_cursor_keys: bool,
+    pub bracketed_paste: bool,
+    pub alt_screen_active: bool,
+    pub app_keypad: bool,
+}
+
+impl Default for TermModes {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TermModes {
+    /// Create `TermModes` with sane terminal defaults.
+    pub fn new() -> Self {
+        Self {
+            cursor_visible: true,
+            auto_wrap: true,
+            app_cursor_keys: false,
+            bracketed_paste: false,
+            alt_screen_active: false,
+            app_keypad: false,
+        }
+    }
+}
+
 /// Position of the cursor in the terminal grid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct CursorPos {
@@ -43,6 +74,15 @@ pub struct Grid {
     /// Active scroll region: (top, bottom) row indices, 0-indexed inclusive.
     /// When set, scroll_up/scroll_down operate only within this range.
     pub scroll_region: Option<(usize, usize)>,
+    /// Active terminal mode flags.
+    pub modes: TermModes,
+    /// Saved cursor position and attributes for DECSC/DECRC.
+    pub saved_cursor: Option<(CursorPos, CellAttrs)>,
+    /// The normal-screen grid saved when entering the alternate screen.
+    pub alt_grid: Option<Box<Grid>>,
+    /// How many rows above the current screen bottom the viewport is scrolled.
+    /// 0 = live view; >0 = scrolled back into scrollback history.
+    pub scroll_offset: usize,
 }
 
 impl Grid {
@@ -61,6 +101,10 @@ impl Grid {
             scrollback: VecDeque::new(),
             max_scrollback: 10_000,
             scroll_region: None,
+            modes: TermModes::new(),
+            saved_cursor: None,
+            alt_grid: None,
+            scroll_offset: 0,
         }
     }
 
@@ -202,6 +246,108 @@ impl Grid {
             self.cursor.row = bottom;
         } else {
             self.cursor.row += 1;
+        }
+    }
+
+    /// Save the current cursor position and text attributes.
+    pub fn save_cursor(&mut self) {
+        self.saved_cursor = Some((self.cursor, self.current_attrs));
+    }
+
+    /// Restore the previously saved cursor position and text attributes.
+    /// Does nothing if no cursor has been saved.
+    pub fn restore_cursor(&mut self) {
+        if let Some((pos, attrs)) = self.saved_cursor {
+            self.set_cursor(pos);
+            self.current_attrs = attrs;
+        }
+    }
+
+    /// Enter the alternate screen.
+    ///
+    /// Saves the current grid cells, cursor, and attributes into `alt_grid`,
+    /// then clears the active display and moves the cursor to the origin.
+    pub fn enter_alt_screen(&mut self) {
+        if self.modes.alt_screen_active {
+            return;
+        }
+        self.modes.alt_screen_active = true;
+        // Save the normal screen by cloning self into alt_grid.
+        // We temporarily swap with a blank grid to avoid cloning large scrollback.
+        let blank_cells: Vec<Vec<Cell>> = (0..self.size.rows)
+            .map(|_| (0..self.size.cols).map(|_| Cell::default()).collect())
+            .collect();
+        let saved_cells = std::mem::replace(&mut self.cells, blank_cells);
+        let saved_cursor = self.cursor;
+        let saved_attrs = self.current_attrs;
+        // Build a minimal saved state: just a Grid snapshot with the previous cells.
+        let mut saved = Grid::new(self.size);
+        saved.cells = saved_cells;
+        saved.cursor = saved_cursor;
+        saved.current_attrs = saved_attrs;
+        self.alt_grid = Some(Box::new(saved));
+        // Reset cursor and attrs for the alt screen.
+        self.cursor = CursorPos::default();
+        self.current_attrs = CellAttrs::default();
+        self.dirty = true;
+    }
+
+    /// Leave the alternate screen and restore the normal screen.
+    pub fn leave_alt_screen(&mut self) {
+        if !self.modes.alt_screen_active {
+            return;
+        }
+        self.modes.alt_screen_active = false;
+        if let Some(saved) = self.alt_grid.take() {
+            self.cells = saved.cells;
+            self.cursor = saved.cursor;
+            self.current_attrs = saved.current_attrs;
+            self.dirty = true;
+        }
+    }
+
+    /// Return the visible rows for the current viewport.
+    ///
+    /// When `scroll_offset` is 0, this is the live screen (`self.cells`).
+    /// When `scroll_offset > 0`, rows from the scrollback buffer are prepended
+    /// and the bottom rows of the screen are cropped correspondingly.
+    pub fn rows_for_viewport(&self) -> Vec<&Vec<Cell>> {
+        let rows = self.size.rows;
+        let offset = self.scroll_offset.min(self.scrollback.len());
+        if offset == 0 {
+            self.cells.iter().collect()
+        } else {
+            // Take `offset` rows from the scrollback (most-recent-first order,
+            // scrollback[0] is the row just above the current screen top).
+            let sb_start = self.scrollback.len().saturating_sub(offset);
+            let mut result: Vec<&Vec<Cell>> = self.scrollback
+                .iter()
+                .skip(sb_start)
+                .collect();
+            // Then prepend scrollback rows in correct order (oldest-to-newest
+            // is bottom of scrollback deque, since push_front makes index 0 newest).
+            // Actually scrollback[0] = most recent (just scrolled off). So for display:
+            //   viewport_row_0 = scrollback[offset-1] (oldest of the visible scrollback rows)
+            //   ...
+            //   viewport_row_{offset-1} = scrollback[0]
+            //   viewport_row_{offset} = screen[0]
+            // Let's rebuild correctly:
+            result.clear();
+            // scrollback[0] = most recent (just above screen top)
+            // For a viewport scrolled `offset` rows up, we want:
+            //   vp[0] = scrollback[offset-1]
+            //   vp[1] = scrollback[offset-2]
+            //   ...
+            //   vp[offset-1] = scrollback[0]
+            //   vp[offset..rows] = cells[0..rows-offset]
+            for i in (0..offset).rev() {
+                result.push(&self.scrollback[i]);
+            }
+            let screen_rows = rows.saturating_sub(offset);
+            for i in 0..screen_rows {
+                result.push(&self.cells[i]);
+            }
+            result
         }
     }
 
@@ -672,5 +818,88 @@ mod tests {
         assert_eq!(g.cursor.row, 3);
         // no scrollback for region scroll
         assert_eq!(g.scrollback_len(), 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // Task 2: TermModes, cursor save/restore, alt screen, viewport
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn term_modes_defaults_correct() {
+        let m = TermModes::new();
+        assert!(m.cursor_visible, "cursor_visible must default to true");
+        assert!(m.auto_wrap, "auto_wrap must default to true");
+        assert!(!m.app_cursor_keys);
+        assert!(!m.bracketed_paste);
+        assert!(!m.alt_screen_active);
+        assert!(!m.app_keypad);
+    }
+
+    #[test]
+    fn save_restore_cursor_round_trips() {
+        let mut g = Grid::new(GridSize::new(10, 20));
+        let attrs = CellAttrs { bold: true, ..CellAttrs::default() };
+        g.set_attrs(attrs);
+        g.set_cursor(CursorPos { row: 3, col: 7 });
+        g.save_cursor();
+        g.set_cursor(CursorPos { row: 0, col: 0 });
+        g.set_attrs(CellAttrs::default());
+        g.restore_cursor();
+        assert_eq!(g.cursor(), CursorPos { row: 3, col: 7 });
+        assert_eq!(g.current_attrs(), attrs);
+    }
+
+    #[test]
+    fn enter_alt_screen_starts_blank() {
+        let mut g = Grid::new(GridSize::new(5, 5));
+        g.cell_mut(2, 2).set_char('X');
+        g.enter_alt_screen();
+        // All cells on alt screen must be blank
+        for row in g.rows() {
+            for cell in row {
+                assert_eq!(cell.c, ' ', "alt screen must start blank");
+            }
+        }
+        assert!(g.modes.alt_screen_active);
+    }
+
+    #[test]
+    fn leave_alt_screen_restores_original_content() {
+        let mut g = Grid::new(GridSize::new(5, 5));
+        g.cell_mut(2, 2).set_char('X');
+        g.enter_alt_screen();
+        g.cell_mut(0, 0).set_char('Z'); // write on alt screen
+        g.leave_alt_screen();
+        // Original content must be restored
+        assert_eq!(g.cell(2, 2).c, 'X', "original content must be restored after leave_alt_screen");
+        assert!(!g.modes.alt_screen_active);
+    }
+
+    #[test]
+    fn rows_for_viewport_at_offset_zero_returns_current_cells() {
+        let mut g = Grid::new(GridSize::new(3, 3));
+        g.cell_mut(0, 0).set_char('A');
+        g.cell_mut(1, 0).set_char('B');
+        g.cell_mut(2, 0).set_char('C');
+        let vp = g.rows_for_viewport();
+        assert_eq!(vp.len(), 3);
+        assert_eq!(vp[0][0].c, 'A');
+        assert_eq!(vp[1][0].c, 'B');
+        assert_eq!(vp[2][0].c, 'C');
+    }
+
+    #[test]
+    fn rows_for_viewport_with_scroll_offset_shows_scrollback_mix() {
+        let mut g = Grid::new(GridSize::new(3, 3));
+        g.cell_mut(0, 0).set_char('A');
+        g.scroll_up(1); // 'A' row → scrollback[0]
+        g.cell_mut(0, 0).set_char('B'); // new row 0
+        // Now scrollback has 1 row ('A'), screen has ['B', blank, blank]
+        g.scroll_offset = 1; // scroll back 1 row
+        let vp = g.rows_for_viewport();
+        // With offset=1, the viewport should start from the scrollback:
+        // row 0 = scrollback[0] ('A'), row 1 = screen[0] ('B'), row 2 = screen[1]
+        assert_eq!(vp[0][0].c, 'A', "viewport row 0 should come from scrollback");
+        assert_eq!(vp[1][0].c, 'B', "viewport row 1 should be screen row 0");
     }
 }

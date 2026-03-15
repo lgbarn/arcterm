@@ -5,5 +5,5 @@ pub mod grid;
 pub mod input;
 
 pub use cell::{Cell, CellAttrs, Color};
-pub use grid::{CursorPos, Grid, GridSize};
+pub use grid::{CursorPos, Grid, GridSize, TermModes};
 pub use input::{InputEvent, KeyCode, Modifiers};
