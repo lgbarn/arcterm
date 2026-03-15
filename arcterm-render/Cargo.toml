@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+gpu-tests = []
+
 [dependencies]
 wgpu.workspace = true
 winit.workspace = true
