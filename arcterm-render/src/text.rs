@@ -193,11 +193,8 @@ fn measure_cell(font_system: &mut FontSystem, font_size: f32, line_height: f32) 
 
     // Walk layout runs to find the advance width of the 'M' glyph.
     let mut cell_width = font_size * 0.6; // fallback: 60% of font size
-    'outer: for run in buf.layout_runs() {
-        for glyph in run.glyphs {
-            cell_width = glyph.w;
-            break 'outer;
-        }
+    if let Some(glyph) = buf.layout_runs().next().and_then(|run| run.glyphs.first()) {
+        cell_width = glyph.w;
     }
 
     CellSize {
@@ -254,7 +251,7 @@ fn indexed_to_rgb(n: u8) -> (u8, u8, u8) {
     }
 
     // 216-color cube: indices 16–231.
-    if n >= 16 && n <= 231 {
+    if (16..=231).contains(&n) {
         let idx = n - 16;
         let b_idx = idx % 6;
         let g_idx = (idx / 6) % 6;

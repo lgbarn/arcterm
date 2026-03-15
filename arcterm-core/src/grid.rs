@@ -170,10 +170,8 @@ impl Grid {
 
         let copy_rows = self.size.rows.min(new_size.rows);
         let copy_cols = self.size.cols.min(new_size.cols);
-        for r in 0..copy_rows {
-            for c in 0..copy_cols {
-                new_cells[r][c] = self.cells[r][c].clone();
-            }
+        for (r, new_row) in new_cells.iter_mut().enumerate().take(copy_rows) {
+            new_row[..copy_cols].clone_from_slice(&self.cells[r][..copy_cols]);
         }
 
         self.cells = new_cells;

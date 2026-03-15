@@ -68,8 +68,7 @@ mod tests {
 
     #[test]
     fn cell_set_char_marks_dirty() {
-        let mut cell = Cell::default();
-        cell.dirty = false; // simulate a clean cell
+        let mut cell = Cell { dirty: false, ..Cell::default() };
         cell.set_char('A');
         assert_eq!(cell.c, 'A');
         assert!(cell.dirty, "set_char must mark the cell dirty");
