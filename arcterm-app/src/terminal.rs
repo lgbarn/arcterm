@@ -52,6 +52,22 @@ impl Terminal {
         &self.grid
     }
 
+    /// Return a mutable reference to the terminal grid.
+    ///
+    /// Used by the application layer to adjust `scroll_offset` and clear
+    /// selections without going through the VT processor.
+    pub fn grid_mut(&mut self) -> &mut Grid {
+        &mut self.grid
+    }
+
+    /// Set the viewport scroll offset directly.
+    ///
+    /// Clamped to `[0, scrollback_len]`.
+    pub fn set_scroll_offset(&mut self, offset: usize) {
+        let max = self.grid.scrollback.len();
+        self.grid.scroll_offset = offset.min(max);
+    }
+
     /// Resize both the PTY and the grid.
     pub fn resize(&mut self, size: GridSize) {
         if let Err(e) = self.pty.resize(size) {
