@@ -85,3 +85,8 @@
   - Kitty graphics: parser, chunk assembler, textured wgpu quads
   - Terminal upgraded to GridState + ApcScanner pipeline
   - Copy button on code blocks
+
+## 2026-03-15 — Phase 5 Planned
+- **Phase:** 5
+- **Status:** planned
+- **Message:** 6 plans across 3 waves. Verdict: PASS. Workspace TOML, auto-save/restore, clap CLI, workspace switcher.
