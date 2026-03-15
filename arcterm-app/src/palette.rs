@@ -376,6 +376,245 @@ impl PaletteState {
 }
 
 // ---------------------------------------------------------------------------
+// WorkspaceSwitcherState
+// ---------------------------------------------------------------------------
+
+/// A single discoverable workspace entry.
+#[derive(Debug, Clone)]
+pub struct WorkspaceEntry {
+    /// Human-readable workspace name (the file stem, e.g. "my-project").
+    pub name: String,
+    /// Full path to the `.toml` file.
+    pub path: std::path::PathBuf,
+}
+
+/// What the switcher's `handle_key` call produced.
+#[derive(Debug, PartialEq)]
+pub enum WorkspaceSwitcherEvent {
+    /// The key was consumed; the caller should request a redraw.
+    Consumed,
+    /// The user dismissed the switcher (Escape or Enter on empty list).
+    Close,
+    /// The user confirmed a selection; open the workspace at this path.
+    Open(std::path::PathBuf),
+}
+
+/// Runtime state of the workspace switcher overlay.
+pub struct WorkspaceSwitcherState {
+    /// Current text in the filter field.
+    pub query: String,
+    /// All discovered workspace entries (immutable after construction).
+    pub entries: Vec<WorkspaceEntry>,
+    /// Indices into `entries` that match the current `query`.
+    pub filtered: Vec<usize>,
+    /// Index into `filtered` that is currently highlighted.
+    pub selected: usize,
+}
+
+impl WorkspaceSwitcherState {
+    /// Create a new [`WorkspaceSwitcherState`] with all entries visible.
+    pub fn new(entries: Vec<WorkspaceEntry>) -> Self {
+        let filtered: Vec<usize> = (0..entries.len()).collect();
+        Self {
+            query: String::new(),
+            entries,
+            filtered,
+            selected: 0,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Input handling
+    // -----------------------------------------------------------------------
+
+    /// Process a winit [`KeyEvent`] and return what happened.
+    pub fn handle_input(&mut self, event: &KeyEvent, modifiers: ModifiersState) -> WorkspaceSwitcherEvent {
+        if event.state != winit::event::ElementState::Pressed {
+            return WorkspaceSwitcherEvent::Consumed;
+        }
+        self.handle_key(&event.logical_key, event.text.as_deref(), modifiers)
+    }
+
+    /// Core key-handling logic, factored out so tests can call it without
+    /// constructing a full [`KeyEvent`].
+    pub fn handle_key(
+        &mut self,
+        logical_key: &Key,
+        text: Option<&str>,
+        _modifiers: ModifiersState,
+    ) -> WorkspaceSwitcherEvent {
+        match logical_key {
+            Key::Named(NamedKey::Escape) => WorkspaceSwitcherEvent::Close,
+
+            Key::Named(NamedKey::Enter) => {
+                if let Some(&idx) = self.filtered.get(self.selected) {
+                    let path = self.entries[idx].path.clone();
+                    WorkspaceSwitcherEvent::Open(path)
+                } else {
+                    WorkspaceSwitcherEvent::Close
+                }
+            }
+
+            Key::Named(NamedKey::ArrowUp) => {
+                if self.selected > 0 {
+                    self.selected -= 1;
+                }
+                WorkspaceSwitcherEvent::Consumed
+            }
+
+            Key::Named(NamedKey::ArrowDown) => {
+                if !self.filtered.is_empty() && self.selected + 1 < self.filtered.len() {
+                    self.selected += 1;
+                }
+                WorkspaceSwitcherEvent::Consumed
+            }
+
+            Key::Named(NamedKey::Backspace) => {
+                self.query.pop();
+                self.update_filter();
+                WorkspaceSwitcherEvent::Consumed
+            }
+
+            Key::Character(s) => {
+                let ch = text.unwrap_or(s.as_str());
+                self.query.push_str(ch);
+                self.update_filter();
+                WorkspaceSwitcherEvent::Consumed
+            }
+
+            _ => WorkspaceSwitcherEvent::Consumed,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Filtering
+    // -----------------------------------------------------------------------
+
+    /// Recompute `filtered` and clamp `selected` to the new list length.
+    pub fn update_filter(&mut self) {
+        let query_lower = self.query.to_lowercase();
+        self.filtered = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.name.to_lowercase().contains(&query_lower))
+            .map(|(i, _)| i)
+            .collect();
+        if self.filtered.is_empty() {
+            self.selected = 0;
+        } else {
+            self.selected = self.selected.min(self.filtered.len() - 1);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Rendering helpers
+    // -----------------------------------------------------------------------
+
+    /// Slice of filtered entry indices visible in the switcher (at most 10).
+    pub fn visible_entries(&self) -> &[usize] {
+        let end = self.filtered.len().min(10);
+        &self.filtered[..end]
+    }
+
+    /// Build the [`PaletteQuad`]s needed to render the switcher overlay.
+    ///
+    /// Quads (back-to-front):
+    /// 1. Full-screen dim overlay.
+    /// 2. Switcher box background (centered).
+    /// 3. Input field background (top of switcher box).
+    /// 4. Selected-row highlight (if something is selected).
+    pub fn render_quads(
+        &self,
+        window_width: f32,
+        window_height: f32,
+        cell_w: f32,
+        cell_h: f32,
+        _scale: f32,
+    ) -> Vec<PaletteQuad> {
+        let mut quads = Vec::new();
+
+        // 1. Full-screen dim.
+        quads.push(PaletteQuad {
+            rect: [0.0, 0.0, window_width, window_height],
+            color: [0.0, 0.0, 0.0, 0.55],
+        });
+
+        // Switcher box dimensions: 60% wide, rows for entries + input + title.
+        let box_w = (window_width * 0.6).max(300.0);
+        let visible_count = self.visible_entries().len() as f32;
+        let box_h = cell_h * (2.0 + visible_count + 1.0);
+        let box_x = (window_width - box_w) / 2.0;
+        let box_y = (window_height - box_h) / 3.0;
+
+        // 2. Switcher box background.
+        quads.push(PaletteQuad {
+            rect: [box_x, box_y, box_w, box_h],
+            color: [0.13, 0.14, 0.18, 0.97],
+        });
+
+        // 3. Input field background.
+        quads.push(PaletteQuad {
+            rect: [box_x, box_y, box_w, cell_h * 1.5],
+            color: [0.18, 0.19, 0.24, 1.0],
+        });
+
+        // 4. Selected-row highlight.
+        if !self.filtered.is_empty() {
+            let row_y = box_y + cell_h * 1.5 + self.selected as f32 * cell_h;
+            quads.push(PaletteQuad {
+                rect: [box_x, row_y, box_w, cell_h],
+                color: [0.30, 0.25, 0.55, 0.85],
+            });
+        }
+
+        let _ = cell_w;
+        quads
+    }
+
+    /// Build the text labels needed to render the switcher.
+    ///
+    /// Returns: title text, input-field text, then each visible entry name.
+    pub fn render_text_content(
+        &self,
+        window_width: f32,
+        window_height: f32,
+        cell_w: f32,
+        cell_h: f32,
+        _scale: f32,
+    ) -> Vec<PaletteText> {
+        let mut items = Vec::new();
+
+        let box_w = (window_width * 0.6).max(300.0);
+        let visible_count = self.visible_entries().len() as f32;
+        let box_h = cell_h * (2.0 + visible_count + 1.0);
+        let box_x = (window_width - box_w) / 2.0;
+        let box_y = (window_height - box_h) / 3.0;
+
+        let padding_x = cell_w;
+
+        // Input field prompt + query.
+        items.push(PaletteText {
+            text: format!("> {}", self.query),
+            x: box_x + padding_x,
+            y: box_y + (cell_h * 1.5 - cell_h) / 2.0,
+        });
+
+        // Workspace entry names — up to 10.
+        for (row, &entry_idx) in self.visible_entries().iter().enumerate() {
+            let entry = &self.entries[entry_idx];
+            items.push(PaletteText {
+                text: entry.name.clone(),
+                x: box_x + padding_x,
+                y: box_y + cell_h * 1.5 + row as f32 * cell_h,
+            });
+        }
+
+        items
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -569,5 +808,118 @@ mod tests {
         let palette = PaletteState::new();
         let texts = palette.render_text_content(1200.0, 800.0, 8.0, 16.0, 1.0);
         assert!(texts.len() <= 11);
+    }
+
+    // -----------------------------------------------------------------------
+    // WorkspaceSwitcherState tests
+    // -----------------------------------------------------------------------
+
+    fn make_entries(names: &[&str]) -> Vec<WorkspaceEntry> {
+        names
+            .iter()
+            .map(|n| WorkspaceEntry {
+                name: n.to_string(),
+                path: std::path::PathBuf::from(format!("/fake/{n}.toml")),
+            })
+            .collect()
+    }
+
+    fn sw_press_named(sw: &mut WorkspaceSwitcherState, named: NamedKey) -> WorkspaceSwitcherEvent {
+        sw.handle_key(&Key::Named(named), None, no_mods())
+    }
+
+    fn sw_press_char(sw: &mut WorkspaceSwitcherState, s: &str) -> WorkspaceSwitcherEvent {
+        sw.handle_key(&Key::Character(SmolStr::new(s)), Some(s), no_mods())
+    }
+
+    #[test]
+    fn workspace_switcher_all_entries_visible_initially() {
+        let sw = WorkspaceSwitcherState::new(make_entries(&["alpha", "beta", "gamma", "delta", "epsilon"]));
+        assert_eq!(sw.filtered.len(), 5);
+    }
+
+    #[test]
+    fn workspace_switcher_filter_narrows_list() {
+        let mut sw = WorkspaceSwitcherState::new(make_entries(&["project-alpha", "proj-beta", "other", "myproj"]));
+        sw_press_char(&mut sw, "p");
+        sw_press_char(&mut sw, "r");
+        sw_press_char(&mut sw, "o");
+        sw_press_char(&mut sw, "j");
+        let names: Vec<&str> = sw.filtered.iter().map(|&i| sw.entries[i].name.as_str()).collect();
+        assert!(names.iter().all(|n| n.contains("proj")), "all filtered entries must contain 'proj': {names:?}");
+        assert!(!names.contains(&"other"), "non-matching entry must be filtered");
+    }
+
+    #[test]
+    fn workspace_switcher_filter_is_case_insensitive() {
+        let mut sw = WorkspaceSwitcherState::new(make_entries(&["project-alpha", "proj-beta", "other"]));
+        sw.query = "PROJ".to_string();
+        sw.update_filter();
+        assert!(sw.filtered.len() >= 2, "PROJ must match proj entries case-insensitively");
+        for &i in &sw.filtered {
+            assert!(sw.entries[i].name.to_lowercase().contains("proj"));
+        }
+    }
+
+    #[test]
+    fn workspace_switcher_arrow_down_moves_selection() {
+        let mut sw = WorkspaceSwitcherState::new(make_entries(&["a", "b", "c"]));
+        assert_eq!(sw.selected, 0);
+        sw_press_named(&mut sw, NamedKey::ArrowDown);
+        assert_eq!(sw.selected, 1);
+    }
+
+    #[test]
+    fn workspace_switcher_arrow_up_clamps_at_zero() {
+        let mut sw = WorkspaceSwitcherState::new(make_entries(&["a", "b", "c"]));
+        assert_eq!(sw.selected, 0);
+        sw_press_named(&mut sw, NamedKey::ArrowUp);
+        assert_eq!(sw.selected, 0, "selection must not go below 0");
+    }
+
+    #[test]
+    fn workspace_switcher_enter_returns_open_with_path() {
+        let entries = make_entries(&["my-workspace", "other"]);
+        let expected_path = entries[0].path.clone();
+        let mut sw = WorkspaceSwitcherState::new(entries);
+        let result = sw_press_named(&mut sw, NamedKey::Enter);
+        assert_eq!(result, WorkspaceSwitcherEvent::Open(expected_path));
+    }
+
+    #[test]
+    fn workspace_switcher_escape_returns_close() {
+        let mut sw = WorkspaceSwitcherState::new(make_entries(&["a", "b"]));
+        let result = sw_press_named(&mut sw, NamedKey::Escape);
+        assert_eq!(result, WorkspaceSwitcherEvent::Close);
+    }
+
+    #[test]
+    fn workspace_switcher_backspace_removes_char_and_refilters() {
+        let mut sw = WorkspaceSwitcherState::new(make_entries(&["abcdef", "abxyz", "zzz"]));
+        sw_press_char(&mut sw, "a");
+        sw_press_char(&mut sw, "b");
+        assert_eq!(sw.query, "ab");
+        sw_press_named(&mut sw, NamedKey::Backspace);
+        assert_eq!(sw.query, "a", "backspace must remove last char");
+        // "a" matches "abcdef" and "abxyz"
+        assert_eq!(sw.filtered.len(), 2);
+    }
+
+    #[test]
+    fn workspace_switcher_empty_filter_shows_all() {
+        let mut sw = WorkspaceSwitcherState::new(make_entries(&["alpha", "beta", "gamma"]));
+        sw.query = "alpha".to_string();
+        sw.update_filter();
+        assert_eq!(sw.filtered.len(), 1);
+        sw.query.clear();
+        sw.update_filter();
+        assert_eq!(sw.filtered.len(), 3, "empty query must show all entries");
+    }
+
+    #[test]
+    fn workspace_switcher_visible_entries_capped_at_ten() {
+        let names: Vec<&str> = vec!["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o"];
+        let sw = WorkspaceSwitcherState::new(make_entries(&names));
+        assert_eq!(sw.visible_entries().len(), 10, "visible_entries must be capped at 10");
     }
 }
