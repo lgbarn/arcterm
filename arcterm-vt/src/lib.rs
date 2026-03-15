@@ -3,7 +3,7 @@
 pub mod handler;
 pub mod processor;
 
-pub use handler::Handler;
+pub use handler::{GridState, Handler, TermModes};
 pub use processor::Processor;
 
 #[cfg(test)]
