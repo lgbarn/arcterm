@@ -8,6 +8,7 @@ use winit::window::Window;
 use crate::gpu::GpuState;
 use crate::palette::RenderPalette;
 use crate::quad::{QuadInstance, QuadRenderer};
+use crate::structured::StructuredBlock;
 use crate::text::{ClipRect, TextRenderer, ansi_color_to_glyphon};
 
 // ---------------------------------------------------------------------------
@@ -20,6 +21,12 @@ pub struct PaneRenderInfo<'a> {
     pub grid: &'a Grid,
     /// Bounding rectangle in physical pixels: [x, y, width, height].
     pub rect: [f32; 4],
+    /// Structured content blocks to overlay on top of the plain grid text.
+    ///
+    /// Each block is rendered as a tinted background quad plus syntax-highlighted
+    /// text positioned at the block's row range within this pane.  Pass an empty
+    /// slice when there are no structured blocks (renders identically to Phase 2).
+    pub structured_blocks: &'a [StructuredBlock],
 }
 
 /// A solid-color overlay quad (used for borders, tab bar backgrounds, etc.).
@@ -96,6 +103,7 @@ impl Renderer {
         let pane = PaneRenderInfo {
             grid,
             rect: [0.0, 0.0, w, h],
+            structured_blocks: &[],
         };
         self.render_multipane(&[pane], &[], &[], scale_factor);
     }
@@ -129,12 +137,12 @@ impl Renderer {
         let mut all_quads: Vec<QuadInstance> = Vec::new();
 
         for pane in panes {
-            let [px, py, _pw, _ph] = pane.rect;
+            let [px, py, pw, ph] = pane.rect;
             let clip = ClipRect {
                 x: px as i32,
                 y: py as i32,
-                width: pane.rect[2] as u32,
-                height: pane.rect[3] as u32,
+                width: pw as u32,
+                height: ph as u32,
             };
 
             let pane_quads = build_quad_instances_at(
@@ -155,6 +163,47 @@ impl Renderer {
                 sf,
                 &self.palette,
             );
+
+            // Overlay structured blocks on top of the plain grid text.
+            let cell_h = self.text.cell_size.height * sf;
+            let cell_w = self.text.cell_size.width * sf;
+            for block in pane.structured_blocks {
+                let block_y = py + block.start_row as f32 * cell_h;
+                let block_h = block.rendered_lines.len() as f32 * cell_h;
+
+                // Skip zero-height blocks.
+                if block_h <= 0.0 {
+                    continue;
+                }
+
+                // Background tint quad covering the block row range.
+                all_quads.push(QuadInstance {
+                    rect: [px, block_y, pw, block_h],
+                    color: [0.12, 0.14, 0.18, 0.92],
+                });
+
+                // For code blocks: add a small "Copy" button quad at the top-right corner.
+                use arcterm_vt::ContentType;
+                if matches!(block.block_type, ContentType::CodeBlock) {
+                    let btn_size = 14.0_f32 * sf;
+                    let btn_x = px + pw - btn_size - 4.0 * sf;
+                    let btn_y = block_y + 2.0 * sf;
+                    all_quads.push(QuadInstance {
+                        rect: [btn_x, btn_y, btn_size, btn_size],
+                        color: [0.8, 0.8, 0.85, 0.9],
+                    });
+                }
+
+                // Shape the block's rich text lines.
+                let _ = cell_w; // may be used for future x-positioning
+                self.text.prepare_structured_block(
+                    &block.rendered_lines,
+                    px,
+                    block_y,
+                    Some(clip),
+                    sf,
+                );
+            }
         }
 
         // Append overlay quads (borders, tab bar backgrounds, etc.).

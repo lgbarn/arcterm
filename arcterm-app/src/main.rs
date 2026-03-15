@@ -910,6 +910,7 @@ impl ApplicationHandler for App {
                     pane_infos.push(PaneRenderInfo {
                         grid,
                         rect: [rect.x, rect.y, rect.width, rect.height],
+                        structured_blocks: &[],
                     });
                 }
 

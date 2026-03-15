@@ -2,12 +2,13 @@
 
 use arcterm_core::{Color as TermColor, Grid};
 use glyphon::{
-    Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
-    TextArea, TextAtlas, TextBounds, TextRenderer as GlyphonTextRenderer, Viewport,
+    Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, Style, SwashCache,
+    TextArea, TextAtlas, TextBounds, TextRenderer as GlyphonTextRenderer, Viewport, Weight,
 };
 use wgpu::MultisampleState;
 
 use crate::palette::RenderPalette;
+use crate::structured::RenderedLine;
 
 /// Cell dimensions measured from the font metrics.
 #[derive(Clone, Copy, Debug)]
@@ -427,6 +428,86 @@ impl TextRenderer {
                 num_rows: 1,
                 scale_factor,
                 default_fg: fg,
+            });
+        }
+    }
+
+    /// Shape a rendered structured block into the multi-pane accumulator.
+    ///
+    /// Each `RenderedLine` in the block becomes one glyphon `Buffer` positioned
+    /// at `(offset_x, offset_y + line_idx * cell_h)`.  Rich-text styling is
+    /// applied using the `StyledSpan` color, bold, and italic attributes.
+    ///
+    /// Call this after `prepare_grid_at` for the same pane and before
+    /// `submit_text_areas`.
+    pub fn prepare_structured_block(
+        &mut self,
+        lines: &[RenderedLine],
+        offset_x: f32,
+        offset_y: f32,
+        clip: Option<ClipRect>,
+        scale_factor: f32,
+    ) {
+        let cell_h = self.cell_size.height;
+
+        for (line_idx, rendered_line) in lines.iter().enumerate() {
+            if rendered_line.spans.is_empty() {
+                continue;
+            }
+
+            let slot_idx = self.pane_slots.len();
+            if slot_idx >= self.pane_buffer_pool.len() {
+                self.pane_buffer_pool.push(Vec::new());
+            }
+            let buf_vec = &mut self.pane_buffer_pool[slot_idx];
+            if buf_vec.is_empty() {
+                buf_vec.push(Buffer::new(
+                    &mut self.font_system,
+                    Metrics::new(self.font_size, self.line_height),
+                ));
+            }
+
+            let buf = &mut buf_vec[0];
+            buf.set_size(
+                &mut self.font_system,
+                Some(8000.0 * scale_factor),
+                Some(cell_h * scale_factor),
+            );
+
+            // Build rich-text spans from StyledSpan attributes.
+            let span_data: Vec<(String, Attrs)> = rendered_line
+                .spans
+                .iter()
+                .map(|span| {
+                    let color = Color::rgb(span.color.0, span.color.1, span.color.2);
+                    let mut attrs = Attrs::new().family(Family::Monospace).color(color);
+                    if span.bold {
+                        attrs = attrs.weight(Weight::BOLD);
+                    }
+                    if span.italic {
+                        attrs = attrs.style(Style::Italic);
+                    }
+                    (span.text.clone(), attrs)
+                })
+                .collect();
+
+            buf.set_rich_text(
+                &mut self.font_system,
+                span_data.iter().map(|(s, a)| (s.as_str(), a.clone())),
+                &Attrs::new().family(Family::Monospace),
+                Shaping::Basic,
+                None,
+            );
+            buf.shape_until_scroll(&mut self.font_system, false);
+
+            let line_y = offset_y + line_idx as f32 * cell_h;
+            self.pane_slots.push(PaneSlot {
+                offset_x,
+                offset_y: line_y,
+                clip,
+                num_rows: 1,
+                scale_factor,
+                default_fg: Color::rgb(200, 200, 200),
             });
         }
     }
