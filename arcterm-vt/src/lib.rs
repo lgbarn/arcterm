@@ -3,7 +3,8 @@
 pub mod handler;
 pub mod processor;
 
-pub use handler::{GridState, Handler, TermModes};
+pub use arcterm_core::TermModes;
+pub use handler::{GridState, Handler};
 pub use processor::Processor;
 
 #[cfg(test)]

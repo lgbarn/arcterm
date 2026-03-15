@@ -7,72 +7,8 @@
 //! `AppState` so that background-tab PTY channels can still be polled.
 //!
 //! [`TabManager`] owns the ordered list of tabs and the active-tab index.
-//!
-//! # Note on layout types
-//!
-//! `PaneId` and `PaneNode` are defined inline here so that this module
-//! compiles independently while `arcterm-app/src/layout.rs` (added by a
-//! parallel plan) is being built.  Once `mod layout;` is wired into
-//! `main.rs`, callers can use `crate::layout::{PaneId, PaneNode}` directly.
 
-// Wave-1 foundation: all public items are consumed by Wave-2 plans.
-#![allow(dead_code)]
-
-// ---------------------------------------------------------------------------
-// Primitive layout types (self-contained; mirrored by crate::layout)
-// ---------------------------------------------------------------------------
-
-/// Unique identifier for a single terminal pane.
-pub type PaneId = u64;
-
-/// A binary split tree describing the pane layout within one tab.
-///
-/// `Leaf(id)` represents a single undivided pane.  `HSplit` / `VSplit`
-/// hold two child sub-trees and a ratio in `0.0..=1.0` indicating how
-/// much of the available space the first child occupies.
-#[derive(Debug, Clone)]
-pub enum PaneNode {
-    /// A single terminal pane.
-    Leaf(PaneId),
-    /// Two panes arranged side-by-side (left | right).
-    HSplit {
-        left: Box<PaneNode>,
-        right: Box<PaneNode>,
-        /// Fraction of total width given to `left` (0.0–1.0).
-        ratio: f32,
-    },
-    /// Two panes stacked vertically (top / bottom).
-    VSplit {
-        top: Box<PaneNode>,
-        bottom: Box<PaneNode>,
-        /// Fraction of total height given to `top` (0.0–1.0).
-        ratio: f32,
-    },
-}
-
-impl PaneNode {
-    /// Create a single-leaf node for `id`.
-    pub fn leaf(id: PaneId) -> Self {
-        PaneNode::Leaf(id)
-    }
-
-    /// Collect all [`PaneId`]s reachable from this node (pre-order).
-    pub fn collect_ids(&self) -> Vec<PaneId> {
-        match self {
-            PaneNode::Leaf(id) => vec![*id],
-            PaneNode::HSplit { left, right, .. } => {
-                let mut ids = left.collect_ids();
-                ids.extend(right.collect_ids());
-                ids
-            }
-            PaneNode::VSplit { top, bottom, .. } => {
-                let mut ids = top.collect_ids();
-                ids.extend(bottom.collect_ids());
-                ids
-            }
-        }
-    }
-}
+use crate::layout::{PaneId, PaneNode};
 
 // ---------------------------------------------------------------------------
 // Tab
@@ -82,6 +18,7 @@ impl PaneNode {
 #[derive(Debug, Clone)]
 pub struct Tab {
     /// User-visible name shown in the tab bar (e.g. "Tab 1").
+    #[allow(dead_code)]
     pub label: String,
     /// The binary split tree for this tab's pane layout.
     pub layout: PaneNode,
@@ -96,7 +33,7 @@ impl Tab {
     fn new(pane_id: PaneId, label: String) -> Self {
         Tab {
             label,
-            layout: PaneNode::leaf(pane_id),
+            layout: PaneNode::Leaf { pane_id },
             focus: pane_id,
             zoomed: None,
         }
@@ -104,7 +41,7 @@ impl Tab {
 
     /// Collect all [`PaneId`]s in this tab's layout tree.
     pub fn pane_ids(&self) -> Vec<PaneId> {
-        self.layout.collect_ids()
+        self.layout.all_pane_ids()
     }
 }
 
@@ -194,6 +131,7 @@ impl TabManager {
     /// Collect all [`PaneId`]s across every tab.
     ///
     /// Useful for polling PTY channels belonging to background tabs.
+    #[allow(dead_code)]
     pub fn all_pane_ids(&self) -> Vec<PaneId> {
         self.tabs.iter().flat_map(|t| t.pane_ids()).collect()
     }
@@ -207,8 +145,12 @@ impl TabManager {
 mod tests {
     use super::*;
 
+    fn p(n: u64) -> PaneId {
+        PaneId(n)
+    }
+
     fn manager() -> TabManager {
-        TabManager::new(1)
+        TabManager::new(p(1))
     }
 
     // ── Initial state ─────────────────────────────────────────────────────────
@@ -229,7 +171,7 @@ mod tests {
     fn active_tab_returns_correct_tab() {
         let mgr = manager();
         let tab = mgr.active_tab();
-        assert_eq!(tab.focus, 1, "focus should be the initial pane id");
+        assert_eq!(tab.focus, p(1), "focus should be the initial pane id");
         assert_eq!(tab.label, "Tab 1");
     }
 
@@ -244,23 +186,23 @@ mod tests {
     #[test]
     fn add_tab_increases_count() {
         let mut mgr = manager();
-        mgr.add_tab(2);
+        mgr.add_tab(p(2));
         assert_eq!(mgr.tab_count(), 2);
     }
 
     #[test]
     fn add_tab_returns_correct_index() {
         let mut mgr = manager();
-        let idx = mgr.add_tab(2);
+        let idx = mgr.add_tab(p(2));
         assert_eq!(idx, 1, "second tab should be at index 1");
-        let idx2 = mgr.add_tab(3);
+        let idx2 = mgr.add_tab(p(3));
         assert_eq!(idx2, 2, "third tab should be at index 2");
     }
 
     #[test]
     fn add_tab_does_not_change_active() {
         let mut mgr = manager();
-        mgr.add_tab(2);
+        mgr.add_tab(p(2));
         assert_eq!(mgr.active, 0, "add_tab must not change active index");
     }
 
@@ -269,12 +211,12 @@ mod tests {
     #[test]
     fn close_tab_removes_tab_and_returns_ids() {
         let mut mgr = manager();
-        mgr.add_tab(2);
+        mgr.add_tab(p(2));
         assert_eq!(mgr.tab_count(), 2);
 
         let ids = mgr.close_tab(1);
         assert_eq!(mgr.tab_count(), 1, "tab count must drop to 1");
-        assert_eq!(ids, vec![2], "returned ids should be the closed tab's pane");
+        assert_eq!(ids, vec![p(2)], "returned ids should be the closed tab's pane");
     }
 
     #[test]
@@ -288,7 +230,7 @@ mod tests {
     #[test]
     fn close_tab_out_of_range_is_noop() {
         let mut mgr = manager();
-        mgr.add_tab(2);
+        mgr.add_tab(p(2));
         let ids = mgr.close_tab(99);
         assert!(ids.is_empty());
         assert_eq!(mgr.tab_count(), 2);
@@ -297,8 +239,8 @@ mod tests {
     #[test]
     fn close_tab_adjusts_active_when_active_closed() {
         let mut mgr = manager();
-        mgr.add_tab(2);
-        mgr.add_tab(3);
+        mgr.add_tab(p(2));
+        mgr.add_tab(p(3));
         // Switch to last tab (index 2) then close it.
         mgr.switch_to(2);
         assert_eq!(mgr.active, 2);
@@ -309,8 +251,8 @@ mod tests {
     #[test]
     fn close_tab_adjusts_active_when_lower_tab_removed() {
         let mut mgr = manager();
-        mgr.add_tab(2);
-        mgr.add_tab(3);
+        mgr.add_tab(p(2));
+        mgr.add_tab(p(3));
         // Active is 0; remove tab at index 0.
         mgr.close_tab(0);
         // active was 0, which is now the old tab 1 — active should be 0 (clamped)
@@ -322,7 +264,7 @@ mod tests {
     #[test]
     fn switch_to_changes_active() {
         let mut mgr = manager();
-        mgr.add_tab(2);
+        mgr.add_tab(p(2));
         mgr.switch_to(1);
         assert_eq!(mgr.active, 1);
     }
@@ -330,7 +272,7 @@ mod tests {
     #[test]
     fn switch_to_clamps_to_valid_range() {
         let mut mgr = manager();
-        mgr.add_tab(2);
+        mgr.add_tab(p(2));
         // tab_count = 2, valid indices are 0..=1
         mgr.switch_to(100);
         assert_eq!(mgr.active, 1, "out-of-range index clamps to last tab");
@@ -348,17 +290,17 @@ mod tests {
     #[test]
     fn all_pane_ids_collects_from_all_tabs() {
         let mut mgr = manager();
-        mgr.add_tab(2);
-        mgr.add_tab(3);
+        mgr.add_tab(p(2));
+        mgr.add_tab(p(3));
         let mut ids = mgr.all_pane_ids();
-        ids.sort_unstable();
-        assert_eq!(ids, vec![1, 2, 3]);
+        ids.sort_unstable_by_key(|id| id.0);
+        assert_eq!(ids, vec![p(1), p(2), p(3)]);
     }
 
     #[test]
     fn all_pane_ids_single_tab() {
         let mgr = manager();
-        assert_eq!(mgr.all_pane_ids(), vec![1]);
+        assert_eq!(mgr.all_pane_ids(), vec![p(1)]);
     }
 
     // ── pane_ids helper on Tab ─────────────────────────────────────────────────
@@ -367,6 +309,6 @@ mod tests {
     fn tab_pane_ids_returns_leaf_id() {
         let mgr = manager();
         let ids = mgr.active_tab().pane_ids();
-        assert_eq!(ids, vec![1]);
+        assert_eq!(ids, vec![p(1)]);
     }
 }

@@ -159,13 +159,12 @@ impl AppState {
 
     /// The `PaneId` of the focused pane in the active tab.
     fn focused_pane(&self) -> PaneId {
-        // tab::PaneId = u64; layout::PaneId wraps u64.
-        PaneId(self.tab_manager.active_tab().focus)
+        self.tab_manager.active_tab().focus
     }
 
     /// Set the focused pane on the active tab.
     fn set_focused_pane(&mut self, id: PaneId) {
-        self.tab_manager.active_tab_mut().focus = id.0;
+        self.tab_manager.active_tab_mut().focus = id;
     }
 
     /// The layout tree for the active tab.
@@ -205,7 +204,7 @@ impl AppState {
         let tab = self.tab_manager.active_tab();
 
         if let Some(zoomed_id) = tab.zoomed {
-            self.active_layout().compute_zoomed_rect(PaneId(zoomed_id), available)
+            self.active_layout().compute_zoomed_rect(zoomed_id, available)
         } else {
             self.active_layout().compute_rects(available, BORDER_PX)
         }
@@ -307,8 +306,7 @@ impl ApplicationHandler for App {
         let mut pty_channels = HashMap::new();
         pty_channels.insert(first_id, pty_rx);
 
-        // TabManager uses tab::PaneId = u64; pass the raw inner value.
-        let tab_manager = TabManager::new(first_id.0);
+        let tab_manager = TabManager::new(first_id);
         // Matching layout tree for the first (only) tab.
         let tab_layouts = vec![PaneNode::Leaf { pane_id: first_id }];
 
@@ -1211,7 +1209,7 @@ impl ApplicationHandler for App {
                                     state.tab_layouts.remove(active);
                                 }
                                 for id in removed_ids {
-                                    let lid = PaneId(id);
+                                    let lid = id;
                                     state.panes.remove(&lid);
                                     state.pty_channels.remove(&lid);
                                     state.nvim_states.remove(&lid);
@@ -1222,7 +1220,7 @@ impl ApplicationHandler for App {
                                     return;
                                 }
                                 // Focus the first pane of the now-active tab.
-                                let new_focus = PaneId(state.tab_manager.active_tab().focus);
+                                let new_focus = state.tab_manager.active_tab().focus;
                                 state.set_focused_pane(new_focus);
                             } else {
                                 // Multiple panes: promote sibling.
@@ -1249,10 +1247,10 @@ impl ApplicationHandler for App {
                         KeyAction::ToggleZoom => {
                             let focused = focused_id;
                             let tab = state.tab_manager.active_tab_mut();
-                            if tab.zoomed == Some(focused.0) {
+                            if tab.zoomed == Some(focused) {
                                 tab.zoomed = None;
                             } else {
-                                tab.zoomed = Some(focused.0);
+                                tab.zoomed = Some(focused);
                             }
                             state.window.request_redraw();
                         }
@@ -1277,7 +1275,7 @@ impl ApplicationHandler for App {
                                 state.window.scale_factor(),
                             );
                             let new_id = state.spawn_pane(full_size);
-                            let tab_idx = state.tab_manager.add_tab(new_id.0);
+                            let tab_idx = state.tab_manager.add_tab(new_id);
                             // Add the layout tree for the new tab.
                             state.tab_layouts.push(PaneNode::Leaf { pane_id: new_id });
                             state.tab_manager.switch_to(tab_idx);
@@ -1290,7 +1288,7 @@ impl ApplicationHandler for App {
                             // n is 1-indexed.
                             state.tab_manager.switch_to(n.saturating_sub(1));
                             // Focus the active pane of the newly-switched-to tab.
-                            let new_focus = PaneId(state.tab_manager.active_tab().focus);
+                            let new_focus = state.tab_manager.active_tab().focus;
                             state.set_focused_pane(new_focus);
                             state.selection.clear();
                             state.window.request_redraw();
@@ -1305,12 +1303,12 @@ impl ApplicationHandler for App {
                                     state.tab_layouts.remove(active);
                                 }
                                 for id in removed_ids {
-                                    let lid = PaneId(id);
+                                    let lid = id;
                                     state.panes.remove(&lid);
                                     state.pty_channels.remove(&lid);
                                 }
                                 // Focus active tab's pane.
-                                let new_focus = PaneId(state.tab_manager.active_tab().focus);
+                                let new_focus = state.tab_manager.active_tab().focus;
                                 state.set_focused_pane(new_focus);
                                 state.selection.clear();
                                 state.window.request_redraw();
@@ -1390,7 +1388,7 @@ fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action
                     state.tab_layouts.remove(active);
                 }
                 for id in removed_ids {
-                    let lid = PaneId(id);
+                    let lid = id;
                     state.panes.remove(&lid);
                     state.pty_channels.remove(&lid);
                 }
@@ -1398,7 +1396,7 @@ fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action
                     event_loop.exit();
                     return;
                 }
-                let new_focus = PaneId(state.tab_manager.active_tab().focus);
+                let new_focus = state.tab_manager.active_tab().focus;
                 state.set_focused_pane(new_focus);
             } else {
                 let replacement = state.tab_layouts[active].close(focused_id);
@@ -1417,10 +1415,10 @@ fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action
 
         KeyAction::ToggleZoom => {
             let tab = state.tab_manager.active_tab_mut();
-            if tab.zoomed == Some(focused_id.0) {
+            if tab.zoomed == Some(focused_id) {
                 tab.zoomed = None;
             } else {
-                tab.zoomed = Some(focused_id.0);
+                tab.zoomed = Some(focused_id);
             }
         }
 
@@ -1432,7 +1430,7 @@ fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action
                 state.window.scale_factor(),
             );
             let new_id = state.spawn_pane(full_size);
-            let tab_idx = state.tab_manager.add_tab(new_id.0);
+            let tab_idx = state.tab_manager.add_tab(new_id);
             state.tab_layouts.push(PaneNode::Leaf { pane_id: new_id });
             state.tab_manager.switch_to(tab_idx);
             state.set_focused_pane(new_id);
@@ -1447,11 +1445,11 @@ fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action
                     state.tab_layouts.remove(active);
                 }
                 for id in removed_ids {
-                    let lid = PaneId(id);
+                    let lid = id;
                     state.panes.remove(&lid);
                     state.pty_channels.remove(&lid);
                 }
-                let new_focus = PaneId(state.tab_manager.active_tab().focus);
+                let new_focus = state.tab_manager.active_tab().focus;
                 state.set_focused_pane(new_focus);
                 state.selection.clear();
             }

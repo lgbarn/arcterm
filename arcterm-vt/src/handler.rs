@@ -1,6 +1,6 @@
 //! Handler trait for semantic terminal operations, plus the Grid implementation.
 
-use arcterm_core::{Cell, CursorPos, Grid};
+use arcterm_core::{Cell, CursorPos, Grid, TermModes};
 
 /// Semantic terminal operations. All methods have default no-op implementations
 /// so implementations only override what they need.
@@ -138,46 +138,6 @@ pub trait Handler {
 
     /// Return to numeric keypad mode (ESC >).
     fn set_keypad_numeric_mode(&mut self) {}
-}
-
-// ---------------------------------------------------------------------------
-// TermModes — tracks active terminal mode flags
-// ---------------------------------------------------------------------------
-
-/// Active terminal mode flags stored on the Grid.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct TermModes {
-    pub cursor_visible: bool,
-    pub auto_wrap: bool,
-    pub app_cursor_keys: bool,
-    pub alt_screen: bool,
-    pub bracketed_paste: bool,
-    pub app_keypad: bool,
-    /// Mode 1000 — report mouse button press/release events.
-    pub mouse_report_click: bool,
-    /// Mode 1002 — report mouse button events and motion while a button is held.
-    pub mouse_report_button: bool,
-    /// Mode 1003 — report all mouse motion events.
-    pub mouse_report_any: bool,
-    /// Mode 1006 — use SGR (1006) extended mouse coordinate encoding.
-    pub mouse_sgr_ext: bool,
-}
-
-impl TermModes {
-    pub fn new() -> Self {
-        Self {
-            cursor_visible: true,
-            auto_wrap: true,
-            app_cursor_keys: false,
-            alt_screen: false,
-            bracketed_paste: false,
-            app_keypad: false,
-            mouse_report_click: false,
-            mouse_report_button: false,
-            mouse_report_any: false,
-            mouse_sgr_ext: false,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

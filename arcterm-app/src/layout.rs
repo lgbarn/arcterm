@@ -1,9 +1,6 @@
 //! Pane tree layout engine — core types, layout computation, navigation,
 //! mutation, zoom, and border quad generation.
 
-// Wave-1 foundation: all items are used by Wave-2 plans.
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 

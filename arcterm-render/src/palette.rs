@@ -5,6 +5,41 @@
 //! kept separate from the app-level `ColorPalette` (which lives in
 //! `arcterm-app`) so the render crate does not need to depend on the app crate.
 
+// ---------------------------------------------------------------------------
+// Pre-computed xterm-256 lookup table
+// ---------------------------------------------------------------------------
+
+/// O(1) lookup table for xterm-256 colour indices.
+///
+/// Indices 0–15 are the ANSI colours — stored as `(0, 0, 0)` here because
+/// the actual values are palette-specific and looked up from `RenderPalette::ansi`.
+/// Indices 16–231 map to the 216-colour cube; 232–255 to the greyscale ramp.
+pub(crate) const XTERM_256: [(u8, u8, u8); 256] = {
+    let mut table = [(0u8, 0u8, 0u8); 256];
+    // Indices 0–15: left as (0, 0, 0); caller falls back to self.ansi[].
+    // Indices 16–231: 6×6×6 colour cube.
+    let mut i = 16usize;
+    while i <= 231 {
+        let idx = (i - 16) as u8;
+        let b_idx = idx % 6;
+        let g_idx = (idx / 6) % 6;
+        let r_idx = idx / 36;
+        let r = if r_idx == 0 { 0u8 } else { 55 + r_idx * 40 };
+        let g = if g_idx == 0 { 0u8 } else { 55 + g_idx * 40 };
+        let b = if b_idx == 0 { 0u8 } else { 55 + b_idx * 40 };
+        table[i] = (r, g, b);
+        i += 1;
+    }
+    // Indices 232–255: greyscale ramp.
+    let mut i = 232usize;
+    while i < 256 {
+        let level = (i as u8 - 232) * 10 + 8;
+        table[i] = (level, level, level);
+        i += 1;
+    }
+    table
+};
+
 /// Complete colour palette for a single terminal frame.
 ///
 /// All colours are `(r, g, b)` tuples of `u8` values (0–255).
@@ -87,23 +122,12 @@ impl RenderPalette {
     }
 
     /// Convert an xterm-256 index to `(r, g, b)`, using the palette's ANSI
-    /// table for indices 0–15.
+    /// table for indices 0–15 and the pre-computed [`XTERM_256`] table for 16–255.
     pub fn indexed_rgb(&self, n: u8) -> (u8, u8, u8) {
         if (n as usize) < self.ansi.len() {
             return self.ansi[n as usize];
         }
-        // 216-colour cube: 16–231.
-        if (16..=231).contains(&n) {
-            let idx = n - 16;
-            let b_idx = idx % 6;
-            let g_idx = (idx / 6) % 6;
-            let r_idx = idx / 36;
-            let cube = |i: u8| if i == 0 { 0u8 } else { 55 + i * 40 };
-            return (cube(r_idx), cube(g_idx), cube(b_idx));
-        }
-        // Greyscale ramp: 232–255.
-        let level = (n - 232) * 10 + 8;
-        (level, level, level)
+        XTERM_256[n as usize]
     }
 }
 

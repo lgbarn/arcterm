@@ -1,4 +1,3 @@
-#![allow(dead_code)] // Wired in Wave 3 (Plan 3.1)
 //! Leader-key state machine and pane-navigation keybindings.
 //!
 //! # Design
@@ -116,6 +115,7 @@ impl KeymapHandler {
     }
 
     /// Returns `true` when the state machine is currently in `LeaderPending`.
+    #[allow(dead_code)]
     pub fn is_leader_pending(&self) -> bool {
         matches!(self.state, KeymapState::LeaderPending { .. })
     }

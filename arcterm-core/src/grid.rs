@@ -5,20 +5,23 @@ use std::collections::VecDeque;
 use crate::cell::{Cell, CellAttrs, Color};
 
 /// Active terminal mode flags.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct TermModes {
     pub cursor_visible: bool,
     pub auto_wrap: bool,
     pub app_cursor_keys: bool,
     pub bracketed_paste: bool,
-    pub alt_screen_active: bool,
+    /// Whether the alternate screen is currently active.
+    pub alt_screen: bool,
     pub app_keypad: bool,
-}
-
-impl Default for TermModes {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// Mode 1000 — report mouse button press/release events.
+    pub mouse_report_click: bool,
+    /// Mode 1002 — report mouse button events and motion while a button is held.
+    pub mouse_report_button: bool,
+    /// Mode 1003 — report all mouse motion events.
+    pub mouse_report_any: bool,
+    /// Mode 1006 — use SGR (1006) extended mouse coordinate encoding.
+    pub mouse_sgr_ext: bool,
 }
 
 impl TermModes {
@@ -29,8 +32,12 @@ impl TermModes {
             auto_wrap: true,
             app_cursor_keys: false,
             bracketed_paste: false,
-            alt_screen_active: false,
+            alt_screen: false,
             app_keypad: false,
+            mouse_report_click: false,
+            mouse_report_button: false,
+            mouse_report_any: false,
+            mouse_sgr_ext: false,
         }
     }
 }
@@ -173,7 +180,7 @@ impl Grid {
             if n == 0 { return; }
             for _ in 0..n {
                 self.cells.remove(top);
-                self.cells.insert(bottom, (0..self.size.cols).map(|_| Cell::default()).collect());
+                self.cells.insert(bottom, self.blank_row());
             }
             self.dirty = true;
         } else {
@@ -182,7 +189,7 @@ impl Grid {
             if n == 0 { return; }
             let drained: Vec<Vec<Cell>> = self.cells.drain(0..n).collect();
             for _ in 0..n {
-                self.cells.push((0..self.size.cols).map(|_| Cell::default()).collect());
+                self.cells.push(self.blank_row());
             }
             // Prepend drained rows to scrollback (most-recent first).
             for row in drained.into_iter().rev() {
@@ -208,7 +215,7 @@ impl Grid {
             for _ in 0..n {
                 // Remove the last row of the region, insert a blank at the top.
                 self.cells.remove(bottom);
-                self.cells.insert(top, (0..self.size.cols).map(|_| Cell::default()).collect());
+                self.cells.insert(top, self.blank_row());
             }
             self.dirty = true;
         } else {
@@ -216,7 +223,7 @@ impl Grid {
             if n == 0 { return; }
             self.cells.truncate(self.size.rows - n);
             for _ in 0..n {
-                self.cells.insert(0, (0..self.size.cols).map(|_| Cell::default()).collect());
+                self.cells.insert(0, self.blank_row());
             }
             self.dirty = true;
         }
@@ -272,14 +279,14 @@ impl Grid {
     /// Saves the current grid cells, cursor, and attributes into `alt_grid`,
     /// then clears the active display and moves the cursor to the origin.
     pub fn enter_alt_screen(&mut self) {
-        if self.modes.alt_screen_active {
+        if self.modes.alt_screen {
             return;
         }
-        self.modes.alt_screen_active = true;
+        self.modes.alt_screen = true;
         // Save the normal screen by cloning self into alt_grid.
         // We temporarily swap with a blank grid to avoid cloning large scrollback.
         let blank_cells: Vec<Vec<Cell>> = (0..self.size.rows)
-            .map(|_| (0..self.size.cols).map(|_| Cell::default()).collect())
+            .map(|_| self.blank_row())
             .collect();
         let saved_cells = std::mem::replace(&mut self.cells, blank_cells);
         let saved_cursor = self.cursor;
@@ -298,10 +305,10 @@ impl Grid {
 
     /// Leave the alternate screen and restore the normal screen.
     pub fn leave_alt_screen(&mut self) {
-        if !self.modes.alt_screen_active {
+        if !self.modes.alt_screen {
             return;
         }
-        self.modes.alt_screen_active = false;
+        self.modes.alt_screen = false;
         if let Some(saved) = self.alt_grid.take() {
             self.cells = saved.cells;
             self.cursor = saved.cursor;
@@ -379,7 +386,7 @@ impl Grid {
         for _ in 0..n {
             // Remove last row of the affected region, insert blank at cur_row.
             self.cells.remove(bottom);
-            self.cells.insert(cur_row, (0..self.size.cols).map(|_| Cell::default()).collect());
+            self.cells.insert(cur_row, self.blank_row());
         }
         self.dirty = true;
     }
@@ -403,7 +410,7 @@ impl Grid {
 
         for _ in 0..n {
             self.cells.remove(cur_row);
-            self.cells.insert(bottom, (0..self.size.cols).map(|_| Cell::default()).collect());
+            self.cells.insert(bottom, self.blank_row());
         }
         self.dirty = true;
     }
@@ -548,6 +555,11 @@ impl Grid {
     /// Return all rows as a slice.
     pub fn rows(&self) -> &[Vec<Cell>] {
         &self.cells
+    }
+
+    /// Allocate a blank row of `self.size.cols` default cells.
+    fn blank_row(&self) -> Vec<Cell> {
+        vec![Cell::default(); self.size.cols]
     }
 
     // -------------------------------------------------------------------------
@@ -939,7 +951,7 @@ mod tests {
         assert!(m.auto_wrap, "auto_wrap must default to true");
         assert!(!m.app_cursor_keys);
         assert!(!m.bracketed_paste);
-        assert!(!m.alt_screen_active);
+        assert!(!m.alt_screen);
         assert!(!m.app_keypad);
     }
 
@@ -968,7 +980,7 @@ mod tests {
                 assert_eq!(cell.c, ' ', "alt screen must start blank");
             }
         }
-        assert!(g.modes.alt_screen_active);
+        assert!(g.modes.alt_screen);
     }
 
     #[test]
@@ -980,7 +992,7 @@ mod tests {
         g.leave_alt_screen();
         // Original content must be restored
         assert_eq!(g.cell(2, 2).c, 'X', "original content must be restored after leave_alt_screen");
-        assert!(!g.modes.alt_screen_active);
+        assert!(!g.modes.alt_screen);
     }
 
     #[test]
