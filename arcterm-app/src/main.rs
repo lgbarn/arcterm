@@ -38,7 +38,7 @@ use arcterm_core::{Cell, CellAttrs, Color, CursorPos, GridSize};
 use arcterm_render::{HighlightEngine, OverlayQuad, PaneRenderInfo, RenderPalette, Renderer, StructuredBlock};
 use arcterm_vt::ContentType;
 use keymap::{KeyAction, KeymapHandler};
-use palette::PaletteState;
+use palette::{PaletteState, WorkspaceSwitcherState};
 use layout::{Axis, Direction, PaneId, PaneNode, PixelRect};
 use selection::{generate_selection_quads, pixel_to_cell, Clipboard, Selection, SelectionMode, SelectionQuad};
 use tab::TabManager;
@@ -304,6 +304,9 @@ struct AppState {
     /// Command palette state; `None` when the palette is closed.
     palette_mode: Option<PaletteState>,
 
+    /// Workspace switcher state; `None` when the switcher is closed.
+    workspace_switcher: Option<WorkspaceSwitcherState>,
+
     // ---- Neovim integration ----
     /// Cached Neovim detection state for each pane.  Updated lazily on
     /// `NavigatePane` events with a 2-second TTL to avoid syscall spam.
@@ -491,6 +494,112 @@ impl AppState {
         }
         id
     }
+
+    // -----------------------------------------------------------------------
+    // Workspace restore
+    // -----------------------------------------------------------------------
+
+    /// Close all current panes and restore pane layout from a [`workspace::WorkspaceFile`].
+    ///
+    /// Reuses the same restore logic as the `resumed()` workspace startup path.
+    /// Called by the workspace switcher when the user presses Enter on an entry.
+    fn restore_workspace(&mut self, ws: &workspace::WorkspaceFile) {
+        // Determine initial grid size from current window dimensions.
+        let win_size = self.window.inner_size();
+        let initial_size = self.renderer.grid_size_for_window(
+            win_size.width,
+            win_size.height,
+            self.window.scale_factor(),
+        );
+
+        // Shut down all current PTY channels and remove pane state.
+        let all_ids: Vec<PaneId> = self.panes.keys().copied().collect();
+        for id in &all_ids {
+            self.panes.remove(id);
+            self.pty_channels.remove(id);
+            self.auto_detectors.remove(id);
+            self.structured_blocks.remove(id);
+            self.nvim_states.remove(id);
+        }
+
+        // Restore the layout from the workspace file.
+        let leaf_count = count_leaves(&ws.layout);
+        if leaf_count == 0 {
+            log::warn!(
+                "Workspace '{}' has no panes; spawning a fresh pane",
+                ws.workspace.name
+            );
+            let id = self.spawn_pane(initial_size);
+            let tab_idx = 0;
+            if tab_idx < self.tab_layouts.len() {
+                self.tab_layouts[tab_idx] = PaneNode::Leaf { pane_id: id };
+            } else {
+                self.tab_layouts.push(PaneNode::Leaf { pane_id: id });
+            }
+            let tab = self.tab_manager.active_tab_mut();
+            tab.focus = id;
+            return;
+        }
+
+        let (pane_tree, leaf_metadata) = ws.layout.to_pane_tree();
+        let leaf_ids = pane_tree.all_pane_ids();
+
+        for (id, meta) in leaf_ids.iter().zip(leaf_metadata.iter()) {
+            let cwd: Option<std::path::PathBuf> =
+                meta.directory.as_deref().map(std::path::PathBuf::from);
+            match Terminal::new(initial_size, self.config.shell.clone(), cwd.as_deref()) {
+                Ok((mut terminal, rx)) => {
+                    terminal.grid_mut().max_scrollback = self.config.scrollback_lines;
+                    // Inject workspace-level environment variables.
+                    for (key, val) in &ws.environment {
+                        terminal.write_input(format!("export {key}={val}\n").as_bytes());
+                    }
+                    // Inject per-pane environment overrides.
+                    if let Some(env) = &meta.env {
+                        for (key, val) in env {
+                            terminal.write_input(format!("export {key}={val}\n").as_bytes());
+                        }
+                    }
+                    // Replay saved command.
+                    if let Some(cmd) = &meta.command {
+                        terminal.write_input(format!("{cmd}\n").as_bytes());
+                    }
+                    self.panes.insert(*id, terminal);
+                    self.pty_channels.insert(*id, rx);
+                }
+                Err(e) => {
+                    log::error!("Failed to spawn restored pane {:?}: {e}", id);
+                }
+            }
+            self.auto_detectors.insert(*id, AutoDetector::new());
+            self.structured_blocks.insert(*id, Vec::new());
+        }
+
+        let focus_id = leaf_ids.first().copied().unwrap_or_else(PaneId::next);
+
+        // Replace the active tab layout; reset other tabs.
+        let active = self.tab_manager.active;
+        if active < self.tab_layouts.len() {
+            self.tab_layouts[active] = pane_tree;
+        } else {
+            self.tab_layouts.push(pane_tree);
+        }
+
+        let tab = self.tab_manager.active_tab_mut();
+        tab.focus = focus_id;
+        tab.zoomed = None;
+
+        self.selection.clear();
+        self.shell_exited = false;
+
+        log::info!(
+            "Restored workspace '{}' with {} pane(s)",
+            ws.workspace.name,
+            leaf_count
+        );
+
+        self.window.set_title(&format!("Arcterm — {}", ws.workspace.name));
+    }
 }
 
 struct App {
@@ -672,6 +781,7 @@ impl ApplicationHandler for App {
             fps_last_log: Instant::now(),
             fps_frame_count: 0,
             palette_mode: None,
+            workspace_switcher: None,
             nvim_states: HashMap::new(),
         });
     }
@@ -1424,6 +1534,30 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                // Build workspace switcher overlay quads and text when the switcher is open.
+                if let Some(sw) = &state.workspace_switcher {
+                    let win_w = state.renderer.gpu.surface_config.width as f32;
+                    let win_h = state.renderer.gpu.surface_config.height as f32;
+                    let cell_w = state.renderer.text.cell_size.width;
+                    let cell_h = state.renderer.text.cell_size.height;
+                    let sw_sf = sf;
+
+                    // Quads.
+                    let sw_quads = sw.render_quads(win_w, win_h, cell_w, cell_h, sw_sf);
+                    for pq in sw_quads {
+                        overlay_quads.push(OverlayQuad {
+                            rect: pq.rect,
+                            color: pq.color,
+                        });
+                    }
+
+                    // Text.
+                    let sw_texts = sw.render_text_content(win_w, win_h, cell_w, cell_h, sw_sf);
+                    for pt in sw_texts {
+                        palette_text.push((pt.text, pt.x, pt.y));
+                    }
+                }
+
                 state.renderer.render_multipane(&pane_infos, &overlay_quads, &palette_text, scale);
 
                 #[cfg(feature = "latency-trace")]
@@ -1496,6 +1630,37 @@ impl ApplicationHandler for App {
                                 _ => {}
                             }
                         }
+                    }
+
+                    // Workspace switcher is modal — route ALL key input through it when open.
+                    if let Some(switcher) = &mut state.workspace_switcher {
+                        use palette::WorkspaceSwitcherEvent;
+                        let sw_event = switcher.handle_input(&event, self.modifiers);
+                        match sw_event {
+                            WorkspaceSwitcherEvent::Close => {
+                                state.workspace_switcher = None;
+                                state.window.request_redraw();
+                            }
+                            WorkspaceSwitcherEvent::Open(path) => {
+                                state.workspace_switcher = None;
+                                match workspace::WorkspaceFile::load_from_file(&path) {
+                                    Ok(ws) => {
+                                        state.restore_workspace(&ws);
+                                    }
+                                    Err(e) => {
+                                        log::error!(
+                                            "Workspace switcher: failed to load {:?}: {e}",
+                                            path
+                                        );
+                                    }
+                                }
+                                state.window.request_redraw();
+                            }
+                            WorkspaceSwitcherEvent::Consumed => {
+                                state.window.request_redraw();
+                            }
+                        }
+                        return;
                     }
 
                     // Palette is modal — route ALL key input through it when open.
@@ -1809,9 +1974,10 @@ impl ApplicationHandler for App {
                         }
 
                         KeyAction::OpenWorkspaceSwitcher => {
-                            // Workspace switcher UI is wired in PLAN-3.1.
-                            // For now, log the intent so the binding is observable.
-                            log::info!("Workspace switcher: open (stub — PLAN-3.1)");
+                            let entries = workspace::discover_workspaces();
+                            log::info!("Workspace switcher: open ({} entries)", entries.len());
+                            state.workspace_switcher = Some(WorkspaceSwitcherState::new(entries));
+                            state.window.request_redraw();
                         }
 
                         KeyAction::SaveWorkspace => {
