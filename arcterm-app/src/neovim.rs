@@ -272,7 +272,7 @@ impl NvimRpcClient {
 
         let mut buf = Vec::new();
         rmpv::encode::write_value(&mut buf, &request)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| io::Error::other(e.to_string()))?;
 
         self.stream.write_all(&buf)?;
         self.stream.flush()?;
@@ -293,10 +293,7 @@ impl NvimRpcClient {
 
         // Check error field (arr[2]).
         if !matches!(&arr[2], Value::Nil) {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("nvim RPC error: {:?}", arr[2]),
-            ));
+            return Err(io::Error::other(format!("nvim RPC error: {:?}", arr[2])));
         }
 
         Ok(arr[3].clone())
@@ -436,6 +433,7 @@ pub fn has_nvim_neighbor(client: &mut NvimRpcClient, direction: Direction) -> io
 ///
 /// `positions` is a slice of `(row, col)` for each window.
 /// `current_idx` is the index of the current window in the slice.
+#[cfg(test)]
 pub fn has_neighbor_in_positions(
     positions: &[(i64, i64)],
     current_idx: usize,

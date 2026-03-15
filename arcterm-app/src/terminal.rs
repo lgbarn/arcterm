@@ -96,4 +96,9 @@ impl Terminal {
     pub fn is_alive(&mut self) -> bool {
         self.pty.is_alive()
     }
+
+    /// Returns the PID of the child shell process, if available.
+    pub fn child_pid(&self) -> Option<u32> {
+        self.pty.child_pid()
+    }
 }
