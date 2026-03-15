@@ -356,3 +356,160 @@ mod handler_tests {
         assert_eq!(g.cursor().col, 8);
     }
 }
+
+#[cfg(test)]
+mod processor_tests {
+    use arcterm_core::{Color, CursorPos, Grid, GridSize};
+
+    use crate::{Handler, Processor};
+
+    fn make_grid(rows: usize, cols: usize) -> Grid {
+        Grid::new(GridSize::new(rows, cols))
+    }
+
+    fn feed(grid: &mut Grid, bytes: &[u8]) {
+        let mut proc = Processor::new();
+        proc.advance(grid, bytes);
+    }
+
+    // -------------------------------------------------------------------------
+    // Plain text
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn feed_hello_writes_chars_at_row0() {
+        let mut g = make_grid(24, 80);
+        feed(&mut g, b"Hello");
+        assert_eq!(g.cell(0, 0).c, 'H');
+        assert_eq!(g.cell(0, 1).c, 'e');
+        assert_eq!(g.cell(0, 2).c, 'l');
+        assert_eq!(g.cell(0, 3).c, 'l');
+        assert_eq!(g.cell(0, 4).c, 'o');
+        assert_eq!(g.cursor(), CursorPos { row: 0, col: 5 });
+    }
+
+    // -------------------------------------------------------------------------
+    // CSI J — Erase in Display
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn esc_csi_2j_clears_all_cells() {
+        let mut g = make_grid(24, 80);
+        // Pre-fill some cells
+        g.cell_mut(0, 0).set_char('Z');
+        g.cell_mut(5, 5).set_char('Z');
+        feed(&mut g, b"\x1b[2J");
+        for row in g.rows() {
+            for cell in row {
+                assert_eq!(cell.c, ' ');
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // CSI H — Cursor Position
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn esc_csi_5_10_h_positions_cursor() {
+        let mut g = make_grid(24, 80);
+        // ESC[5;10H = row 5, col 10 (1-based) = row 4, col 9 (0-based)
+        feed(&mut g, b"\x1b[5;10H");
+        assert_eq!(g.cursor(), CursorPos { row: 4, col: 9 });
+    }
+
+    // -------------------------------------------------------------------------
+    // CSI m — SGR colors
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn esc_sgr_31_sets_fg_red_then_reset() {
+        let mut g = make_grid(24, 80);
+        // ESC[31m sets fg=Indexed(1), then "Red", then ESC[0m resets
+        feed(&mut g, b"\x1b[31mRed\x1b[0m");
+        // Cells with "Red" should have fg=Indexed(1)
+        assert_eq!(g.cell(0, 0).attrs.fg, Color::Indexed(1));
+        assert_eq!(g.cell(0, 1).attrs.fg, Color::Indexed(1));
+        assert_eq!(g.cell(0, 2).attrs.fg, Color::Indexed(1));
+        // After ESC[0m the current attrs should be default
+        assert_eq!(g.current_attrs().fg, Color::Default);
+    }
+
+    // -------------------------------------------------------------------------
+    // CSI A — Cursor Up
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn esc_csi_2a_moves_cursor_up_2() {
+        let mut g = make_grid(24, 80);
+        // Position cursor at row 5, then move up 2
+        g.set_cursor_pos(5, 0);
+        feed(&mut g, b"\x1b[2A");
+        assert_eq!(g.cursor().row, 3);
+    }
+
+    #[test]
+    fn esc_csi_a_at_row_0_clamps_to_row_0() {
+        let mut g = make_grid(24, 80);
+        // cursor is at (0,0); moving up 2 should clamp to 0
+        feed(&mut g, b"\x1b[2A");
+        assert_eq!(g.cursor().row, 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // CSI K — Erase in Line
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn esc_csi_k_erases_to_end_of_line() {
+        let mut g = make_grid(24, 80);
+        // Write "Hello" then position at col 3 and erase to end
+        feed(&mut g, b"Hello");
+        g.set_cursor_pos(0, 3);
+        feed(&mut g, b"\x1b[K");
+        assert_eq!(g.cell(0, 0).c, 'H');
+        assert_eq!(g.cell(0, 1).c, 'e');
+        assert_eq!(g.cell(0, 2).c, 'l');
+        assert_eq!(g.cell(0, 3).c, ' ');
+        assert_eq!(g.cell(0, 4).c, ' ');
+    }
+
+    // -------------------------------------------------------------------------
+    // CR + LF
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn cr_lf_moves_to_next_line_start() {
+        let mut g = make_grid(24, 80);
+        feed(&mut g, b"Hi\r\n");
+        // After CR: col=0, after LF: row=1
+        assert_eq!(g.cursor(), CursorPos { row: 1, col: 0 });
+    }
+
+    // -------------------------------------------------------------------------
+    // Full integration — colored text followed by reset
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn full_integration_colored_text() {
+        let mut g = make_grid(24, 80);
+        // Equivalent to: echo -e "\x1b[31mhello\x1b[0m world"
+        feed(&mut g, b"\x1b[31mhello\x1b[0m world");
+        // "hello" chars should have red fg
+        for col in 0..5 {
+            assert_eq!(
+                g.cell(0, col).attrs.fg,
+                Color::Indexed(1),
+                "col {col} should be red"
+            );
+        }
+        // " world" (starting at col 5) should have default fg
+        for col in 5..11 {
+            assert_eq!(
+                g.cell(0, col).attrs.fg,
+                Color::Default,
+                "col {col} should be default after reset"
+            );
+        }
+    }
+}
