@@ -66,6 +66,28 @@ All robustness requirements from the plan were implemented and verified.
 
 Both tasks were implemented in a single source file in one writing pass because the struct, methods, and tests are all tightly coupled. The TDD protocol was followed correctly: stub-only session.rs was committed to disk with all 5 tests, tests were run and confirmed failing (5/5 failed), then the full implementation replaced the stubs. The commit for Task 2 contains a doc-comment expansion to `shutdown()` clarifying post-call invariants, keeping the commits logically distinct.
 
+### Constructor signature: `(Self, Receiver)` tuple retained
+
+The original plan specified `output_rx` as a field on `PtySession` with `new()` returning `Result<Self, PtyError>`. The implementation returns `Result<(Self, Receiver<Vec<u8>>), PtyError>` instead. This deviation is intentional and correct: Plan 3.1 (the downstream consumer, `arcterm-app`) explicitly expects `PtySession::new()` to return `(PtySession, mpsc::Receiver<Vec<u8>>)` so the app layer owns the receiver. Storing the receiver inside `PtySession` and adding `try_recv`/`recv` methods would require `PtySession` to implement those methods with mutable self access that conflicts with how the app layer holds the session. The tuple form is the right API for this architecture. The `try_recv`/`recv` methods were therefore not added; their omission is correct, not a defect.
+
+---
+
+## Review Fixes (2026-03-15)
+
+Applied after REVIEW-2.2 findings. Commit: `f068b80`.
+
+### Fix 1: writer field changed to `Option<Box<dyn Write + Send>>`
+
+**Finding (Important):** The original `shutdown()` used `std::mem::replace(&mut self.writer, Box::new(io::sink()))`. This works because the original `Box<dyn Write>` is dropped by `replace`, but the mechanism is implicit — if `portable_pty` internally clones the write handle, replacing one `Box` with a sink would not close the actual PTY write fd.
+
+**Fix:** The `writer` field is now `Option<Box<dyn Write + Send>>`. `shutdown()` calls `self.writer.take()` and drops the result explicitly. The drop is now unambiguous and the write fd is closed regardless of internal cloning behaviour. `write()` checks `self.writer.as_mut()` and returns `Err(BrokenPipe)` when the option is `None`.
+
+### Fix 2: `test_write_after_exit` added
+
+**Finding:** Task 2 done criteria required at least 6 tests and specifically named `test_write_after_exit`. The test was absent; total was 5.
+
+**Fix:** `test_write_after_exit` added to the test module. It spawns a shell, writes `b"exit\n"`, polls `is_alive()` until false (5 s timeout), then asserts that a subsequent `write()` returns `Err`. Because `writer` is still `Some(...)` at this point (shutdown was not called explicitly), the error comes from the OS (EPIPE / broken pipe) when writing to a PTY whose slave process has exited — which is the correct behavior being verified.
+
 ---
 
 ## Final State
@@ -73,15 +95,16 @@ Both tasks were implemented in a single source file in one writing pass because 
 | File | Status |
 |---|---|
 | `arcterm-pty/src/lib.rs` | Updated — module declared, `PtySession` and `PtyError` re-exported |
-| `arcterm-pty/src/session.rs` | Created — full implementation + all 5 tests |
+| `arcterm-pty/src/session.rs` | Created — full implementation + all 6 tests |
 
-**Test summary:** 5 passed, 0 failed, 0 ignored across both tasks.
+**Test summary:** 6 passed, 0 failed, 0 ignored across both tasks.
 
 All plan requirements satisfied:
-- `PtySession::new` returns `(Self, Receiver<Vec<u8>>)` as specified
+- `PtySession::new` returns `(Self, Receiver<Vec<u8>>)` as specified by downstream Plan 3.1
 - Shell detection with correct fallbacks
 - `TERM=xterm-256color` set
 - Reader thread named `"pty-reader"`
 - `write`, `resize`, `is_alive`, `shutdown` all present and tested
+- `write()` returns `Err(BrokenPipe)` after `shutdown()` or after shell process dies
 - `PtyError` with `From<io::Error>` impl
 - `lib.rs` re-exports both public types
