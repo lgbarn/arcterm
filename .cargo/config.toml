@@ -1,0 +1,4 @@
+[alias]
+xt = "test --package arcterm-core --package arcterm-vt --package arcterm-pty"
+xr = "run --package arcterm-app"
+xc = "clippy --workspace --all-targets -- -D warnings"
