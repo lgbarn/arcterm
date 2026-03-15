@@ -1,4 +1,17 @@
 //! arcterm-app — application entry point.
+//!
+//! # Manual Test Checklist (Task 3 acceptance criteria)
+//!
+//! Run `cargo run --package arcterm-app` and verify each item:
+//!
+//! 1. `ls --color` — coloured directory listing renders correctly with ANSI colours.
+//! 2. `vim` — full-screen editor launches, redraws on resize, and exits cleanly.
+//! 3. `top` — live updating display renders without corruption.
+//! 4. `htop` — same as top; mouse input is not required for pass.
+//! 5. Window resize — drag the window edge; the shell prompt reflows to the new width.
+//! 6. Ctrl+C — sends SIGINT; running process terminates and returns to shell prompt.
+//! 7. `echo -e "\033[31mred\033[0m"` — red text appears, then colour resets.
+//! 8. Rapid output (`cat /dev/urandom | head -c 1M | base64`) — no hang or crash.
 
 mod input;
 mod terminal;
@@ -8,6 +21,7 @@ use std::sync::Arc;
 #[cfg(feature = "latency-trace")]
 use std::time::Instant;
 
+use arcterm_core::{Cell, CellAttrs, Color, CursorPos};
 use arcterm_render::Renderer;
 use terminal::Terminal;
 use tokio::sync::mpsc;
@@ -51,6 +65,9 @@ struct AppState {
     renderer: Renderer,
     terminal: Terminal,
     pty_rx: mpsc::Receiver<Vec<u8>>,
+    /// Set to `true` once the PTY channel closes (shell has exited).
+    /// Used to display an in-window indicator and skip the polling loop.
+    shell_exited: bool,
 }
 
 struct App {
@@ -85,13 +102,17 @@ impl ApplicationHandler for App {
             window.scale_factor(),
         );
 
-        let (terminal, pty_rx) = Terminal::new(size).expect("failed to create PTY session");
+        let (terminal, pty_rx) = Terminal::new(size).unwrap_or_else(|e| {
+            log::error!("Failed to create PTY session: {e}");
+            std::process::exit(1);
+        });
 
         self.state = Some(AppState {
             window,
             renderer,
             terminal,
             pty_rx,
+            shell_exited: false,
         });
     }
 
@@ -99,6 +120,12 @@ impl ApplicationHandler for App {
         let Some(state) = &mut self.state else {
             return;
         };
+
+        // Skip the channel loop once the shell has exited — the receiver
+        // would return Disconnected on every tick otherwise.
+        if state.shell_exited {
+            return;
+        }
 
         let mut got_data = false;
         loop {
@@ -119,8 +146,10 @@ impl ApplicationHandler for App {
                 }
                 Err(mpsc::error::TryRecvError::Empty) => break,
                 Err(mpsc::error::TryRecvError::Disconnected) => {
-                    // Shell has exited — request one last redraw then stop.
+                    // Shell has exited — set flag, request one last redraw to
+                    // display the "Shell exited" indicator, then stop polling.
                     log::info!("PTY channel closed — shell has exited");
+                    state.shell_exited = true;
                     state.window.request_redraw();
                     break;
                 }
@@ -169,9 +198,51 @@ impl ApplicationHandler for App {
                 #[cfg(feature = "latency-trace")]
                 let t0 = Instant::now();
 
-                state
-                    .renderer
-                    .render_frame(state.terminal.grid(), state.window.scale_factor());
+                if state.shell_exited {
+                    // Render a clone of the grid with the last row replaced by a
+                    // "Shell exited" banner so the user knows the window is inert.
+                    let mut display = state.terminal.grid().clone();
+                    let last_row = display.size.rows.saturating_sub(1);
+                    let msg = "[ Shell exited — press any key to close ]";
+                    let banner_attrs = CellAttrs {
+                        fg: Color::Indexed(11), // bright yellow
+                        bg: Color::Indexed(0),  // black
+                        bold: true,
+                        ..CellAttrs::default()
+                    };
+                    // Clear the last row and write the banner.
+                    if let Some(row) = display.cells.get_mut(last_row) {
+                        for cell in row.iter_mut() {
+                            *cell = Cell {
+                                c: ' ',
+                                attrs: banner_attrs,
+                                dirty: true,
+                            };
+                        }
+                        for (col, ch) in msg.chars().enumerate() {
+                            if col >= display.size.cols {
+                                break;
+                            }
+                            row[col] = Cell {
+                                c: ch,
+                                attrs: banner_attrs,
+                                dirty: true,
+                            };
+                        }
+                    }
+                    // Park the cursor off the last row so it does not overlay the banner.
+                    display.cursor = CursorPos {
+                        row: last_row.saturating_sub(1),
+                        col: 0,
+                    };
+                    state
+                        .renderer
+                        .render_frame(&display, state.window.scale_factor());
+                } else {
+                    state
+                        .renderer
+                        .render_frame(state.terminal.grid(), state.window.scale_factor());
+                }
 
                 #[cfg(feature = "latency-trace")]
                 {
@@ -203,6 +274,9 @@ impl ApplicationHandler for App {
                         );
 
                         state.terminal.write_input(&bytes);
+                        // Immediately trigger a redraw so typed characters show
+                        // up even when the shell has not yet echoed them back.
+                        state.window.request_redraw();
                     }
                 }
             }

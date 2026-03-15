@@ -25,6 +25,14 @@ pub fn translate_key_event(event: &KeyEvent, modifiers: ModifiersState) -> Optio
             if lower == '[' {
                 return Some(vec![0x1b]);
             }
+            // Ctrl+\ → FS (0x1c, SIGQUIT in terminals)
+            if lower == '\\' {
+                return Some(vec![0x1c]);
+            }
+            // Ctrl+] → GS (0x1d, telnet escape)
+            if lower == ']' {
+                return Some(vec![0x1d]);
+            }
             None
         }
 

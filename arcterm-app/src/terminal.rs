@@ -61,6 +61,8 @@ impl Terminal {
     }
 
     /// Returns `true` if the child shell process is still alive.
+    /// Reserved for future use (e.g. process status monitoring in Phase 2).
+    #[allow(dead_code)]
     pub fn is_alive(&mut self) -> bool {
         self.pty.is_alive()
     }
