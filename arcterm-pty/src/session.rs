@@ -144,6 +144,9 @@ impl PtySession {
 
     /// Gracefully shut down: drop the writer (send EOF) and wait for the child
     /// to exit.
+    ///
+    /// After `shutdown()` returns, `is_alive()` will be `false` and the
+    /// reader thread will have terminated because the master PTY closed.
     pub fn shutdown(&mut self) {
         // Replace writer with a no-op sink — this closes the write end,
         // signalling EOF to the shell.
