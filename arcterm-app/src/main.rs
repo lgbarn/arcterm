@@ -1770,6 +1770,12 @@ impl ApplicationHandler for App {
                             state.window.request_redraw();
                         }
 
+                        KeyAction::OpenWorkspaceSwitcher => {
+                            // Workspace switcher UI is wired in PLAN-3.1.
+                            // For now, log the intent so the binding is observable.
+                            log::info!("Workspace switcher: open (stub — PLAN-3.1)");
+                        }
+
                         KeyAction::Consumed => {
                             // Key consumed by state machine (leader chord entered).
                             // No PTY write needed.
@@ -1909,6 +1915,7 @@ fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action
         | KeyAction::ResizePane(_)
         | KeyAction::SwitchTab(_)
         | KeyAction::OpenPalette
+        | KeyAction::OpenWorkspaceSwitcher
         | KeyAction::Consumed => {}
     }
 }

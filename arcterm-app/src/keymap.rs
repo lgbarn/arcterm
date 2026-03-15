@@ -57,6 +57,8 @@ pub enum KeyAction {
     SwitchTab(usize),
     /// Close the active tab.
     CloseTab,
+    /// Open the workspace switcher overlay (Leader+w).
+    OpenWorkspaceSwitcher,
     /// Open the command palette.
     OpenPalette,
     /// The key was consumed by the state machine (no PTY bytes).
@@ -215,7 +217,10 @@ impl KeymapHandler {
                         "q" => Some(KeyAction::ClosePane),
                         "z" => Some(KeyAction::ToggleZoom),
                         "t" => Some(KeyAction::NewTab),
-                        "w" => Some(KeyAction::CloseTab),
+                        // Leader+w opens the workspace switcher (CONTEXT-5: Leader+w).
+                        "w" => Some(KeyAction::OpenWorkspaceSwitcher),
+                        // Leader+W (shift) closes the active tab.
+                        "W" => Some(KeyAction::CloseTab),
                         d @ ("1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9") => {
                             let n = d.parse::<usize>().unwrap();
                             Some(KeyAction::SwitchTab(n))
@@ -475,10 +480,17 @@ mod tests {
     }
 
     #[test]
-    fn leader_then_w_close_tab() {
+    fn leader_then_w_opens_workspace_switcher() {
         let mut h = KeymapHandler::new(500);
         press(&mut h, char_key("a"), ctrl());
-        assert_eq!(press(&mut h, char_key("w"), no_mods()), KeyAction::CloseTab);
+        assert_eq!(press(&mut h, char_key("w"), no_mods()), KeyAction::OpenWorkspaceSwitcher);
+    }
+
+    #[test]
+    fn leader_then_shift_w_closes_tab() {
+        let mut h = KeymapHandler::new(500);
+        press(&mut h, char_key("a"), ctrl());
+        assert_eq!(press(&mut h, char_key("W"), no_mods()), KeyAction::CloseTab);
     }
 
     #[test]
