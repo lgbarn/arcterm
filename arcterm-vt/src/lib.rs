@@ -1039,6 +1039,43 @@ mod phase2_integration_tests {
     }
 
     // -------------------------------------------------------------------------
+    // Cursor above scroll region: newlines move cursor freely toward the region
+    // without triggering a scroll.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn newline_above_scroll_region_moves_cursor_without_scrolling() {
+        let mut gs = make_gs(10, 5);
+        // Set scroll region to rows 4..7 (1-based: ESC[5;8r).
+        feed_gs(&mut gs, b"\x1b[5;8r");
+        assert_eq!(gs.scroll_top, 4);
+        assert_eq!(gs.scroll_bottom, 7);
+
+        // Mark the scroll region top row so we can confirm it was not scrolled.
+        for col in 0..5usize {
+            gs.grid.cells[4][col].c = 'T'; // 'T' for top of region
+        }
+
+        // Position cursor two rows above the scroll region (row 2) and send two LFs.
+        gs.grid.set_cursor(CursorPos { row: 2, col: 0 });
+        feed_gs(&mut gs, b"\n"); // row 2 -> row 3 (still above region)
+        assert_eq!(
+            gs.grid.cursor().row, 3,
+            "first LF: cursor must move from row 2 to row 3"
+        );
+        // Region must not have scrolled — row 4 still contains 'T'.
+        assert_eq!(gs.grid.cells[4][0].c, 'T', "scroll region must not scroll on LF above it");
+
+        feed_gs(&mut gs, b"\n"); // row 3 -> row 4 (enters the region, still no scroll)
+        assert_eq!(
+            gs.grid.cursor().row, 4,
+            "second LF: cursor must move from row 3 to row 4 (region top)"
+        );
+        // Row 4 still has 'T' — entering the region does not scroll.
+        assert_eq!(gs.grid.cells[4][0].c, 'T', "region must not scroll when cursor enters it");
+    }
+
+    // -------------------------------------------------------------------------
     // Scroll region respects region boundaries during scroll_up
     // -------------------------------------------------------------------------
 

@@ -270,7 +270,15 @@ impl<H: Handler> vte::Perform for Performer<'_, H> {
     fn unhook(&mut self) {}
 
     // ESC dispatch (2-byte escape sequences).
-    fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, byte: u8) {
+    fn esc_dispatch(&mut self, intermediates: &[u8], _ignore: bool, byte: u8) {
+        // Only handle bare ESC sequences (no intermediate bytes).  Sequences
+        // with intermediates — e.g. ESC ( 7 (SCS Select Character Set) — use
+        // the same final byte values but have completely different semantics.
+        // Dispatching on byte alone would cause silent mis-dispatch, e.g.
+        // ESC ( 7 incorrectly firing save_cursor_position.
+        if !intermediates.is_empty() {
+            return;
+        }
         match byte {
             // DECSC — save cursor position
             0x37 => self.handler.save_cursor_position(),

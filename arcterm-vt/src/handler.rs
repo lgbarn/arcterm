@@ -153,6 +153,14 @@ pub struct TermModes {
     pub alt_screen: bool,
     pub bracketed_paste: bool,
     pub app_keypad: bool,
+    /// Mode 1000 — report mouse button press/release events.
+    pub mouse_report_click: bool,
+    /// Mode 1002 — report mouse button events and motion while a button is held.
+    pub mouse_report_button: bool,
+    /// Mode 1003 — report all mouse motion events.
+    pub mouse_report_any: bool,
+    /// Mode 1006 — use SGR (1006) extended mouse coordinate encoding.
+    pub mouse_sgr_ext: bool,
 }
 
 impl TermModes {
@@ -164,6 +172,10 @@ impl TermModes {
             alt_screen: false,
             bracketed_paste: false,
             app_keypad: false,
+            mouse_report_click: false,
+            mouse_report_button: false,
+            mouse_report_any: false,
+            mouse_sgr_ext: false,
         }
     }
 }
@@ -277,28 +289,23 @@ impl Handler for GridState {
     fn newline(&mut self) {
         let cur_row = self.grid.cursor().row;
         let scroll_bottom = self.eff_scroll_bottom();
-        let scroll_top = self.eff_scroll_top();
 
         if cur_row >= scroll_bottom {
-            // At or past the bottom of the scroll region — scroll the region.
+            // At or past the bottom of the scroll region — scroll the region up.
             self.scroll_region_up(1);
-            // Cursor stays at scroll_bottom row.
+            // Cursor stays pinned at scroll_bottom row.
             self.grid.set_cursor(CursorPos {
                 row: scroll_bottom,
                 col: self.grid.cursor().col,
             });
         } else {
+            // Cursor is above the scroll region bottom: move down one row freely.
+            // A cursor above the scroll region top moves toward the region without
+            // triggering a scroll; once inside the region it scrolls at the bottom.
             self.grid.set_cursor(CursorPos {
                 row: cur_row + 1,
                 col: self.grid.cursor().col,
             });
-            // If cursor moved above the scroll region somehow, clamp to top.
-            if self.grid.cursor().row < scroll_top {
-                self.grid.set_cursor(CursorPos {
-                    row: scroll_top,
-                    col: self.grid.cursor().col,
-                });
-            }
         }
     }
 
@@ -455,6 +462,23 @@ impl Handler for GridState {
                 1 => self.modes.app_cursor_keys = true,
                 7 => self.modes.auto_wrap = true,
                 25 => self.modes.cursor_visible = true,
+                // Mode 47 and 1047: enter alt screen WITHOUT cursor save/restore.
+                // Used by older applications and some tmux configurations.
+                47 | 1047 => {
+                    if !self.modes.alt_screen {
+                        self.modes.alt_screen = true;
+                        let saved = self.grid.clone();
+                        self.normal_screen = Some(saved);
+                        // Clear the current grid for the alt screen.
+                        for row in &mut self.grid.cells {
+                            for cell in row {
+                                *cell = Cell::default();
+                            }
+                        }
+                        self.grid.dirty = true;
+                    }
+                }
+                // Mode 1049: enter alt screen WITH cursor save/restore.
                 1049 => {
                     // Enter alt screen: save normal grid, clear alt screen.
                     if !self.modes.alt_screen {
@@ -472,6 +496,11 @@ impl Handler for GridState {
                     }
                 }
                 2004 => self.modes.bracketed_paste = true,
+                // Mouse reporting modes — store flags for future use.
+                1000 => self.modes.mouse_report_click = true,
+                1002 => self.modes.mouse_report_button = true,
+                1003 => self.modes.mouse_report_any = true,
+                1006 => self.modes.mouse_sgr_ext = true,
                 _ => {}
             }
         } else {
@@ -487,6 +516,16 @@ impl Handler for GridState {
                 1 => self.modes.app_cursor_keys = false,
                 7 => self.modes.auto_wrap = false,
                 25 => self.modes.cursor_visible = false,
+                // Mode 47 and 1047: leave alt screen WITHOUT cursor save/restore.
+                47 | 1047 => {
+                    if self.modes.alt_screen {
+                        self.modes.alt_screen = false;
+                        if let Some(saved) = self.normal_screen.take() {
+                            self.grid = saved;
+                        }
+                    }
+                }
+                // Mode 1049: leave alt screen WITH cursor restore.
                 1049 => {
                     // Leave alt screen: restore normal grid.
                     if self.modes.alt_screen {
@@ -497,6 +536,11 @@ impl Handler for GridState {
                     }
                 }
                 2004 => self.modes.bracketed_paste = false,
+                // Mouse reporting modes — clear flags.
+                1000 => self.modes.mouse_report_click = false,
+                1002 => self.modes.mouse_report_button = false,
+                1003 => self.modes.mouse_report_any = false,
+                1006 => self.modes.mouse_sgr_ext = false,
                 _ => {}
             }
         } else {
