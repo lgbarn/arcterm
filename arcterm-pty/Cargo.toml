@@ -8,3 +8,4 @@ license.workspace = true
 portable-pty.workspace = true
 tokio.workspace = true
 arcterm-core = { path = "../arcterm-core" }
+libc = "0.2"

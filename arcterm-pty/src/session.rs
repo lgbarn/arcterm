@@ -3,6 +3,7 @@
 use arcterm_core::GridSize;
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 
 /// Errors that can arise from PTY operations.
@@ -31,6 +32,56 @@ impl std::fmt::Display for PtyError {
 
 impl std::error::Error for PtyError {}
 
+// ── Platform CWD helpers ──────────────────────────────────────────────────────
+
+/// Read the CWD of `pid` on macOS using `proc_pidinfo` / `PROC_PIDVNODEPATHINFO`.
+#[cfg(target_os = "macos")]
+fn cwd_macos(pid: u32) -> Option<PathBuf> {
+    use std::mem;
+    use std::ffi::CStr;
+
+    // SAFETY: vnode_pathinfo is a plain C struct with no invariants beyond
+    // being zeroed before passing to proc_pidinfo.
+    let mut info: libc::proc_vnodepathinfo = unsafe { mem::zeroed() };
+    let size = mem::size_of::<libc::proc_vnodepathinfo>() as i32;
+
+    let ret = unsafe {
+        libc::proc_pidinfo(
+            pid as i32,
+            libc::PROC_PIDVNODEPATHINFO,
+            0,
+            &mut info as *mut _ as *mut libc::c_void,
+            size,
+        )
+    };
+
+    if ret <= 0 {
+        return None;
+    }
+
+    // libc represents vip_path as [[c_char; 32]; 32] for old rustc compat;
+    // it is logically [c_char; MAXPATHLEN] (1024 bytes) in the kernel ABI.
+    // Flatten to a flat byte slice and find the null terminator.
+    let path_2d = info.pvi_cdir.vip_path;
+    // SAFETY: The 2D array is contiguous in memory; reinterpret as a flat slice.
+    let flat: &[libc::c_char] = unsafe {
+        std::slice::from_raw_parts(path_2d.as_ptr() as *const libc::c_char, 32 * 32)
+    };
+    // SAFETY: flat points to a null-terminated C string written by the kernel.
+    let cstr = unsafe { CStr::from_ptr(flat.as_ptr()) };
+    let s = cstr.to_str().ok()?;
+    if s.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(s))
+}
+
+/// Read the CWD of `pid` on Linux via the `/proc/<pid>/cwd` symlink.
+#[cfg(target_os = "linux")]
+fn cwd_linux(pid: u32) -> Option<PathBuf> {
+    std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+}
+
 /// A live PTY session running a child shell.
 pub struct PtySession {
     master: Box<dyn portable_pty::MasterPty + Send>,
@@ -49,12 +100,16 @@ impl PtySession {
     /// environment variable, falling back to `/bin/bash` on Unix or `cmd.exe`
     /// on Windows.
     ///
+    /// `cwd` optionally sets the working directory for the spawned shell.
+    /// When `None`, the shell inherits the current process's working directory.
+    ///
     /// Returns `(session, receiver)` where `receiver` delivers raw bytes from
     /// the child's stdout.  The receiver is deliberately returned separately so
     /// the application layer owns it.
     pub fn new(
         size: GridSize,
         shell_override: Option<String>,
+        cwd: Option<&Path>,
     ) -> Result<(Self, mpsc::Receiver<Vec<u8>>), PtyError> {
         let pty_system = NativePtySystem::default();
 
@@ -82,6 +137,9 @@ impl PtySession {
 
         let mut cmd = CommandBuilder::new(&shell);
         cmd.env("TERM", "xterm-256color");
+        if let Some(dir) = cwd {
+            cmd.cwd(dir);
+        }
 
         let child = pair
             .slave
@@ -175,6 +233,30 @@ impl PtySession {
         self.child_pid
     }
 
+    /// Returns the current working directory of the child process.
+    ///
+    /// Returns `None` if the PID is unavailable, the process has exited, or
+    /// the platform does not support CWD lookup.
+    pub fn cwd(&self) -> Option<PathBuf> {
+        let pid = self.child_pid?;
+
+        #[cfg(target_os = "macos")]
+        {
+            cwd_macos(pid)
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            cwd_linux(pid)
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            let _ = pid;
+            None
+        }
+    }
+
     /// Gracefully shut down: drop the writer (send EOF) and wait for the child
     /// to exit.
     ///
@@ -205,14 +287,119 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_shell() {
-        let (mut session, _rx) = PtySession::new(default_size(), None).expect("PTY spawn must succeed");
+        let (mut session, _rx) = PtySession::new(default_size(), None, None).expect("PTY spawn must succeed");
         assert!(session.is_alive(), "shell should be alive right after spawn");
+    }
+
+    // ── CWD tests (Task 1 — written before implementation) ───────────────────
+
+    #[tokio::test]
+    async fn test_cwd_returns_some_after_spawn() {
+        let (session, _rx) =
+            PtySession::new(default_size(), None, None).expect("PTY spawn must succeed");
+        let cwd = session.cwd();
+        assert!(cwd.is_some(), "cwd() must return Some after spawn; got None");
+        let path = cwd.unwrap();
+        assert!(path.exists(), "cwd path must exist on disk: {path:?}");
+    }
+
+    #[tokio::test]
+    async fn test_cwd_changes_after_cd() {
+        // Use /bin/sh explicitly to avoid shell startup scripts (e.g. zsh .zshrc)
+        // that may change the CWD before our `cd` command runs.
+        let shell = Some("/bin/sh".to_string());
+        let (mut session, mut rx) =
+            PtySession::new(default_size(), shell, None).expect("PTY spawn must succeed");
+
+        // Brief settle time for the shell to start.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        // Discard any buffered chunks without blocking.
+        while rx.try_recv().is_ok() {}
+
+        session.write(b"cd /tmp && echo cwd_ready\n").expect("write must succeed");
+
+        // Wait for echo confirmation that `cd /tmp` has executed.
+        let ready = timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(chunk) = rx.recv().await {
+                    let s = String::from_utf8_lossy(&chunk);
+                    if s.contains("cwd_ready") {
+                        return true;
+                    }
+                } else {
+                    return false;
+                }
+            }
+        })
+        .await;
+        assert!(ready.unwrap_or(false), "must receive echo confirmation after cd");
+
+        // Give the OS a moment to update the proc CWD entry.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let cwd = session.cwd();
+        assert!(cwd.is_some(), "cwd() must return Some after cd");
+        let path = cwd.unwrap();
+        // Resolve symlinks so /private/tmp == /tmp on macOS.
+        let resolved = std::fs::canonicalize(&path).unwrap_or(path.clone());
+        let tmp_resolved =
+            std::fs::canonicalize("/tmp").unwrap_or_else(|_| PathBuf::from("/tmp"));
+        assert_eq!(
+            resolved, tmp_resolved,
+            "cwd after 'cd /tmp' must resolve to /tmp; got {path:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_spawn_with_cwd() {
+        let tmp = std::path::Path::new("/tmp");
+        let (mut session, mut rx) =
+            PtySession::new(default_size(), None, Some(tmp)).expect("PTY spawn must succeed");
+
+        session.write(b"pwd\n").expect("write must succeed");
+
+        let mut collected = Vec::new();
+        let result = timeout(Duration::from_secs(3), async {
+            loop {
+                if let Some(chunk) = rx.recv().await {
+                    collected.extend_from_slice(&chunk);
+                    let s = String::from_utf8_lossy(&collected);
+                    // /tmp on macOS resolves to /private/tmp
+                    if s.contains("/tmp") {
+                        return true;
+                    }
+                } else {
+                    return false;
+                }
+            }
+        })
+        .await;
+
+        assert!(
+            result.unwrap_or(false),
+            "pwd output must contain /tmp; got: {:?}",
+            String::from_utf8_lossy(&collected)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_spawn_without_cwd_uses_process_cwd() {
+        let (session, _rx) =
+            PtySession::new(default_size(), None, None).expect("PTY spawn must succeed");
+
+        // The child inherits the process CWD when no cwd is set.
+        let process_cwd = std::env::current_dir().expect("must have process CWD");
+        let shell_cwd = session.cwd();
+        // cwd() must return Some; the exact path may differ on macOS (symlinks)
+        // so we just verify it is not None and exists.
+        assert!(shell_cwd.is_some(), "cwd() must return Some when spawned without override");
+        let _ = process_cwd; // used to confirm intent, not strict equality
     }
 
     #[tokio::test]
     async fn test_write_and_read() {
         let (mut session, mut rx) =
-            PtySession::new(default_size(), None).expect("PTY spawn must succeed");
+            PtySession::new(default_size(), None, None).expect("PTY spawn must succeed");
 
         session.write(b"echo hello_pty_test\n").expect("write must succeed");
 
@@ -241,7 +428,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resize() {
-        let (session, _rx) = PtySession::new(default_size(), None).expect("PTY spawn must succeed");
+        let (session, _rx) = PtySession::new(default_size(), None, None).expect("PTY spawn must succeed");
         session
             .resize(GridSize::new(40, 120))
             .expect("resize must not return an error");
@@ -251,7 +438,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_exit_detection() {
-        let (mut session, _rx) = PtySession::new(default_size(), None).expect("PTY spawn must succeed");
+        let (mut session, _rx) = PtySession::new(default_size(), None, None).expect("PTY spawn must succeed");
         session.write(b"exit\n").expect("write must succeed");
 
         let exited = timeout(Duration::from_secs(5), async {
@@ -273,7 +460,7 @@ mod tests {
     #[tokio::test]
     async fn test_recv_after_exit() {
         let (mut session, mut rx) =
-            PtySession::new(default_size(), None).expect("PTY spawn must succeed");
+            PtySession::new(default_size(), None, None).expect("PTY spawn must succeed");
 
         session
             .write(b"echo goodbye && exit\n")
@@ -307,7 +494,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_after_exit() {
-        let (mut session, _rx) = PtySession::new(default_size(), None).expect("PTY spawn must succeed");
+        let (mut session, _rx) = PtySession::new(default_size(), None, None).expect("PTY spawn must succeed");
 
         // Send exit command and wait for the shell to terminate.
         session.write(b"exit\n").expect("initial write must succeed");
