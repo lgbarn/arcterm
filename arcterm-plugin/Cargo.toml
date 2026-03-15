@@ -15,5 +15,3 @@ toml = "1"
 anyhow = "1"
 
 [dev-dependencies]
-wasm-encoder = "0.229"
-wat = "1"
