@@ -15,6 +15,9 @@
 //! parallel plan) is being built.  Once `mod layout;` is wired into
 //! `main.rs`, callers can use `crate::layout::{PaneId, PaneNode}` directly.
 
+// Wave-1 foundation: all public items are consumed by Wave-2 plans.
+#![allow(dead_code)]
+
 // ---------------------------------------------------------------------------
 // Primitive layout types (self-contained; mirrored by crate::layout)
 // ---------------------------------------------------------------------------
@@ -28,7 +31,6 @@ pub type PaneId = u64;
 /// hold two child sub-trees and a ratio in `0.0..=1.0` indicating how
 /// much of the available space the first child occupies.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // HSplit / VSplit are constructed by Wave-2 split logic
 pub enum PaneNode {
     /// A single terminal pane.
     Leaf(PaneId),
@@ -135,7 +137,6 @@ impl TabManager {
     }
 
     /// Return a mutable reference to the active tab.
-    #[allow(dead_code)] // used by Wave-2 pane-split and focus-change logic
     pub fn active_tab_mut(&mut self) -> &mut Tab {
         &mut self.tabs[self.active]
     }

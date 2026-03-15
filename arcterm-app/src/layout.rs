@@ -1,6 +1,9 @@
 //! Pane tree layout engine — core types, layout computation, navigation,
 //! mutation, zoom, and border quad generation.
 
+// Wave-1 foundation: all items are used by Wave-2 plans.
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -370,14 +373,14 @@ impl PaneNode {
                 // Recurse into left.
                 if left.find_leaf(target) {
                     if let Some(replacement) = left.close(target) {
-                        *left = Box::new(replacement);
+                        **left = replacement;
                     }
                     return None;
                 }
                 // Recurse into right.
                 if right.find_leaf(target) {
                     if let Some(replacement) = right.close(target) {
-                        *right = Box::new(replacement);
+                        **right = replacement;
                     }
                     return None;
                 }
@@ -392,13 +395,13 @@ impl PaneNode {
                 }
                 if top.find_leaf(target) {
                     if let Some(replacement) = top.close(target) {
-                        *top = Box::new(replacement);
+                        **top = replacement;
                     }
                     return None;
                 }
                 if bottom.find_leaf(target) {
                     if let Some(replacement) = bottom.close(target) {
-                        *bottom = Box::new(replacement);
+                        **bottom = replacement;
                     }
                     return None;
                 }
@@ -487,6 +490,8 @@ impl PaneNode {
         quads
     }
 
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::only_used_in_recursion)]
     fn collect_border_quads(
         &self,
         rect: PixelRect,

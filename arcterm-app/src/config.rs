@@ -46,6 +46,7 @@ pub struct ArctermConfig {
     pub keybindings: KeybindingConfig,
     /// Multiplexer settings (leader key, tab bar, pane borders, navigation).
     #[serde(default)]
+    #[allow(dead_code)] // read by Wave-2 keymap and tab-bar rendering
     pub multiplexer: MultiplexerConfig,
 }
 
