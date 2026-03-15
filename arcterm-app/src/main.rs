@@ -54,6 +54,33 @@ use winit::{
     window::{Window, WindowId},
 };
 
+// ---------------------------------------------------------------------------
+// CLI structs (clap 4 derive)
+// ---------------------------------------------------------------------------
+
+#[derive(clap::Parser)]
+#[command(name = "arcterm", about = "GPU-rendered AI terminal emulator")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<CliCommand>,
+}
+
+#[derive(clap::Subcommand)]
+enum CliCommand {
+    /// Open a named workspace
+    Open {
+        /// Workspace name (without .toml extension)
+        name: String,
+    },
+    /// Save current session as a workspace
+    Save {
+        /// Workspace name
+        name: String,
+    },
+    /// List available workspaces
+    List,
+}
+
 /// Maximum gap between clicks to be counted as a multi-click (in ms).
 const MULTI_CLICK_INTERVAL_MS: u64 = 400;
 
@@ -79,6 +106,41 @@ const BORDER_DRAG_THRESHOLD: f32 = 4.0;
 fn main() {
     env_logger::init();
 
+    let cli = <Cli as clap::Parser>::parse();
+
+    // Handle non-GUI subcommands before touching the event loop.
+    let initial_workspace: Option<workspace::WorkspaceFile> = match cli.command {
+        Some(CliCommand::List) => {
+            let workspaces = workspace::list_workspaces();
+            if workspaces.is_empty() {
+                println!("No workspaces found.");
+            } else {
+                for (name, _) in workspaces {
+                    println!("{name}");
+                }
+            }
+            return;
+        }
+        Some(CliCommand::Save { .. }) => {
+            eprintln!(
+                "Save command requires a running arcterm session. \
+                 Use Leader+s from within arcterm."
+            );
+            return;
+        }
+        Some(CliCommand::Open { name }) => {
+            let path = workspace::workspaces_dir().join(format!("{name}.toml"));
+            match workspace::WorkspaceFile::load_from_file(&path) {
+                Ok(ws) => Some(ws),
+                Err(e) => {
+                    eprintln!("arcterm: failed to open workspace '{name}': {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        None => None,
+    };
+
     #[cfg(feature = "latency-trace")]
     let cold_start = TraceInstant::now();
 
@@ -92,6 +154,7 @@ fn main() {
     let mut app = App {
         state: None,
         modifiers: ModifiersState::empty(),
+        initial_workspace,
         #[cfg(feature = "latency-trace")]
         cold_start,
     };
@@ -272,6 +335,8 @@ impl AppState {
 struct App {
     state: Option<AppState>,
     modifiers: ModifiersState,
+    /// Workspace to restore on launch, set by `arcterm open <name>`.
+    initial_workspace: Option<workspace::WorkspaceFile>,
     #[cfg(feature = "latency-trace")]
     cold_start: TraceInstant,
 }
