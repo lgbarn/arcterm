@@ -4,7 +4,7 @@ pub mod handler;
 pub mod processor;
 
 pub use arcterm_core::TermModes;
-pub use handler::{GridState, Handler};
+pub use handler::{ContentType, GridState, Handler, StructuredContentAccumulator};
 pub use processor::{ApcScanner, Processor};
 
 #[cfg(test)]
