@@ -513,3 +513,205 @@ mod processor_tests {
         }
     }
 }
+
+// =============================================================================
+// Edge case tests — Task 3
+// =============================================================================
+
+#[cfg(test)]
+mod edge_case_tests {
+    use arcterm_core::{Color, CursorPos, Grid, GridSize};
+
+    use crate::{Handler, Processor};
+
+    fn make_grid(rows: usize, cols: usize) -> Grid {
+        Grid::new(GridSize::new(rows, cols))
+    }
+
+    fn feed(grid: &mut Grid, bytes: &[u8]) {
+        let mut proc = Processor::new();
+        proc.advance(grid, bytes);
+    }
+
+    // -------------------------------------------------------------------------
+    // Line wrapping: 81 chars into an 80-column grid
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn line_wrapping_81_chars_in_80_col_grid() {
+        let mut g = make_grid(24, 80);
+        // Feed 80 'a' chars — cursor should be at (1,0) after wrap
+        let row0: Vec<u8> = b"a".repeat(80);
+        feed(&mut g, &row0);
+        assert_eq!(
+            g.cursor(),
+            CursorPos { row: 1, col: 0 },
+            "after 80 chars cursor should be at (1,0)"
+        );
+        // Feed the 81st char
+        feed(&mut g, b"b");
+        assert_eq!(g.cell(1, 0).c, 'b', "81st char must be at row 1, col 0");
+        assert_eq!(
+            g.cursor(),
+            CursorPos { row: 1, col: 1 },
+            "cursor must be at (1,1) after 81st char"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Scrolling: fill 24 rows, add newline
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn scrolling_after_24_rows_fills_content_correctly() {
+        let mut g = make_grid(24, 80);
+        // Fill all 24 rows with a newline sequence (24 lines of 'X' then CR+LF)
+        // After filling row 23, one more newline should scroll content up.
+        for row in 0..24u8 {
+            // Write a distinguishable char into each row
+            g.set_cursor_pos(row as usize, 0);
+            let ch = (b'A' + row % 26) as char;
+            g.put_char(ch);
+        }
+        // cursor is at row 23 (last row) — do a newline which should scroll
+        g.set_cursor_pos(23, 0);
+        feed(&mut g, b"\n"); // LF triggers line_feed
+        // After scrolling: what was row 1 is now row 0
+        // Original row 0 had 'A', row 1 had 'B'
+        assert_eq!(
+            g.cell(0, 0).c, 'B',
+            "after scroll, row 0 should contain what was row 1"
+        );
+        // Row 23 (last) should be blank (new blank row from scroll)
+        assert_eq!(g.cell(23, 0).c, ' ', "after scroll, last row should be blank");
+    }
+
+    // -------------------------------------------------------------------------
+    // Tab stops (every 8 cols)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn tab_stop_places_char_at_col_8() {
+        let mut g = make_grid(5, 80);
+        // Feed \t then X — X should land at column 8
+        feed(&mut g, b"\tX");
+        assert_eq!(g.cell(0, 8).c, 'X', "X must be at column 8 after a tab");
+    }
+
+    #[test]
+    fn tab_from_col_4_places_char_at_col_8() {
+        let mut g = make_grid(5, 80);
+        // 4 spaces then tab then 'Y' — Y should be at col 8
+        feed(&mut g, b"    \tY");
+        assert_eq!(g.cell(0, 8).c, 'Y', "Y must be at col 8 after tab from col 4");
+    }
+
+    // -------------------------------------------------------------------------
+    // 256-color SGR (38;5;196)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn sgr_256_color_fg_via_processor() {
+        let mut g = make_grid(5, 20);
+        feed(&mut g, b"\x1b[38;5;196mX");
+        assert_eq!(
+            g.cell(0, 0).attrs.fg,
+            Color::Indexed(196),
+            "cell must have fg=Indexed(196)"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // RGB color SGR (38;2;255;128;0)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn sgr_rgb_color_fg_via_processor() {
+        let mut g = make_grid(5, 20);
+        feed(&mut g, b"\x1b[38;2;255;128;0mX");
+        assert_eq!(
+            g.cell(0, 0).attrs.fg,
+            Color::Rgb(255, 128, 0),
+            "cell must have fg=Rgb(255,128,0)"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Multi-param SGR: 1;31;42m → bold, fg=red(1), bg=green(2)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn sgr_multi_param_bold_fg_bg() {
+        let mut g = make_grid(5, 20);
+        feed(&mut g, b"\x1b[1;31;42mX");
+        let attrs = g.cell(0, 0).attrs;
+        assert!(attrs.bold, "bold must be set");
+        assert_eq!(attrs.fg, Color::Indexed(1), "fg must be Indexed(1) = red");
+        assert_eq!(attrs.bg, Color::Indexed(2), "bg must be Indexed(2) = green");
+    }
+
+    // -------------------------------------------------------------------------
+    // CUP with no params (ESC[H) → cursor home (0,0)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn cup_no_params_positions_cursor_at_home() {
+        let mut g = make_grid(24, 80);
+        g.set_cursor_pos(10, 20);
+        feed(&mut g, b"\x1b[H");
+        assert_eq!(
+            g.cursor(),
+            CursorPos { row: 0, col: 0 },
+            "ESC[H must move cursor to (0,0)"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Erase below cursor (ESC[J at row 10)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn erase_below_cursor_at_row_10() {
+        let mut g = make_grid(24, 80);
+        // Fill all cells with 'X'
+        for r in 0..24 {
+            for c in 0..80 {
+                g.cell_mut(r, c).set_char('X');
+            }
+        }
+        // Position cursor at row 10, col 0 and erase below
+        feed(&mut g, b"\x1b[11;1H\x1b[J");
+        // Rows 0-9 should still have 'X'
+        for r in 0..10 {
+            assert_eq!(g.cell(r, 0).c, 'X', "row {r} should be untouched");
+        }
+        // Row 10 from col 0 onward should be cleared
+        for r in 10..24 {
+            assert_eq!(g.cell(r, 0).c, ' ', "row {r} col 0 should be cleared");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Backspace: cursor at (0,5), BS → cursor at (0,4)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn backspace_moves_cursor_left_via_processor() {
+        let mut g = make_grid(5, 20);
+        g.set_cursor_pos(0, 5);
+        feed(&mut g, b"\x08"); // 0x08 = BS
+        assert_eq!(
+            g.cursor(),
+            CursorPos { row: 0, col: 4 },
+            "BS must move cursor left one column"
+        );
+    }
+
+    #[test]
+    fn backspace_at_col_zero_does_not_go_negative() {
+        let mut g = make_grid(5, 20);
+        g.set_cursor_pos(0, 0);
+        feed(&mut g, b"\x08");
+        assert_eq!(g.cursor().col, 0, "BS at col 0 must stay at col 0");
+    }
+}
