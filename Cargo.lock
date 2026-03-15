@@ -229,6 +229,7 @@ name = "arcterm-render"
 version = "0.1.0"
 dependencies = [
  "arcterm-core",
+ "arcterm-vt",
  "bytemuck",
  "env_logger",
  "glyphon",
@@ -236,6 +237,7 @@ dependencies = [
  "log",
  "pollster",
  "pulldown-cmark",
+ "serde_json",
  "syntect",
  "wgpu",
  "winit",
