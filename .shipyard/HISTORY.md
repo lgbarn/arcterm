@@ -66,3 +66,8 @@
   - Neovim-aware pane crossing via msgpack-RPC
   - Command palette with fuzzy search
   - Click-to-focus, tab bar, border drag resize
+
+## 2026-03-15 — Phase 4 Planned
+- **Phase:** 4
+- **Status:** planned
+- **Message:** 6 plans across 3 waves. Verdict: READY. OSC 7770 protocol, syntect highlighting, auto-detection, Kitty graphics (with APC pre-scanner workaround).
