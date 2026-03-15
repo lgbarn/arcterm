@@ -15,6 +15,7 @@
 
 mod colors;
 mod config;
+mod detect;
 mod input;
 mod keymap;
 mod layout;
