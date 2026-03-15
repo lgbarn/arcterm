@@ -103,6 +103,64 @@ const RESIZE_DELTA: f32 = 0.05;
 /// edge the cursor is treated as "on the border" for drag-to-resize.
 const BORDER_DRAG_THRESHOLD: f32 = 4.0;
 
+// ---------------------------------------------------------------------------
+// Startup helpers
+// ---------------------------------------------------------------------------
+
+/// Count the number of leaf nodes in a `WorkspacePaneNode` tree.
+fn count_leaves(node: &workspace::WorkspacePaneNode) -> usize {
+    match node {
+        workspace::WorkspacePaneNode::Leaf { .. } => 1,
+        workspace::WorkspacePaneNode::HSplit { left, right, .. } => {
+            count_leaves(left) + count_leaves(right)
+        }
+        workspace::WorkspacePaneNode::VSplit { top, bottom, .. } => {
+            count_leaves(top) + count_leaves(bottom)
+        }
+    }
+}
+
+/// Collections returned by pane-spawn helpers, consumed by `AppState` init.
+type PaneBundle = (
+    HashMap<PaneId, Terminal>,
+    HashMap<PaneId, tokio::sync::mpsc::Receiver<Vec<u8>>>,
+    TabManager,
+    Vec<PaneNode>,
+    HashMap<PaneId, AutoDetector>,
+    HashMap<PaneId, Vec<StructuredBlock>>,
+);
+
+/// Spawn a single default pane and return the collections needed by `AppState`.
+///
+/// This is the normal (no workspace) startup path. Extracted into a function
+/// so that workspace restore can fall back to it when the session file is
+/// empty or invalid.
+fn spawn_default_pane(cfg: &config::ArctermConfig, initial_size: GridSize) -> PaneBundle {
+    let first_id = PaneId::next();
+    let (mut terminal, pty_rx) =
+        Terminal::new(initial_size, cfg.shell.clone(), None).unwrap_or_else(|e| {
+            log::error!("Failed to create PTY session: {e}");
+            std::process::exit(1);
+        });
+    terminal.grid_mut().max_scrollback = cfg.scrollback_lines;
+
+    let mut panes = HashMap::new();
+    panes.insert(first_id, terminal);
+
+    let mut pty_channels = HashMap::new();
+    pty_channels.insert(first_id, pty_rx);
+
+    let tab_manager = TabManager::new(first_id);
+    let tab_layouts = vec![PaneNode::Leaf { pane_id: first_id }];
+
+    let mut auto_detectors = HashMap::new();
+    auto_detectors.insert(first_id, AutoDetector::new());
+    let mut structured_blocks_map: HashMap<PaneId, Vec<StructuredBlock>> = HashMap::new();
+    structured_blocks_map.insert(first_id, Vec::new());
+
+    (panes, pty_channels, tab_manager, tab_layouts, auto_detectors, structured_blocks_map)
+}
+
 fn main() {
     env_logger::init();
 
@@ -138,7 +196,30 @@ fn main() {
                 }
             }
         }
-        None => None,
+        None => {
+            // Auto-restore from last session if it exists.
+            let session_path = workspace::workspaces_dir().join("_last_session.toml");
+            if session_path.exists() {
+                match workspace::WorkspaceFile::load_from_file(&session_path) {
+                    Ok(ws) => {
+                        log::info!("Restoring last session from {}", session_path.display());
+                        // Delete the file so it is consumed exactly once.
+                        if let Err(e) = std::fs::remove_file(&session_path) {
+                            log::warn!("Could not remove _last_session.toml: {e}");
+                        }
+                        Some(ws)
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Could not parse _last_session.toml, starting fresh: {e}"
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        }
     };
 
     #[cfg(feature = "latency-trace")]
@@ -254,6 +335,48 @@ impl AppState {
     fn active_layout_mut(&mut self) -> &mut PaneNode {
         let active = self.tab_manager.active;
         &mut self.tab_layouts[active]
+    }
+
+    // -----------------------------------------------------------------------
+    // Session save
+    // -----------------------------------------------------------------------
+
+    /// Capture the current session and write it atomically to
+    /// `~/.config/arcterm/workspaces/_last_session.toml`.
+    ///
+    /// Called on `CloseRequested` before exiting. Errors are logged but never
+    /// prevent the exit — session save is best-effort.
+    fn save_session(&self) -> Result<(), workspace::WorkspaceError> {
+        use std::collections::HashMap as HM;
+
+        // Build per-pane metadata from live terminals.
+        let mut pane_metadata: HM<PaneId, workspace::PaneMetadata> = HM::new();
+        for (id, terminal) in &self.panes {
+            let directory = terminal.cwd().and_then(|p| p.to_str().map(str::to_string));
+            pane_metadata.insert(
+                *id,
+                workspace::PaneMetadata { command: None, directory, env: None },
+            );
+        }
+
+        // Capture using the active tab's layout.
+        let win_size = self.window.inner_size();
+        let workspace_file = workspace::capture_session(
+            &self.tab_manager,
+            &pane_metadata,
+            "_last_session",
+            Some((win_size.width, win_size.height)),
+        );
+
+        // Ensure the workspaces directory exists.
+        let dir = workspace::workspaces_dir();
+        std::fs::create_dir_all(&dir)?;
+
+        let path = dir.join("_last_session.toml");
+        workspace_file.save_to_file(&path)?;
+        log::info!("Session saved to {}", path.display());
+
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -380,36 +503,110 @@ impl ApplicationHandler for App {
             window.scale_factor(),
         );
 
-        // Spawn the first pane.
-        let first_id = PaneId::next();
-        let (mut terminal, pty_rx) =
-            Terminal::new(initial_size, cfg.shell.clone(), None).unwrap_or_else(|e| {
-                log::error!("Failed to create PTY session: {e}");
-                std::process::exit(1);
-            });
-        terminal.grid_mut().max_scrollback = cfg.scrollback_lines;
-
-        let mut panes = HashMap::new();
-        panes.insert(first_id, terminal);
-
-        let mut pty_channels = HashMap::new();
-        pty_channels.insert(first_id, pty_rx);
-
-        let tab_manager = TabManager::new(first_id);
-        // Matching layout tree for the first (only) tab.
-        let tab_layouts = vec![PaneNode::Leaf { pane_id: first_id }];
-
         let keymap = KeymapHandler::new(cfg.multiplexer.leader_timeout_ms);
 
         let clipboard = Clipboard::new()
             .map_err(|e| log::warn!("Clipboard unavailable: {e}"))
             .ok();
 
-        // Initialize per-pane structured output state for the first pane.
-        let mut auto_detectors = HashMap::new();
-        auto_detectors.insert(first_id, AutoDetector::new());
-        let mut structured_blocks_map: HashMap<PaneId, Vec<StructuredBlock>> = HashMap::new();
-        structured_blocks_map.insert(first_id, Vec::new());
+        // ---------------------------------------------------------------
+        // Determine initial panes and layout.
+        //
+        // If `initial_workspace` is set (from `arcterm open` or auto-restore
+        // of `_last_session.toml`), restore panes from the workspace layout.
+        // Otherwise spawn a single default pane.
+        // ---------------------------------------------------------------
+        let (panes, pty_channels, tab_manager, tab_layouts, auto_detectors, structured_blocks_map) =
+            if let Some(ref ws) = self.initial_workspace {
+                let ws_layout = &ws.layout;
+
+                // Validate: if the workspace has no leaves, fall back to
+                // a single fresh pane to avoid an empty-pane state.
+                let leaf_count = count_leaves(ws_layout);
+                if leaf_count == 0 {
+                    log::warn!(
+                        "Workspace '{}' has no panes; starting with a single fresh pane",
+                        ws.workspace.name
+                    );
+                    spawn_default_pane(&cfg, initial_size)
+                } else {
+                    // Produce a fresh PaneNode tree with new PaneIds, plus per-leaf metadata.
+                    let (pane_tree, leaf_metadata) = ws_layout.to_pane_tree();
+
+                    let mut panes = HashMap::new();
+                    let mut pty_channels = HashMap::new();
+                    let mut auto_detectors = HashMap::new();
+                    let mut structured_blocks_map: HashMap<PaneId, Vec<StructuredBlock>> =
+                        HashMap::new();
+
+                    // Collect all leaf PaneIds from the restored tree in
+                    // the same traversal order as `to_pane_tree()`.
+                    let leaf_ids = pane_tree.all_pane_ids();
+
+                    // Spawn a terminal for each leaf, using the saved CWD.
+                    for (id, meta) in leaf_ids.iter().zip(leaf_metadata.iter()) {
+                        let cwd: Option<std::path::PathBuf> =
+                            meta.directory.as_deref().map(std::path::PathBuf::from);
+                        match Terminal::new(
+                            initial_size,
+                            cfg.shell.clone(),
+                            cwd.as_deref(),
+                        ) {
+                            Ok((mut terminal, rx)) => {
+                                terminal.grid_mut().max_scrollback = cfg.scrollback_lines;
+                                // Inject workspace-level environment variables.
+                                for (key, val) in &ws.environment {
+                                    terminal.write_input(
+                                        format!("export {key}={val}\n").as_bytes(),
+                                    );
+                                }
+                                // Inject per-pane environment overrides.
+                                if let Some(env) = &meta.env {
+                                    for (key, val) in env {
+                                        terminal.write_input(
+                                            format!("export {key}={val}\n").as_bytes(),
+                                        );
+                                    }
+                                }
+                                // If a command was saved, replay it.
+                                if let Some(cmd) = &meta.command {
+                                    terminal.write_input(format!("{cmd}\n").as_bytes());
+                                }
+                                panes.insert(*id, terminal);
+                                pty_channels.insert(*id, rx);
+                            }
+                            Err(e) => {
+                                log::error!(
+                                    "Failed to create PTY for restored pane {:?}: {e}",
+                                    id
+                                );
+                            }
+                        }
+                        auto_detectors.insert(*id, AutoDetector::new());
+                        structured_blocks_map.insert(*id, Vec::new());
+                    }
+
+                    // Use the first leaf as focus for the tab.
+                    let focus_id = leaf_ids.first().copied().unwrap_or_else(PaneId::next);
+                    let tab_manager = TabManager::new(focus_id);
+                    let tab_layouts = vec![pane_tree];
+
+                    log::info!(
+                        "Restored workspace '{}' with {} pane(s)",
+                        ws.workspace.name,
+                        leaf_count
+                    );
+
+                    (panes, pty_channels, tab_manager, tab_layouts, auto_detectors, structured_blocks_map)
+                }
+            } else {
+                spawn_default_pane(&cfg, initial_size)
+            };
+
+        // Set window title to include workspace name when restoring.
+        if let Some(ref ws) = self.initial_workspace {
+            window.set_title(&format!("Arcterm — {}", ws.workspace.name));
+        }
 
         self.state = Some(AppState {
             window,
@@ -713,6 +910,9 @@ impl ApplicationHandler for App {
 
         match event {
             WindowEvent::CloseRequested => {
+                if let Err(e) = state.save_session() {
+                    log::error!("Failed to save session on close: {e}");
+                }
                 event_loop.exit();
             }
 

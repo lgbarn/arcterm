@@ -221,6 +221,31 @@ impl PaneNode {
         }
     }
 
+    /// Rebuild this tree with each leaf's `PaneId` replaced by the value in
+    /// `id_map`.  Leaves whose id is not present in the map are left unchanged.
+    ///
+    /// This is used by the workspace restore path to swap placeholder IDs
+    /// (allocated by `WorkspacePaneNode::to_pane_tree`) for the actual IDs
+    /// of the spawned PTY panes (allocated by repeated `PaneId::next()` calls).
+    #[allow(dead_code)] // Available for future workspace restore callers
+    pub fn remap_pane_ids(&self, id_map: &HashMap<PaneId, PaneId>) -> PaneNode {
+        match self {
+            PaneNode::Leaf { pane_id } => PaneNode::Leaf {
+                pane_id: id_map.get(pane_id).copied().unwrap_or(*pane_id),
+            },
+            PaneNode::HSplit { ratio, left, right } => PaneNode::HSplit {
+                ratio: *ratio,
+                left: Box::new(left.remap_pane_ids(id_map)),
+                right: Box::new(right.remap_pane_ids(id_map)),
+            },
+            PaneNode::VSplit { ratio, top, bottom } => PaneNode::VSplit {
+                ratio: *ratio,
+                top: Box::new(top.remap_pane_ids(id_map)),
+                bottom: Box::new(bottom.remap_pane_ids(id_map)),
+            },
+        }
+    }
+
     /// Returns `true` if this sub-tree contains a leaf with `id`.
     /// Alias for [`find_leaf`] provided for caller ergonomics.
     #[allow(dead_code)]
