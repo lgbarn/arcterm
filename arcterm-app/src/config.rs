@@ -2,9 +2,14 @@
 //!
 //! Reads `~/.config/arcterm/config.toml` on startup; returns compiled-in
 //! defaults when the file is absent or invalid.
+//!
+//! Hot-reload is available via [`watch_config`], which spawns a background
+//! thread that sends a fresh [`ArctermConfig`] whenever the file changes.
 
 use std::path::PathBuf;
+use std::sync::mpsc;
 
+use notify::{EventKind, RecursiveMode, Watcher};
 use serde::Deserialize;
 
 // ---------------------------------------------------------------------------
@@ -161,6 +166,106 @@ impl ArctermConfig {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Hot-reload
+// ---------------------------------------------------------------------------
+
+/// Start watching the config file for changes.
+///
+/// Spawns a background OS thread that:
+/// 1. Watches the parent directory of `config_path()` using the platform's
+///    native file-system event API (`notify::recommended_watcher`).
+/// 2. On any modify event whose path matches `config.toml`, re-parses the
+///    file and sends the new `ArctermConfig` via the returned `mpsc::Receiver`.
+///
+/// The caller should poll the receiver in its event loop (e.g. in
+/// `about_to_wait`) using `try_recv()`.
+///
+/// If the config directory does not exist yet the watcher will still start;
+/// write events on the directory once it is created will be noticed.
+///
+/// # Errors
+///
+/// Returns `None` (and logs a warning) if the file-system watcher cannot be
+/// created.  All subsequent errors (bad TOML on reload, channel closed) are
+/// logged and silently discarded so the app continues running with the last
+/// known-good configuration.
+pub fn watch_config() -> Option<mpsc::Receiver<ArctermConfig>> {
+    let config_path = ArctermConfig::config_path();
+
+    // The directory to watch (parent of config.toml).
+    let watch_dir = config_path.parent().map(PathBuf::from).unwrap_or_else(|| {
+        PathBuf::from(".")
+    });
+
+    // Channel for raw notify events.
+    let (event_tx, event_rx) = mpsc::channel::<notify::Result<notify::Event>>();
+
+    // Channel for parsed configs delivered to the app.
+    let (cfg_tx, cfg_rx) = mpsc::channel::<ArctermConfig>();
+
+    // Build the watcher; pass the mpsc sender as the EventHandler.
+    let mut watcher = match notify::recommended_watcher(event_tx) {
+        Ok(w) => w,
+        Err(e) => {
+            log::warn!("config: cannot create file watcher: {e}");
+            return None;
+        }
+    };
+
+    // Watch the directory (non-recursively; we only care about one file).
+    if let Err(e) = watcher.watch(&watch_dir, RecursiveMode::NonRecursive) {
+        log::warn!("config: cannot watch {}: {e}", watch_dir.display());
+        // Non-fatal: caller still gets a receiver (it will just never fire).
+    }
+
+    // Spawn a background thread that forwards parsed configs to the app.
+    std::thread::Builder::new()
+        .name("config-watcher".to_string())
+        .spawn(move || {
+            // Keep watcher alive for the lifetime of the thread.
+            let _watcher = watcher;
+
+            for result in event_rx {
+                let event = match result {
+                    Ok(e) => e,
+                    Err(e) => {
+                        log::warn!("config: watcher error: {e}");
+                        continue;
+                    }
+                };
+
+                // Only react to modify events.
+                if !matches!(event.kind, EventKind::Modify(_)) {
+                    continue;
+                }
+
+                // Check that at least one path in the event matches config.toml.
+                let relevant = event.paths.iter().any(|p| {
+                    p.file_name()
+                        .map(|n| n == "config.toml")
+                        .unwrap_or(false)
+                });
+
+                if !relevant {
+                    continue;
+                }
+
+                log::info!("config: detected change, reloading…");
+                let new_cfg = ArctermConfig::load();
+
+                if cfg_tx.send(new_cfg).is_err() {
+                    // Receiver dropped — app has exited; stop the thread.
+                    break;
+                }
+            }
+        })
+        .map_err(|e| log::warn!("config: cannot spawn watcher thread: {e}"))
+        .ok();
+
+    Some(cfg_rx)
 }
 
 // ---------------------------------------------------------------------------

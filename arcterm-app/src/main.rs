@@ -79,8 +79,11 @@ struct AppState {
     shell_exited: bool,
 
     // ---- configuration ----
-    /// Loaded configuration (used for hot-reload in Task 3).
+    /// Loaded configuration; kept for reference and future use.
     config: config::ArctermConfig,
+    /// Receives updated configurations from the file-system watcher thread.
+    /// `None` if the watcher could not be started.
+    config_rx: Option<std::sync::mpsc::Receiver<config::ArctermConfig>>,
 
     // ---- selection & clipboard ----
     selection: Selection,
@@ -120,6 +123,8 @@ impl ApplicationHandler for App {
 
         // Load configuration first so all values are available for wiring.
         let cfg = config::ArctermConfig::load();
+        // Start the hot-reload watcher (best-effort; None if unavailable).
+        let config_rx = config::watch_config();
         log::info!(
             "config: font_size={}, scrollback_lines={}, color_scheme={}",
             cfg.font_size,
@@ -163,6 +168,7 @@ impl ApplicationHandler for App {
             pty_rx,
             shell_exited: false,
             config: cfg,
+            config_rx,
             selection: Selection::default(),
             clipboard,
             last_cursor_position: (0.0, 0.0),
@@ -179,6 +185,44 @@ impl ApplicationHandler for App {
 
         if state.shell_exited {
             return;
+        }
+
+        // ------------------------------------------------------------------
+        // Config hot-reload: drain all pending config updates.
+        // ------------------------------------------------------------------
+        if let Some(rx) = &state.config_rx {
+            loop {
+                match rx.try_recv() {
+                    Ok(new_cfg) => {
+                        // Font size changes require a renderer restart because
+                        // glyphon font metrics are baked in at construction time.
+                        if (new_cfg.font_size - state.config.font_size).abs() > f32::EPSILON {
+                            log::info!(
+                                "config: font_size changed ({} → {}): restart required",
+                                state.config.font_size,
+                                new_cfg.font_size,
+                            );
+                        }
+
+                        // Scrollback limit can be updated at runtime.
+                        if new_cfg.scrollback_lines != state.config.scrollback_lines {
+                            log::info!(
+                                "config: scrollback_lines changed ({} → {})",
+                                state.config.scrollback_lines,
+                                new_cfg.scrollback_lines,
+                            );
+                            state.terminal.grid_mut().max_scrollback = new_cfg.scrollback_lines;
+                        }
+
+                        state.config = new_cfg;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        log::warn!("config: watcher channel disconnected");
+                        break;
+                    }
+                }
+            }
         }
 
         let mut got_data = false;
