@@ -379,6 +379,58 @@ impl TextRenderer {
         }
     }
 
+    /// Prepare arbitrary overlay text labels at absolute pixel positions.
+    ///
+    /// Each entry is `(text, x, y)` in physical pixels.  Used for the command
+    /// palette overlay.  Call this after `prepare_grid_at` and before
+    /// `submit_text_areas`.
+    pub fn prepare_overlay_text(
+        &mut self,
+        entries: &[(String, f32, f32)],
+        scale_factor: f32,
+        fg: glyphon::Color,
+    ) {
+        let cell_h = self.cell_size.height;
+
+        for (text, x, y) in entries {
+            let slot_idx = self.pane_slots.len();
+            if slot_idx >= self.pane_buffer_pool.len() {
+                self.pane_buffer_pool.push(Vec::new());
+            }
+            let buf_vec = &mut self.pane_buffer_pool[slot_idx];
+            if buf_vec.is_empty() {
+                buf_vec.push(Buffer::new(
+                    &mut self.font_system,
+                    Metrics::new(self.font_size, self.line_height),
+                ));
+            }
+
+            let buf = &mut buf_vec[0];
+            buf.set_size(
+                &mut self.font_system,
+                Some(2000.0 * scale_factor),
+                Some(cell_h * scale_factor),
+            );
+            buf.set_text(
+                &mut self.font_system,
+                text.as_str(),
+                &Attrs::new().family(Family::Monospace).color(fg),
+                Shaping::Basic,
+                None,
+            );
+            buf.shape_until_scroll(&mut self.font_system, false);
+
+            self.pane_slots.push(PaneSlot {
+                offset_x: *x,
+                offset_y: *y,
+                clip: None,
+                num_rows: 1,
+                scale_factor,
+                default_fg: fg,
+            });
+        }
+    }
+
     /// Render previously prepared text into the active render pass, then trim
     /// the glyph atlas to reclaim unused cache entries.
     ///

@@ -97,7 +97,7 @@ impl Renderer {
             grid,
             rect: [0.0, 0.0, w, h],
         };
-        self.render_multipane(&[pane], &[], scale_factor);
+        self.render_multipane(&[pane], &[], &[], scale_factor);
     }
 
     /// Render multiple panes and overlay quads in a single GPU pass.
@@ -108,10 +108,14 @@ impl Renderer {
     ///
     /// `overlay_quads` are drawn on top of all cell backgrounds but beneath
     /// text (e.g. borders, tab bar backgrounds).
+    ///
+    /// `overlay_text` is a slice of `(text, physical_x, physical_y)` tuples
+    /// rendered on top of all quads (used for command palette labels).
     pub fn render_multipane(
         &mut self,
         panes: &[PaneRenderInfo<'_>],
         overlay_quads: &[OverlayQuad],
+        overlay_text: &[(String, f32, f32)],
         scale_factor: f64,
     ) {
         let sf = scale_factor as f32;
@@ -163,6 +167,12 @@ impl Renderer {
 
         // Upload quads to GPU.
         self.quads.prepare(&self.gpu.queue, &all_quads, w, h);
+
+        // Prepare overlay text (e.g. command palette labels).
+        if !overlay_text.is_empty() {
+            let fg = self.palette.fg_glyphon();
+            self.text.prepare_overlay_text(overlay_text, sf, fg);
+        }
 
         // Upload text to GPU.
         let _ = self.text.submit_text_areas(&self.gpu.device, &self.gpu.queue);

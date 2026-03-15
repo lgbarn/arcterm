@@ -145,6 +145,11 @@ struct AppState {
 
     /// Command palette state; `None` when the palette is closed.
     palette_mode: Option<PaletteState>,
+
+    // ---- Neovim integration ----
+    /// Cached Neovim detection state for each pane.  Updated lazily on
+    /// `NavigatePane` events with a 2-second TTL to avoid syscall spam.
+    nvim_states: HashMap<PaneId, neovim::NeovimState>,
 }
 
 impl AppState {
@@ -335,6 +340,7 @@ impl ApplicationHandler for App {
             fps_last_log: Instant::now(),
             fps_frame_count: 0,
             palette_mode: None,
+            nvim_states: HashMap::new(),
         });
     }
 
@@ -908,7 +914,32 @@ impl ApplicationHandler for App {
                     });
                 }
 
-                state.renderer.render_multipane(&pane_infos, &overlay_quads, scale);
+                // Build palette overlay quads and text when the palette is open.
+                let mut palette_text: Vec<(String, f32, f32)> = Vec::new();
+                if let Some(pal) = &state.palette_mode {
+                    let win_w = state.renderer.gpu.surface_config.width as f32;
+                    let win_h = state.renderer.gpu.surface_config.height as f32;
+                    let cell_w = state.renderer.text.cell_size.width;
+                    let cell_h = state.renderer.text.cell_size.height;
+                    let pal_sf = sf;
+
+                    // Quads.
+                    let pal_quads = pal.render_quads(win_w, win_h, cell_w, cell_h, pal_sf);
+                    for pq in pal_quads {
+                        overlay_quads.push(OverlayQuad {
+                            rect: pq.rect,
+                            color: pq.color,
+                        });
+                    }
+
+                    // Text.
+                    let pal_texts = pal.render_text_content(win_w, win_h, cell_w, cell_h, pal_sf);
+                    for pt in pal_texts {
+                        palette_text.push((pt.text, pt.x, pt.y));
+                    }
+                }
+
+                state.renderer.render_multipane(&pane_infos, &overlay_quads, &palette_text, scale);
 
                 #[cfg(feature = "latency-trace")]
                 {
@@ -1032,11 +1063,99 @@ impl ApplicationHandler for App {
                         }
 
                         KeyAction::NavigatePane(dir) => {
-                            let rects = state.compute_pane_rects();
-                            if let Some(new_focus) = state.active_layout().focus_in_direction(focused_id, dir, &rects) {
-                                state.set_focused_pane(new_focus);
-                                state.selection.clear();
-                                state.window.request_redraw();
+                            // ── Neovim-aware pane crossing ──────────────────
+                            // 1. Retrieve (or refresh) the cached Neovim state
+                            //    for the focused pane.
+                            let child_pid = state
+                                .panes
+                                .get(&focused_id)
+                                .and_then(|t| t.child_pid());
+
+                            let nvim_state = {
+                                let needs_refresh = state
+                                    .nvim_states
+                                    .get(&focused_id)
+                                    .map(|s| !s.is_fresh())
+                                    .unwrap_or(true);
+
+                                if needs_refresh {
+                                    let fresh = neovim::NeovimState::check(child_pid);
+                                    state.nvim_states.insert(focused_id, fresh);
+                                }
+
+                                // Borrow the state immutably for the check below.
+                                let s = state.nvim_states.get(&focused_id).unwrap();
+                                (s.is_nvim, s.socket_path.clone())
+                            };
+
+                            // 2. If the pane is running Neovim and we have a
+                            //    socket path, query whether Neovim has a split
+                            //    in the requested direction.
+                            let nvim_consumed = if nvim_state.0 {
+                                if let Some(ref socket_path) = nvim_state.1 {
+                                    // Use block_in_place — we are already inside
+                                    // the Tokio runtime context established in
+                                    // main().  This runs the synchronous socket
+                                    // I/O on the current thread without blocking
+                                    // the async executor.
+                                    tokio::task::block_in_place(|| {
+                                        match neovim::NvimRpcClient::connect(socket_path) {
+                                            Ok(mut client) => {
+                                                match neovim::has_nvim_neighbor(&mut client, dir) {
+                                                    Ok(true) => {
+                                                        // Neovim has a split in this
+                                                        // direction — forward the key.
+                                                        let ctrl_byte: &[u8] = match dir {
+                                                            Direction::Left  => &[0x08], // Ctrl+h
+                                                            Direction::Down  => &[0x0A], // Ctrl+j
+                                                            Direction::Up    => &[0x0B], // Ctrl+k
+                                                            Direction::Right => &[0x0C], // Ctrl+l
+                                                        };
+                                                        if let Some(terminal) =
+                                                            state.panes.get_mut(&focused_id)
+                                                        {
+                                                            terminal.write_input(ctrl_byte);
+                                                        }
+                                                        true // consumed by Neovim
+                                                    }
+                                                    Ok(false) => false, // fall through
+                                                    Err(e) => {
+                                                        log::debug!(
+                                                            "nvim RPC query failed for {:?}: {e}",
+                                                            focused_id
+                                                        );
+                                                        false // fall through
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                log::debug!(
+                                                    "nvim socket connect failed for {:?}: {e}",
+                                                    focused_id
+                                                );
+                                                false // fall through
+                                            }
+                                        }
+                                    })
+                                } else {
+                                    false // no socket → fall through
+                                }
+                            } else {
+                                false // not nvim → fall through
+                            };
+
+                            // 3. If Neovim did not consume the key, use
+                            //    arcterm's layout-based navigation.
+                            if !nvim_consumed {
+                                let rects = state.compute_pane_rects();
+                                if let Some(new_focus) = state
+                                    .active_layout()
+                                    .focus_in_direction(focused_id, dir, &rects)
+                                {
+                                    state.set_focused_pane(new_focus);
+                                    state.selection.clear();
+                                    state.window.request_redraw();
+                                }
                             }
                         }
 
@@ -1095,6 +1214,7 @@ impl ApplicationHandler for App {
                                     let lid = PaneId(id);
                                     state.panes.remove(&lid);
                                     state.pty_channels.remove(&lid);
+                                    state.nvim_states.remove(&lid);
                                 }
                                 // If no tabs left, exit.
                                 if state.tab_manager.tab_count() == 0 {
@@ -1114,6 +1234,7 @@ impl ApplicationHandler for App {
                                 // Remove the terminal and channel.
                                 state.panes.remove(&focused);
                                 state.pty_channels.remove(&focused);
+                                state.nvim_states.remove(&focused);
 
                                 // Focus the first remaining pane.
                                 let remaining = state.tab_layouts[active].all_pane_ids();
