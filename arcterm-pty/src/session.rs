@@ -37,6 +37,8 @@ pub struct PtySession {
     /// `None` after `shutdown()` has been called.
     writer: Option<Box<dyn Write + Send>>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
+    /// PID of the child process, if the platform exposes it.
+    child_pid: Option<u32>,
 }
 
 impl PtySession {
@@ -86,6 +88,9 @@ impl PtySession {
             .spawn_command(cmd)
             .map_err(|e| PtyError::SpawnFailed(e.to_string()))?;
 
+        // Capture the child PID before dropping the slave end.
+        let child_pid = child.process_id();
+
         // Drop the slave end so EOF propagates correctly when the child exits.
         drop(pair.slave);
 
@@ -126,6 +131,7 @@ impl PtySession {
                 master,
                 writer: Some(writer),
                 child,
+                child_pid,
             },
             rx,
         ))
@@ -162,6 +168,11 @@ impl PtySession {
     /// Returns `true` if the child process is still running.
     pub fn is_alive(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// Returns the PID of the child process, if available.
+    pub fn child_pid(&self) -> Option<u32> {
+        self.child_pid
     }
 
     /// Gracefully shut down: drop the writer (send EOF) and wait for the child

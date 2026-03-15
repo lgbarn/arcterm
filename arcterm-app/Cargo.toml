@@ -26,3 +26,5 @@ toml = "1"
 serde = { version = "1", features = ["derive"] }
 dirs = "6"
 notify = "8"
+rmpv.workspace = true
+libc = "0.2"

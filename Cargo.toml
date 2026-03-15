@@ -24,6 +24,8 @@ pollster = "0.4"
 log = "0.4"
 env_logger = "0.11"
 
+rmpv = "1"
+
 arcterm-core = { path = "arcterm-core" }
 arcterm-vt = { path = "arcterm-vt" }
 arcterm-pty = { path = "arcterm-pty" }

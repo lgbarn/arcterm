@@ -18,6 +18,7 @@ mod config;
 mod input;
 mod keymap;
 mod layout;
+mod neovim;
 mod palette;
 mod selection;
 mod tab;
@@ -34,6 +35,7 @@ use std::time::Instant as TraceInstant;
 use arcterm_core::{Cell, CellAttrs, Color, CursorPos, GridSize};
 use arcterm_render::{OverlayQuad, PaneRenderInfo, RenderPalette, Renderer};
 use keymap::{KeyAction, KeymapHandler};
+use palette::PaletteState;
 use layout::{Axis, Direction, PaneId, PaneNode, PixelRect};
 use selection::{generate_selection_quads, pixel_to_cell, Clipboard, Selection, SelectionMode, SelectionQuad};
 use tab::TabManager;
@@ -141,8 +143,8 @@ struct AppState {
     fps_last_log: Instant,
     fps_frame_count: u32,
 
-    /// Whether the command palette stub flag is set.
-    palette_open: bool,
+    /// Command palette state; `None` when the palette is closed.
+    palette_mode: Option<PaletteState>,
 }
 
 impl AppState {
@@ -332,7 +334,7 @@ impl ApplicationHandler for App {
             idle_cycles: 0,
             fps_last_log: Instant::now(),
             fps_frame_count: 0,
-            palette_open: false,
+            palette_mode: None,
         });
     }
 
@@ -980,6 +982,30 @@ impl ApplicationHandler for App {
                         }
                     }
 
+                    // Palette is modal — route ALL key input through it when open.
+                    if let Some(palette) = &mut state.palette_mode {
+                        use palette::PaletteEvent;
+                        let palette_event = palette.handle_input(&event, self.modifiers);
+                        match palette_event {
+                            PaletteEvent::Close => {
+                                state.palette_mode = None;
+                                state.window.request_redraw();
+                            }
+                            PaletteEvent::Execute(palette_action) => {
+                                let key_action = palette_action.to_key_action();
+                                state.palette_mode = None;
+                                // Dispatch the converted KeyAction through the same
+                                // path used by regular keymap bindings.
+                                execute_key_action(state, event_loop, key_action);
+                                state.window.request_redraw();
+                            }
+                            PaletteEvent::Consumed => {
+                                state.window.request_redraw();
+                            }
+                        }
+                        return;
+                    }
+
                     // Route through the keymap handler.
                     let focused_id = state.focused_pane();
                     let app_cursor = state
@@ -1171,9 +1197,9 @@ impl ApplicationHandler for App {
                         }
 
                         KeyAction::OpenPalette => {
-                            state.palette_open = !state.palette_open;
-                            log::info!("Command palette: {}", if state.palette_open { "open" } else { "closed" });
-                            // Stub — future palette UI will render here.
+                            state.palette_mode = Some(PaletteState::new());
+                            log::info!("Command palette: open");
+                            state.window.request_redraw();
                         }
 
                         KeyAction::Consumed => {
@@ -1186,6 +1212,136 @@ impl ApplicationHandler for App {
 
             _ => {}
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helper: dispatch a KeyAction produced by the command palette.
+//
+// This covers the subset of KeyAction variants reachable from PaletteAction;
+// Forward, SwitchTab, ResizePane, Consumed, and OpenPalette are never emitted
+// by the palette and are handled as no-ops here.
+// ---------------------------------------------------------------------------
+
+fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action: KeyAction) {
+    let focused_id = state.focused_pane();
+
+    match action {
+        KeyAction::NavigatePane(dir) => {
+            let rects = state.compute_pane_rects();
+            if let Some(new_focus) =
+                state.active_layout().focus_in_direction(focused_id, dir, &rects)
+            {
+                state.set_focused_pane(new_focus);
+                state.selection.clear();
+            }
+        }
+
+        KeyAction::Split(axis) => {
+            let rects = state.compute_pane_rects();
+            let focused_rect = rects.get(&focused_id).copied().unwrap_or(PixelRect {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 600.0,
+            });
+            let new_rect = match axis {
+                Axis::Horizontal => PixelRect { width: focused_rect.width / 2.0, ..focused_rect },
+                Axis::Vertical => PixelRect { height: focused_rect.height / 2.0, ..focused_rect },
+            };
+            let new_size = state.grid_size_for_rect(new_rect);
+            let new_id = state.spawn_pane(new_size);
+            let orig_size = state.grid_size_for_rect(new_rect);
+            if let Some(terminal) = state.panes.get_mut(&focused_id) {
+                terminal.resize(orig_size);
+            }
+            let active = state.tab_manager.active;
+            state.tab_layouts[active].split(focused_id, axis, new_id);
+            state.set_focused_pane(new_id);
+        }
+
+        KeyAction::ClosePane => {
+            let active = state.tab_manager.active;
+            let pane_count = state.tab_layouts[active].all_pane_ids().len();
+            if pane_count <= 1 {
+                let removed_ids = state.tab_manager.close_tab(active);
+                if active < state.tab_layouts.len() {
+                    state.tab_layouts.remove(active);
+                }
+                for id in removed_ids {
+                    let lid = PaneId(id);
+                    state.panes.remove(&lid);
+                    state.pty_channels.remove(&lid);
+                }
+                if state.tab_manager.tab_count() == 0 {
+                    event_loop.exit();
+                    return;
+                }
+                let new_focus = PaneId(state.tab_manager.active_tab().focus);
+                state.set_focused_pane(new_focus);
+            } else {
+                let replacement = state.tab_layouts[active].close(focused_id);
+                if let Some(new_root) = replacement {
+                    state.tab_layouts[active] = new_root;
+                }
+                state.panes.remove(&focused_id);
+                state.pty_channels.remove(&focused_id);
+                let remaining = state.tab_layouts[active].all_pane_ids();
+                if let Some(&new_focus) = remaining.first() {
+                    state.set_focused_pane(new_focus);
+                }
+            }
+            state.selection.clear();
+        }
+
+        KeyAction::ToggleZoom => {
+            let tab = state.tab_manager.active_tab_mut();
+            if tab.zoomed == Some(focused_id.0) {
+                tab.zoomed = None;
+            } else {
+                tab.zoomed = Some(focused_id.0);
+            }
+        }
+
+        KeyAction::NewTab => {
+            let win_size = state.window.inner_size();
+            let full_size = state.renderer.grid_size_for_window(
+                win_size.width,
+                win_size.height,
+                state.window.scale_factor(),
+            );
+            let new_id = state.spawn_pane(full_size);
+            let tab_idx = state.tab_manager.add_tab(new_id.0);
+            state.tab_layouts.push(PaneNode::Leaf { pane_id: new_id });
+            state.tab_manager.switch_to(tab_idx);
+            state.set_focused_pane(new_id);
+            state.selection.clear();
+        }
+
+        KeyAction::CloseTab => {
+            let active = state.tab_manager.active;
+            let removed_ids = state.tab_manager.close_tab(active);
+            if !removed_ids.is_empty() {
+                if active < state.tab_layouts.len() {
+                    state.tab_layouts.remove(active);
+                }
+                for id in removed_ids {
+                    let lid = PaneId(id);
+                    state.panes.remove(&lid);
+                    state.pty_channels.remove(&lid);
+                }
+                let new_focus = PaneId(state.tab_manager.active_tab().focus);
+                state.set_focused_pane(new_focus);
+                state.selection.clear();
+            }
+        }
+
+        // These are not reachable from palette actions but must be exhaustive.
+        KeyAction::Forward(_)
+        | KeyAction::ResizePane(_)
+        | KeyAction::SwitchTab(_)
+        | KeyAction::OpenPalette
+        | KeyAction::Consumed => {}
     }
 }
 
