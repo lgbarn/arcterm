@@ -57,6 +57,7 @@ pub fn translate_key_event(
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn translate_named_key(key: &NamedKey, app_cursor_keys: bool) -> Option<Vec<u8>> {
     translate_named(key, app_cursor_keys)
 }

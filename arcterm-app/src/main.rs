@@ -27,7 +27,7 @@ use winit::event_loop::ControlFlow;
 use std::time::Instant as TraceInstant;
 
 use arcterm_core::{Cell, CellAttrs, Color, CursorPos};
-use arcterm_render::Renderer;
+use arcterm_render::{RenderPalette, Renderer};
 use selection::{generate_selection_quads, pixel_to_cell, Clipboard, Selection, SelectionMode, SelectionQuad};
 use terminal::Terminal;
 use tokio::sync::mpsc;
@@ -149,7 +149,12 @@ impl ApplicationHandler for App {
         );
 
         // Pass font_size from config to the renderer.
-        let renderer = Renderer::new(window.clone(), cfg.font_size);
+        let mut renderer = Renderer::new(window.clone(), cfg.font_size);
+
+        // Apply the colour palette resolved from config.
+        let palette = palette_from_config(&cfg);
+        log::info!("config: color_scheme={:?}", cfg.color_scheme);
+        renderer.set_palette(palette);
 
         let size = renderer.grid_size_for_window(
             window.inner_size().width,
@@ -225,6 +230,39 @@ impl ApplicationHandler for App {
                                 new_cfg.scrollback_lines,
                             );
                             state.terminal.grid_mut().max_scrollback = new_cfg.scrollback_lines;
+                        }
+
+                        // Colour scheme or per-slot overrides changed: rebuild
+                        // and apply the palette immediately.
+                        if new_cfg.color_scheme != state.config.color_scheme
+                            || new_cfg.colors.foreground != state.config.colors.foreground
+                            || new_cfg.colors.background != state.config.colors.background
+                            || new_cfg.colors.cursor != state.config.colors.cursor
+                            || new_cfg.colors.red != state.config.colors.red
+                            || new_cfg.colors.green != state.config.colors.green
+                            || new_cfg.colors.blue != state.config.colors.blue
+                            || new_cfg.colors.yellow != state.config.colors.yellow
+                            || new_cfg.colors.magenta != state.config.colors.magenta
+                            || new_cfg.colors.cyan != state.config.colors.cyan
+                            || new_cfg.colors.white != state.config.colors.white
+                            || new_cfg.colors.black != state.config.colors.black
+                            || new_cfg.colors.bright_red != state.config.colors.bright_red
+                            || new_cfg.colors.bright_green != state.config.colors.bright_green
+                            || new_cfg.colors.bright_blue != state.config.colors.bright_blue
+                            || new_cfg.colors.bright_yellow != state.config.colors.bright_yellow
+                            || new_cfg.colors.bright_magenta != state.config.colors.bright_magenta
+                            || new_cfg.colors.bright_cyan != state.config.colors.bright_cyan
+                            || new_cfg.colors.bright_white != state.config.colors.bright_white
+                            || new_cfg.colors.bright_black != state.config.colors.bright_black
+                        {
+                            log::info!(
+                                "config: color_scheme changed ({:?} → {:?}), reloading palette",
+                                state.config.color_scheme,
+                                new_cfg.color_scheme,
+                            );
+                            let new_palette = palette_from_config(&new_cfg);
+                            state.renderer.set_palette(new_palette);
+                            state.window.request_redraw();
                         }
 
                         state.config = new_cfg;
@@ -601,4 +639,32 @@ fn cursor_to_cell(state: &AppState, px: f64, py: f64) -> selection::CellPos {
     let cell_w = state.renderer.text.cell_size.width as f64;
     let cell_h = state.renderer.text.cell_size.height as f64;
     pixel_to_cell(px, py, cell_w, cell_h, scale)
+}
+
+// ---------------------------------------------------------------------------
+// Helper: resolve a RenderPalette from the loaded configuration.
+// ---------------------------------------------------------------------------
+
+/// Build a [`RenderPalette`] from an [`ArctermConfig`].
+///
+/// Looks up the named colour scheme; falls back to the default palette when
+/// the name is unrecognised.  User overrides from `config.colors` are applied
+/// on top before the palette is converted to a [`RenderPalette`].
+fn palette_from_config(cfg: &config::ArctermConfig) -> RenderPalette {
+    let app_palette = colors::ColorPalette::by_name(&cfg.color_scheme)
+        .unwrap_or_else(|| {
+            log::warn!(
+                "config: unknown color_scheme {:?}, falling back to catppuccin-mocha",
+                cfg.color_scheme
+            );
+            colors::ColorPalette::default()
+        })
+        .with_overrides(&cfg.colors);
+
+    RenderPalette {
+        foreground: app_palette.foreground,
+        background: app_palette.background,
+        cursor:     app_palette.cursor,
+        ansi:       app_palette.ansi,
+    }
 }
