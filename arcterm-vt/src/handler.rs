@@ -521,7 +521,10 @@ impl Handler for GridState {
             match mode {
                 1 => self.modes.app_cursor_keys = true,
                 7 => self.modes.auto_wrap = true,
-                25 => self.modes.cursor_visible = true,
+                25 => {
+                    self.modes.cursor_visible = true;
+                    self.grid.modes.cursor_visible = true;
+                }
                 // Mode 47 and 1047: enter alt screen WITHOUT cursor save/restore.
                 // Used by older applications and some tmux configurations.
                 47 | 1047 => {
@@ -575,7 +578,10 @@ impl Handler for GridState {
             match mode {
                 1 => self.modes.app_cursor_keys = false,
                 7 => self.modes.auto_wrap = false,
-                25 => self.modes.cursor_visible = false,
+                25 => {
+                    self.modes.cursor_visible = false;
+                    self.grid.modes.cursor_visible = false;
+                }
                 // Mode 47 and 1047: leave alt screen WITHOUT cursor save/restore.
                 47 | 1047 => {
                     if self.modes.alt_screen {

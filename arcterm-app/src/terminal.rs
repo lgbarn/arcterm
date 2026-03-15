@@ -2,14 +2,14 @@
 
 use arcterm_core::{Grid, GridSize};
 use arcterm_pty::{PtyError, PtySession};
-use arcterm_vt::Processor;
+use arcterm_vt::{ApcScanner, GridState, StructuredContentAccumulator};
 use tokio::sync::mpsc;
 
 /// Integrates PTY I/O, VT parsing, and the terminal grid.
 pub struct Terminal {
     pty: PtySession,
-    processor: Processor,
-    grid: Grid,
+    scanner: ApcScanner,
+    grid_state: GridState,
 }
 
 impl Terminal {
@@ -26,13 +26,13 @@ impl Terminal {
         shell: Option<String>,
     ) -> Result<(Self, mpsc::Receiver<Vec<u8>>), PtyError> {
         let (pty, rx) = PtySession::new(size, shell)?;
-        let processor = Processor::new();
-        let grid = Grid::new(size);
+        let scanner = ApcScanner::new();
+        let grid_state = GridState::new(Grid::new(size));
         Ok((
             Terminal {
                 pty,
-                processor,
-                grid,
+                scanner,
+                grid_state,
             },
             rx,
         ))
@@ -40,14 +40,24 @@ impl Terminal {
 
     /// Feed raw PTY output bytes through the VT processor into the grid.
     pub fn process_pty_output(&mut self, bytes: &[u8]) {
-        self.processor.advance(&mut self.grid, bytes);
+        self.scanner.advance(&mut self.grid_state, bytes);
     }
 
     /// Drain and return all pending DSR/DA reply bytes queued by the VT processor.
     ///
     /// The caller is responsible for writing each reply to the PTY.
     pub fn take_pending_replies(&mut self) -> Vec<Vec<u8>> {
-        std::mem::take(&mut self.grid.pending_replies)
+        std::mem::take(&mut self.grid_state.grid.pending_replies)
+    }
+
+    /// Drain and return all completed OSC 7770 structured content blocks.
+    pub fn take_completed_blocks(&mut self) -> Vec<StructuredContentAccumulator> {
+        std::mem::take(&mut self.grid_state.completed_blocks)
+    }
+
+    /// Return a reference to the underlying GridState.
+    pub fn grid_state(&self) -> &GridState {
+        &self.grid_state
     }
 
     /// Write raw input bytes to the PTY (shell stdin).
@@ -62,7 +72,7 @@ impl Terminal {
 
     /// Return an immutable reference to the terminal grid.
     pub fn grid(&self) -> &Grid {
-        &self.grid
+        &self.grid_state.grid
     }
 
     /// Return a mutable reference to the terminal grid.
@@ -70,7 +80,7 @@ impl Terminal {
     /// Used by the application layer to adjust `scroll_offset` and clear
     /// selections without going through the VT processor.
     pub fn grid_mut(&mut self) -> &mut Grid {
-        &mut self.grid
+        &mut self.grid_state.grid
     }
 
     /// Set the viewport scroll offset directly.
@@ -78,8 +88,8 @@ impl Terminal {
     /// Clamped to `[0, scrollback_len]`.
     #[allow(dead_code)] // Used in Wave 3 integration
     pub fn set_scroll_offset(&mut self, offset: usize) {
-        let max = self.grid.scrollback.len();
-        self.grid.scroll_offset = offset.min(max);
+        let max = self.grid_state.grid.scrollback.len();
+        self.grid_state.grid.scroll_offset = offset.min(max);
     }
 
     /// Resize both the PTY and the grid.
@@ -87,7 +97,8 @@ impl Terminal {
         if let Err(e) = self.pty.resize(size) {
             log::warn!("PTY resize error: {e}");
         }
-        self.grid.resize(size);
+        self.grid_state.grid.resize(size);
+        self.grid_state.scroll_bottom = size.rows.saturating_sub(1);
     }
 
     /// Returns `true` if the child shell process is still alive.

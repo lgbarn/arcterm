@@ -988,7 +988,7 @@ impl ApplicationHandler for App {
                                             Ok(text) => {
                                                 let focused = state.focused_pane();
                                                 if let Some(terminal) = state.panes.get_mut(&focused) {
-                                                    let bracketed = terminal.grid().modes.bracketed_paste;
+                                                    let bracketed = terminal.grid_state().modes.bracketed_paste;
                                                     if bracketed {
                                                         let mut payload = b"\x1b[200~".to_vec();
                                                         payload.extend_from_slice(text.as_bytes());
@@ -1041,7 +1041,7 @@ impl ApplicationHandler for App {
                     let app_cursor = state
                         .panes
                         .get(&focused_id)
-                        .map(|t| t.grid().modes.app_cursor_keys)
+                        .map(|t| t.grid_state().modes.app_cursor_keys)
                         .unwrap_or(false);
 
                     let action = state.keymap.handle_key(&event, self.modifiers, app_cursor);
