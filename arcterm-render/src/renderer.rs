@@ -1,11 +1,13 @@
 //! High-level Renderer: combines GpuState + QuadRenderer + TextRenderer.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arcterm_core::{Color as TermColor, Grid, GridSize};
 use winit::window::Window;
 
 use crate::gpu::GpuState;
+use crate::image_quad::{ImageQuadRenderer, ImageTexture};
 use crate::palette::RenderPalette;
 use crate::quad::{QuadInstance, QuadRenderer};
 use crate::structured::StructuredBlock;
@@ -48,6 +50,16 @@ pub struct Renderer {
     pub gpu: GpuState,
     pub text: TextRenderer,
     pub quads: QuadRenderer,
+    /// Textured image quad pipeline for Kitty graphics inline images.
+    pub images: ImageQuadRenderer,
+    /// Per-image-ID GPU textures (image_id → ImageTexture).
+    ///
+    /// Images are stored here after upload so they can be reused across
+    /// frames.  Drop the entry to release GPU memory when an image is
+    /// deleted or scrolled out of scrollback.
+    pub image_store: HashMap<u32, ImageTexture>,
+    /// Active image placements for the current frame: (image_id, pixel-rect).
+    pub image_placements: Vec<(u32, [f32; 4])>,
     /// Active colour palette — hot-reloadable via [`set_palette`].
     pub palette: RenderPalette,
 }
@@ -67,10 +79,14 @@ impl Renderer {
             font_size,
         );
         let quads = QuadRenderer::new(&gpu.device, gpu.surface_format);
+        let images = ImageQuadRenderer::new(&gpu.device, gpu.surface_format);
         Self {
             gpu,
             text,
             quads,
+            images,
+            image_store: HashMap::new(),
+            image_placements: Vec::new(),
             palette: RenderPalette::default(),
         }
     }
@@ -217,6 +233,20 @@ impl Renderer {
         // Upload quads to GPU.
         self.quads.prepare(&self.gpu.queue, &all_quads, w, h);
 
+        // Build image placement list: resolve image_id → ImageTexture reference.
+        // Collect into a Vec so the borrows are stable before the render pass opens.
+        let image_placements: Vec<(&ImageTexture, [f32; 4])> = self
+            .image_placements
+            .iter()
+            .filter_map(|(id, rect)| {
+                self.image_store.get(id).map(|tex| (tex, *rect))
+            })
+            .collect();
+
+        // Upload image vertices + uniform to GPU before the render pass.
+        self.images
+            .prepare(&self.gpu.queue, &image_placements, w, h);
+
         // Prepare overlay text (e.g. command palette labels).
         if !overlay_text.is_empty() {
             let fg = self.palette.fg_glyphon();
@@ -270,12 +300,28 @@ impl Renderer {
             // 1. Draw cell background quads (and cursor block) first.
             self.quads.render(&mut pass);
 
-            // 2. Draw text glyphs on top.
+            // 2. Draw inline images (above cell backgrounds, below text).
+            self.images.render(&mut pass, &image_placements);
+
+            // 3. Draw text glyphs on top.
             let _ = self.text.render(&mut pass);
         }
 
         self.gpu.queue.submit(Some(encoder.finish()));
         frame.present();
+    }
+
+    /// Upload decoded RGBA image data to the GPU and store it in `image_store`.
+    ///
+    /// If an image with the same `image_id` already exists, it is replaced.
+    /// The old GPU texture is dropped immediately (releasing GPU memory).
+    ///
+    /// Call this from the main loop after draining `terminal.take_pending_images()`.
+    pub fn upload_image(&mut self, image_id: u32, rgba: &[u8], width: u32, height: u32) {
+        let texture = self
+            .images
+            .create_texture(&self.gpu.device, &self.gpu.queue, rgba, width, height);
+        self.image_store.insert(image_id, texture);
     }
 
     /// Calculate how many columns × rows fit the window at the given scale.
