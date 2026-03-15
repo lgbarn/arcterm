@@ -32,3 +32,18 @@
 - **Phase:** 2
 - **Status:** planned
 - **Message:** 7 plans across 3 waves. Verdict: CAUTION (file conflicts manageable via wave ordering). Research identified bg color rendering gap and DEC private mode gaps.
+
+## 2026-03-15 — Phase 2 Build Complete
+- **Phase:** 2
+- **Status:** complete
+- **Plans:** 7/7 complete (1.1, 1.2, 2.1, 2.2, 2.3, 3.1, 3.2)
+- **Tests:** 195 passing (55 app, 51 core, 6 pty, 6 render, 77 vt)
+- **Key Features:**
+  - Scrollback buffer, scroll regions, alternate screen
+  - DEC private modes, app cursor keys, bracketed paste
+  - wgpu quad pipeline for backgrounds + cursor
+  - TOML config with hot-reload
+  - 8 color schemes + custom RGB overrides
+  - Mouse selection + clipboard + scroll viewport
+  - DSR/DA responses, Mailbox present mode, FPS counter
+- **Retry cycles:** Plans 1.2 (esc_dispatch guard + missing modes), 2.1-2.3 (clippy fixes)
