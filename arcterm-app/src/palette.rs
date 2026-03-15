@@ -49,6 +49,7 @@ impl PaletteAction {
 
 /// A single entry in the command palette.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PaletteCommand {
     pub label: &'static str,
     pub description: &'static str,
