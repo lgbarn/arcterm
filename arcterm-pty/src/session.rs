@@ -283,10 +283,14 @@ mod tests {
             "output must contain 'goodbye'; got: {output:?}"
         );
 
-        assert!(
-            !session.is_alive(),
-            "is_alive() must be false after shell exited"
-        );
+        // Poll is_alive with a brief timeout — child reap may lag slightly.
+        let exited = timeout(Duration::from_secs(2), async {
+            loop {
+                if !session.is_alive() { break; }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }).await;
+        assert!(exited.is_ok(), "is_alive() must become false after shell exited");
     }
 
     #[tokio::test]

@@ -137,6 +137,7 @@ impl Selection {
     }
 
     /// Return `true` if `pos` is within the (normalized) selection.
+    #[allow(dead_code)] // Used by tests; production use in Wave 3 (selection quad rendering)
     pub fn contains(&self, pos: CellPos) -> bool {
         if self.mode == SelectionMode::None {
             return false;
@@ -169,8 +170,8 @@ impl Selection {
             };
             if let Some(row) = grid.cells.get(row_idx) {
                 let col_end_exclusive = col_end_exclusive.min(row.len());
-                for col_idx in col_start..col_end_exclusive {
-                    result.push(row[col_idx].c);
+                for cell in &row[col_start..col_end_exclusive] {
+                    result.push(cell.c);
                 }
             }
         }
@@ -219,6 +220,7 @@ pub fn pixel_to_cell(
 ///
 /// A "word" is defined as a contiguous run of non-whitespace characters.
 /// If `col` is on a whitespace character the boundary collapses to `(col, col)`.
+#[allow(dead_code)] // Used by tests; production use in Wave 3
 pub fn word_boundaries(row: &[Cell], col: usize) -> (usize, usize) {
     if col >= row.len() {
         return (col, col);

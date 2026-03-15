@@ -9,9 +9,6 @@ use crate::gpu::GpuState;
 use crate::quad::{QuadInstance, QuadRenderer};
 use crate::text::{TextRenderer, ansi_color_to_glyphon};
 
-/// Default font size (logical pixels / points).
-const FONT_SIZE: f32 = 14.0;
-
 /// Dark background color (30, 30, 46 in 0–1 range) — used for the clear load op.
 const BG_COLOR: wgpu::Color = wgpu::Color {
     r: 30.0 / 255.0,

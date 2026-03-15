@@ -477,12 +477,11 @@ impl ApplicationHandler for App {
                                     let text = state
                                         .selection
                                         .extract_text(state.terminal.grid());
-                                    if !text.is_empty() {
-                                        if let Some(cb) = &mut state.clipboard {
-                                            if let Err(e) = cb.copy(&text) {
-                                                log::warn!("Clipboard copy failed: {e}");
-                                            }
-                                        }
+                                    if !text.is_empty()
+                                        && let Some(cb) = &mut state.clipboard
+                                        && let Err(e) = cb.copy(&text)
+                                    {
+                                        log::warn!("Clipboard copy failed: {e}");
                                     }
                                     return;
                                 }
