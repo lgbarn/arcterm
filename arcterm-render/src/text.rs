@@ -328,3 +328,78 @@ fn hash_color(c: TermColor, h: &mut impl std::hash::Hasher) {
         TermColor::Rgb(r, g, b) => { 2u8.hash(h); r.hash(h); g.hash(h); b.hash(h); }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use arcterm_core::{Cell, Color as TermColor, CursorPos};
+    use super::hash_row;
+
+    /// Two identical rows must produce the same hash.
+    #[test]
+    fn hash_row_identical_rows_match() {
+        let row: Vec<Cell> = (0..5).map(|_| Cell::default()).collect();
+        let cursor = CursorPos { row: 1, col: 0 }; // not this row
+        let h1 = hash_row(&row, 0, cursor);
+        let h2 = hash_row(&row, 0, cursor);
+        assert_eq!(h1, h2, "identical rows must hash identically");
+    }
+
+    /// Changing a cell character must change the hash.
+    #[test]
+    fn hash_row_char_change_invalidates() {
+        let mut row: Vec<Cell> = (0..5).map(|_| Cell::default()).collect();
+        let cursor = CursorPos { row: 1, col: 0 };
+        let h1 = hash_row(&row, 0, cursor);
+        row[2].c = 'X';
+        let h2 = hash_row(&row, 0, cursor);
+        assert_ne!(h1, h2, "character change must alter hash");
+    }
+
+    /// Moving the cursor within the cursor row must change the hash.
+    #[test]
+    fn hash_row_cursor_column_movement_invalidates() {
+        let row: Vec<Cell> = (0..5).map(|_| Cell::default()).collect();
+        let c1 = CursorPos { row: 0, col: 1 };
+        let c2 = CursorPos { row: 0, col: 3 };
+        let h1 = hash_row(&row, 0, c1);
+        let h2 = hash_row(&row, 0, c2);
+        assert_ne!(h1, h2, "cursor column change in cursor row must alter hash");
+    }
+
+    /// Cursor movement in a non-cursor row must NOT change that row's hash.
+    #[test]
+    fn hash_row_cursor_movement_other_row_unchanged() {
+        let row: Vec<Cell> = (0..5).map(|_| Cell::default()).collect();
+        let c1 = CursorPos { row: 3, col: 1 }; // cursor on different row
+        let c2 = CursorPos { row: 3, col: 4 };
+        let h1 = hash_row(&row, 0, c1);
+        let h2 = hash_row(&row, 0, c2);
+        assert_eq!(h1, h2, "cursor movement on another row must not change hash of row 0");
+    }
+
+    /// Changing a cell's fg color must change the hash.
+    #[test]
+    fn hash_row_fg_color_change_invalidates() {
+        let mut row: Vec<Cell> = (0..3).map(|_| Cell::default()).collect();
+        let cursor = CursorPos { row: 1, col: 0 };
+        let h1 = hash_row(&row, 0, cursor);
+        row[1].attrs.fg = TermColor::Rgb(255, 0, 0);
+        let h2 = hash_row(&row, 0, cursor);
+        assert_ne!(h1, h2, "fg color change must alter hash");
+    }
+
+    /// Changing a cell's reverse flag must change the hash.
+    #[test]
+    fn hash_row_reverse_flag_invalidates() {
+        let mut row: Vec<Cell> = (0..3).map(|_| Cell::default()).collect();
+        let cursor = CursorPos { row: 1, col: 0 };
+        let h1 = hash_row(&row, 0, cursor);
+        row[0].attrs.reverse = true;
+        let h2 = hash_row(&row, 0, cursor);
+        assert_ne!(h1, h2, "reverse attribute change must alter hash");
+    }
+}
