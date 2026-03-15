@@ -9,5 +9,8 @@ pub mod text;
 pub use gpu::GpuState;
 pub use palette::RenderPalette;
 pub use quad::{QuadInstance, QuadRenderer};
-pub use renderer::Renderer;
-pub use text::TextRenderer;
+pub use renderer::{
+    OverlayQuad, PaneRenderInfo, Renderer, build_quad_instances_at, render_tab_bar_quads,
+    tab_bar_height,
+};
+pub use text::{ClipRect, TextRenderer};

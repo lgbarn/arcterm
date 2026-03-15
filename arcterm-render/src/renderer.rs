@@ -8,7 +8,32 @@ use winit::window::Window;
 use crate::gpu::GpuState;
 use crate::palette::RenderPalette;
 use crate::quad::{QuadInstance, QuadRenderer};
-use crate::text::{TextRenderer, ansi_color_to_glyphon};
+use crate::text::{ClipRect, TextRenderer, ansi_color_to_glyphon};
+
+// ---------------------------------------------------------------------------
+// Multi-pane types
+// ---------------------------------------------------------------------------
+
+/// Describes a single pane to render in a multi-pane frame.
+pub struct PaneRenderInfo<'a> {
+    /// The terminal grid to render.
+    pub grid: &'a Grid,
+    /// Bounding rectangle in physical pixels: [x, y, width, height].
+    pub rect: [f32; 4],
+}
+
+/// A solid-color overlay quad (used for borders, tab bar backgrounds, etc.).
+#[derive(Clone, Copy, Debug)]
+pub struct OverlayQuad {
+    /// Bounding rectangle in physical pixels: [x, y, width, height].
+    pub rect: [f32; 4],
+    /// RGBA color, components in [0, 1].
+    pub color: [f32; 4],
+}
+
+// ---------------------------------------------------------------------------
+// Renderer
+// ---------------------------------------------------------------------------
 
 /// Top-level renderer: owns GPU state, quad pipeline, text renderer, and
 /// the active colour palette.
@@ -61,29 +86,90 @@ impl Renderer {
     }
 
     /// Render a full terminal grid frame.
+    ///
+    /// Delegates to [`render_multipane`] with a single pane that fills the
+    /// entire surface.
     pub fn render_frame(&mut self, grid: &Grid, scale_factor: f64) {
+        let w = self.gpu.surface_config.width as f32;
+        let h = self.gpu.surface_config.height as f32;
+
+        let pane = PaneRenderInfo {
+            grid,
+            rect: [0.0, 0.0, w, h],
+        };
+        self.render_multipane(&[pane], &[], scale_factor);
+    }
+
+    /// Render multiple panes and overlay quads in a single GPU pass.
+    ///
+    /// For each pane:
+    /// - Cell background quads and cursor blocks are built with `build_quad_instances_at`.
+    /// - Text is shaped via `prepare_grid_at` and submitted all at once.
+    ///
+    /// `overlay_quads` are drawn on top of all cell backgrounds but beneath
+    /// text (e.g. borders, tab bar backgrounds).
+    pub fn render_multipane(
+        &mut self,
+        panes: &[PaneRenderInfo<'_>],
+        overlay_quads: &[OverlayQuad],
+        scale_factor: f64,
+    ) {
         let sf = scale_factor as f32;
         let w = self.gpu.surface_config.width;
         let h = self.gpu.surface_config.height;
 
         self.text.update_viewport(&self.gpu.queue, w, h);
+        self.text.reset_frame();
 
-        // Build quad instances for non-default cell backgrounds and cursor.
-        let quad_instances = build_quad_instances(grid, &self.text.cell_size, sf, &self.palette);
+        // Build all quad instances: cell backgrounds + cursor per pane, then overlays.
+        let mut all_quads: Vec<QuadInstance> = Vec::new();
+
+        for pane in panes {
+            let [px, py, _pw, _ph] = pane.rect;
+            let clip = ClipRect {
+                x: px as i32,
+                y: py as i32,
+                width: pane.rect[2] as u32,
+                height: pane.rect[3] as u32,
+            };
+
+            let pane_quads = build_quad_instances_at(
+                pane.grid,
+                &self.text.cell_size,
+                sf,
+                &self.palette,
+                px,
+                py,
+            );
+            all_quads.extend_from_slice(&pane_quads);
+
+            self.text.prepare_grid_at(
+                pane.grid,
+                px,
+                py,
+                Some(clip),
+                sf,
+                &self.palette,
+            );
+        }
+
+        // Append overlay quads (borders, tab bar backgrounds, etc.).
+        for oq in overlay_quads {
+            all_quads.push(QuadInstance {
+                rect: oq.rect,
+                color: oq.color,
+            });
+        }
 
         // Upload quads to GPU.
-        self.quads.prepare(&self.gpu.queue, &quad_instances, w, h);
+        self.quads.prepare(&self.gpu.queue, &all_quads, w, h);
 
-        // Prepare text — suppress errors on atlas full (rare on first frame).
-        let _ = self
-            .text
-            .prepare_grid(&self.gpu.device, &self.gpu.queue, grid, sf, &self.palette);
+        // Upload text to GPU.
+        let _ = self.text.submit_text_areas(&self.gpu.device, &self.gpu.queue);
 
         let (frame, view) = match self.gpu.begin_frame() {
             Ok(pair) => pair,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                // Surface was lost (common on macOS during occlusion/restoration).
-                // Reconfigure with current dimensions and skip this frame.
                 self.gpu.resize(w, h);
                 return;
             }
@@ -148,16 +234,18 @@ impl Renderer {
 }
 
 // ---------------------------------------------------------------------------
-// Quad instance builder
+// Quad instance builders
 // ---------------------------------------------------------------------------
 
 /// Convert the grid into a list of QuadInstances for non-default backgrounds
-/// and the cursor block.
-fn build_quad_instances(
+/// and the cursor block, offset to a specific pane origin.
+pub fn build_quad_instances_at(
     grid: &Grid,
     cell_size: &crate::text::CellSize,
     scale_factor: f32,
     palette: &RenderPalette,
+    offset_x: f32,
+    offset_y: f32,
 ) -> Vec<QuadInstance> {
     let rows = grid.rows_for_viewport();
     let cursor = grid.cursor;
@@ -168,12 +256,10 @@ fn build_quad_instances(
     let mut quads: Vec<QuadInstance> = Vec::new();
 
     for (row_idx, row) in rows.iter().enumerate() {
-        let y = row_idx as f32 * cell_h;
+        let y = offset_y + row_idx as f32 * cell_h;
         for (col_idx, cell) in row.iter().enumerate() {
-            let x = col_idx as f32 * cell_w;
-            let is_cursor = cursor_visible
-                && row_idx == cursor.row
-                && col_idx == cursor.col;
+            let x = offset_x + col_idx as f32 * cell_w;
+            let is_cursor = cursor_visible && row_idx == cursor.row && col_idx == cursor.col;
 
             // Determine effective fg/bg (swapped for reverse attribute).
             let (eff_fg, eff_bg) = if cell.attrs.reverse {
@@ -192,11 +278,7 @@ fn build_quad_instances(
             }
 
             // Cursor block: draw on top of (possibly colored) background.
-            // The text renderer draws the glyph at this cell in the background
-            // color (via the reverse path or the default bg) so it is readable.
             if is_cursor {
-                // Use the palette cursor colour unless the cell has a custom fg
-                // that would serve better as the block color.
                 let block_color = if matches!(eff_fg, TermColor::Default) {
                     palette.cursor_f32()
                 } else {
@@ -223,4 +305,66 @@ fn term_color_to_f32(color: TermColor, is_fg: bool, palette: &RenderPalette) -> 
         g.b() as f32 / 255.0,
         1.0,
     ]
+}
+
+// ---------------------------------------------------------------------------
+// Tab bar helpers
+// ---------------------------------------------------------------------------
+
+/// Compute the height in physical pixels of the tab bar.
+///
+/// The tab bar is one cell tall plus a small vertical padding.
+pub fn tab_bar_height(cell_size: &crate::text::CellSize, scale_factor: f32) -> f32 {
+    cell_size.height * scale_factor * 1.2
+}
+
+/// Build `QuadInstance`s for a tab bar.
+///
+/// Returns one background quad per tab.  The active tab index is highlighted
+/// using the palette cursor color; inactive tabs use the palette background
+/// darkened (expressed as a fixed overlay).
+///
+/// `tabs` — list of tab labels (length determines number of tabs).
+/// `active_idx` — which tab is currently active.
+/// `cell_size` — logical cell dimensions.
+/// `scale_factor` — physical pixels per logical pixel.
+/// `window_width` — full window width in physical pixels.
+/// `palette` — active colour palette.
+pub fn render_tab_bar_quads(
+    tab_count: usize,
+    active_idx: usize,
+    cell_size: &crate::text::CellSize,
+    scale_factor: f32,
+    window_width: f32,
+    palette: &RenderPalette,
+) -> Vec<QuadInstance> {
+    if tab_count == 0 {
+        return Vec::new();
+    }
+
+    let bar_h = tab_bar_height(cell_size, scale_factor);
+    let tab_w = window_width / tab_count as f32;
+
+    let (br, bg_b, bb) = palette.background;
+    let inactive_color: [f32; 4] = [
+        (br as f32 / 255.0) * 1.3_f32.min(1.0),
+        (bg_b as f32 / 255.0) * 1.3_f32.min(1.0),
+        (bb as f32 / 255.0) * 1.3_f32.min(1.0),
+        1.0,
+    ];
+    let active_color = palette.cursor_f32();
+
+    let mut quads = Vec::with_capacity(tab_count);
+    for i in 0..tab_count {
+        let color = if i == active_idx {
+            active_color
+        } else {
+            inactive_color
+        };
+        quads.push(QuadInstance {
+            rect: [i as f32 * tab_w, 0.0, tab_w, bar_h],
+            color,
+        });
+    }
+    quads
 }
