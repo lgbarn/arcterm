@@ -213,6 +213,21 @@ pub trait Handler {
     /// String Terminator (`ESC \`), with the delimiters stripped.  The default
     /// implementation is a no-op so existing Handler implementors are unaffected.
     fn kitty_graphics_command(&mut self, _payload: &[u8]) {}
+
+    // -------------------------------------------------------------------------
+    // OSC 133 — shell integration (Phase 7)
+    // -------------------------------------------------------------------------
+
+    /// OSC 133 ; A — prompt start mark.
+    fn shell_prompt_start(&mut self) {}
+
+    /// OSC 133 ; B — command start mark (user has begun typing a command).
+    fn shell_command_start(&mut self) {}
+
+    /// OSC 133 ; D [; exit_code] — command end mark with optional exit code.
+    ///
+    /// `exit_code` defaults to 0 when the OSC sequence omits the code field.
+    fn shell_command_end(&mut self, _exit_code: i32) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +257,14 @@ pub struct GridState {
     /// by `ApcScanner`).  The app layer drains these via
     /// [`GridState::take_kitty_payloads`] after each PTY processing batch.
     pub kitty_payloads: Vec<Vec<u8>>,
+    /// Exit codes received via OSC 133 D since the last drain.
+    ///
+    /// The app layer drains these via [`GridState::take_exit_codes`] after
+    /// each PTY processing batch and stores them in the per-pane `PaneContext`.
+    pub shell_exit_codes: Vec<i32>,
+    /// Set to `true` by `shell_command_start()` (OSC 133 B). Cleared when
+    /// the corresponding `shell_command_end()` (OSC 133 D) is received.
+    pub pending_command_start: bool,
 }
 
 impl GridState {
@@ -257,12 +280,20 @@ impl GridState {
             accumulator: None,
             completed_blocks: Vec::new(),
             kitty_payloads: Vec::new(),
+            shell_exit_codes: Vec::new(),
+            pending_command_start: false,
         }
     }
 
     /// Drain and return all Kitty APC payloads received since the last call.
     pub fn take_kitty_payloads(&mut self) -> Vec<Vec<u8>> {
         std::mem::take(&mut self.kitty_payloads)
+    }
+
+    /// Drain and return all shell exit codes received via OSC 133 D since the
+    /// last call. The caller (app layer) stores the last value in `PaneContext`.
+    pub fn take_exit_codes(&mut self) -> Vec<i32> {
+        std::mem::take(&mut self.shell_exit_codes)
     }
 
     /// Effective scroll bottom, clamped to grid dimensions.
@@ -824,6 +855,21 @@ impl Handler for GridState {
     /// bytes, and uploads them to the GPU for rendering.
     fn kitty_graphics_command(&mut self, payload: &[u8]) {
         self.kitty_payloads.push(payload.to_vec());
+    }
+
+    fn shell_prompt_start(&mut self) {
+        // OSC 133 ; A — no grid changes needed; marker for future use.
+    }
+
+    fn shell_command_start(&mut self) {
+        // OSC 133 ; B — note that a command has begun.
+        self.pending_command_start = true;
+    }
+
+    fn shell_command_end(&mut self, exit_code: i32) {
+        // OSC 133 ; D — record exit code in drain buffer.
+        self.pending_command_start = false;
+        self.shell_exit_codes.push(exit_code);
     }
 }
 

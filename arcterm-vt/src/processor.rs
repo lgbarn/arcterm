@@ -171,6 +171,55 @@ impl Default for Processor {
 }
 
 // ---------------------------------------------------------------------------
+// OSC 133 — shell integration (prompt/command marks)
+// ---------------------------------------------------------------------------
+
+/// Parse and dispatch an OSC 133 shell-integration sequence to the `Handler`.
+///
+/// The OSC params layout is:
+///   params[0] = b"133"
+///   params[1] = b"A" | b"B" | b"C" | b"D" [with optional params[2] for exit code]
+///
+/// Mappings:
+///   A  → prompt start      (shell_prompt_start)
+///   B  → command start     (shell_command_start)
+///   C  → command executed  (no-op; the command is now running)
+///   D  → command end       (shell_command_end with optional exit code)
+///
+/// Unknown sub-commands are silently ignored so future extensions do not break.
+fn dispatch_osc133<H: Handler>(handler: &mut H, params: &[&[u8]]) {
+    // Need at least params[0]=133 and params[1]=sub-command.
+    if params.len() < 2 {
+        return;
+    }
+
+    match params[1] {
+        b"A" => {
+            handler.shell_prompt_start();
+        }
+        b"B" => {
+            handler.shell_command_start();
+        }
+        b"C" => {
+            // Command is now executing — no-op per spec.
+        }
+        b"D" => {
+            // Optional exit code in params[2], defaulting to 0.
+            let exit_code = if params.len() >= 3 {
+                std::str::from_utf8(params[2])
+                    .ok()
+                    .and_then(|s| s.parse::<i32>().ok())
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+            handler.shell_command_end(exit_code);
+        }
+        _ => {} // unknown sub-command — silently ignored
+    }
+}
+
+// ---------------------------------------------------------------------------
 // OSC 7770 — structured content block dispatch
 // ---------------------------------------------------------------------------
 
@@ -471,6 +520,9 @@ impl<H: Handler> vte::Perform for Performer<'_, H> {
                 let title = std::str::from_utf8(params[1]).unwrap_or("");
                 self.handler.set_title(title);
             }
+            b"133" => {
+                dispatch_osc133(self.handler, params);
+            }
             b"7770" => {
                 dispatch_osc7770(self.handler, params);
             }
@@ -705,5 +757,108 @@ mod phase4_task2_tests {
         assert!(gs.accumulator.is_none());
         feed(&mut gs, &osc7770_end());
         assert!(gs.completed_blocks.is_empty());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Plan 7.1 Task 2: OSC 133 shell integration
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod osc133_tests {
+    use arcterm_core::{Grid, GridSize};
+
+    use crate::{GridState, Processor};
+
+    fn make_gs() -> GridState {
+        GridState::new(Grid::new(GridSize::new(24, 80)))
+    }
+
+    fn feed(gs: &mut GridState, bytes: &[u8]) {
+        let mut proc = Processor::new();
+        proc.advance(gs, bytes);
+    }
+
+    // Helper: build an OSC 133 sequence terminated with BEL.
+    // ESC ] 133 ; <sub> [; <extra>] BEL
+    fn osc133(sub: &str) -> Vec<u8> {
+        format!("\x1b]133;{sub}\x07").into_bytes()
+    }
+
+    fn osc133_with_code(sub: &str, code: &str) -> Vec<u8> {
+        format!("\x1b]133;{sub};{code}\x07").into_bytes()
+    }
+
+    /// OSC 133;A is a no-op on the grid — accepted without error.
+    #[test]
+    fn osc133_a_is_noop_on_grid() {
+        let mut gs = make_gs();
+        feed(&mut gs, &osc133("A"));
+        // No side-effects visible on grid-level state.
+        assert!(gs.shell_exit_codes.is_empty());
+        assert!(!gs.pending_command_start);
+    }
+
+    /// OSC 133;B sets the pending_command_start flag.
+    #[test]
+    fn osc133_b_sets_pending_command_start() {
+        let mut gs = make_gs();
+        feed(&mut gs, &osc133("B"));
+        assert!(gs.pending_command_start);
+    }
+
+    /// OSC 133;C is accepted without error (no-op per spec).
+    #[test]
+    fn osc133_c_is_noop() {
+        let mut gs = make_gs();
+        feed(&mut gs, &osc133("C"));
+        assert!(gs.shell_exit_codes.is_empty());
+    }
+
+    /// OSC 133;D;1 sets exit code 1.
+    #[test]
+    fn osc133_d_with_code_sets_exit_code() {
+        let mut gs = make_gs();
+        feed(&mut gs, &osc133_with_code("D", "1"));
+        assert_eq!(gs.shell_exit_codes, vec![1]);
+        assert!(!gs.pending_command_start);
+    }
+
+    /// OSC 133;D without a code defaults to exit code 0.
+    #[test]
+    fn osc133_d_without_code_defaults_to_zero() {
+        let mut gs = make_gs();
+        feed(&mut gs, &osc133("D"));
+        assert_eq!(gs.shell_exit_codes, vec![0]);
+    }
+
+    /// Multiple D sequences accumulate in shell_exit_codes.
+    #[test]
+    fn osc133_d_multiple_codes_accumulate() {
+        let mut gs = make_gs();
+        feed(&mut gs, &osc133_with_code("D", "0"));
+        feed(&mut gs, &osc133_with_code("D", "127"));
+        assert_eq!(gs.shell_exit_codes, vec![0, 127]);
+    }
+
+    /// take_exit_codes drains the buffer and leaves it empty.
+    #[test]
+    fn osc133_take_exit_codes_drains_buffer() {
+        let mut gs = make_gs();
+        feed(&mut gs, &osc133_with_code("D", "42"));
+        let codes = gs.take_exit_codes();
+        assert_eq!(codes, vec![42]);
+        assert!(gs.shell_exit_codes.is_empty());
+    }
+
+    /// A full A → B → D sequence is accepted cleanly.
+    #[test]
+    fn osc133_full_sequence_a_b_d() {
+        let mut gs = make_gs();
+        feed(&mut gs, &osc133("A")); // prompt start
+        feed(&mut gs, &osc133("B")); // command start
+        feed(&mut gs, &osc133_with_code("D", "0")); // command end, success
+        assert!(!gs.pending_command_start);
+        assert_eq!(gs.shell_exit_codes, vec![0]);
     }
 }
