@@ -4,6 +4,7 @@
 //! coloured line spans (`Vec<RenderedLine>`) suitable for GPU rendering by glyphon.
 
 use arcterm_vt::ContentType;
+use std::sync::OnceLock;
 use syntect::{
     easy::HighlightLines,
     highlighting::{FontStyle, ThemeSet},
@@ -65,23 +66,37 @@ pub struct StructuredBlock {
 }
 
 // ---------------------------------------------------------------------------
-// HighlightEngine — owns SyntaxSet and ThemeSet (loaded once)
+// HighlightEngine — lazily loaded SyntaxSet and ThemeSet
+//
+// The syntect defaults take ~23 ms to load. Using OnceLock defers that cost
+// to the first call to highlight_code() or highlight_markdown(), which happens
+// only when the user actually receives structured output — not at cold start.
 // ---------------------------------------------------------------------------
 
-pub struct HighlightEngine {
-    syntax_set: SyntaxSet,
-    theme_set: ThemeSet,
-}
+/// Process-wide lazily-initialised syntect state.
+static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
+static THEME_SET: OnceLock<ThemeSet> = OnceLock::new();
+
+pub struct HighlightEngine;
 
 impl HighlightEngine {
-    /// Create a new engine, loading syntect defaults.
+    /// Create a new engine.
     ///
-    /// Loading is ~23 ms; create once at startup and share via reference.
+    /// Construction is now free: the underlying `SyntaxSet` and `ThemeSet` are
+    /// loaded on first use via process-global `OnceLock`s.  This removes the
+    /// ~23 ms syntect initialisation cost from the cold-start path.
     pub fn new() -> Self {
-        Self {
-            syntax_set: SyntaxSet::load_defaults_newlines(),
-            theme_set: ThemeSet::load_defaults(),
-        }
+        Self
+    }
+
+    /// Ensure syntect defaults are loaded.  Called internally before any
+    /// operation that requires the syntax or theme set.
+    fn syntax_set() -> &'static SyntaxSet {
+        SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines)
+    }
+
+    fn theme_set() -> &'static ThemeSet {
+        THEME_SET.get_or_init(ThemeSet::load_defaults)
     }
 
     // -----------------------------------------------------------------------
@@ -101,19 +116,22 @@ impl HighlightEngine {
             return Vec::new();
         }
 
-        let syntax = language_hint
-            .and_then(|hint| self.syntax_set.find_syntax_by_extension(hint))
-            .or_else(|| self.syntax_set.find_syntax_by_first_line(content))
-            .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text());
+        let ss = Self::syntax_set();
+        let ts = Self::theme_set();
 
-        let theme = &self.theme_set.themes["base16-ocean.dark"];
+        let syntax = language_hint
+            .and_then(|hint| ss.find_syntax_by_extension(hint))
+            .or_else(|| ss.find_syntax_by_first_line(content))
+            .unwrap_or_else(|| ss.find_syntax_plain_text());
+
+        let theme = &ts.themes["base16-ocean.dark"];
         let mut highlighter = HighlightLines::new(syntax, theme);
 
         content
             .lines()
             .map(|line| {
                 let spans_raw = highlighter
-                    .highlight_line(line, &self.syntax_set)
+                    .highlight_line(line, ss)
                     .unwrap_or_default();
 
                 let spans = spans_raw

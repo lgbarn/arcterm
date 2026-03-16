@@ -641,6 +641,16 @@ struct AppState {
     // ---- config overlay review ----
     /// Config overlay review state; `None` when the overlay is closed.
     overlay_review: Option<overlay::OverlayReviewState>,
+
+    // ---- deferred plugin loading ----
+    /// Set to `true` once plugins have been loaded after the first frame.
+    plugins_loaded: bool,
+
+    // ---- latency tracing ----
+    /// Timestamp of the most recent key-press event; used to measure
+    /// key-to-frame-presented latency under the `latency-trace` feature.
+    #[cfg(feature = "latency-trace")]
+    key_press_t0: Option<std::time::Instant>,
 }
 
 impl AppState {
@@ -1110,38 +1120,14 @@ impl ApplicationHandler for App {
         }
 
         // ---------------------------------------------------------------
-        // Plugin manager initialization.
-        //
-        // Create the manager, load all installed plugins, and optionally
-        // load a dev plugin if `arcterm plugin dev <path>` was used.
+        // Plugin manager initialization is DEFERRED to after the first
+        // frame renders.  WASM compilation can take hundreds of ms; doing
+        // it here would block the GPU surface from presenting its first
+        // frame.  The actual load happens in `about_to_wait` when
+        // `fps_frame_count == 1` and `plugins_loaded == false`.
         // ---------------------------------------------------------------
-        let (plugin_manager, plugin_event_tx) = {
-            let mut mgr = match arcterm_plugin::manager::PluginManager::new() {
-                Ok(m) => m,
-                Err(e) => {
-                    log::warn!("Failed to initialize plugin manager: {e}");
-                    return;
-                }
-            };
-
-            let results = mgr.load_all_installed();
-            for result in results {
-                match result {
-                    Ok(id) => log::info!("Plugin loaded: {id}"),
-                    Err(e) => log::warn!("Failed to load plugin: {e}"),
-                }
-            }
-
-            if let Some(ref dev_path) = self.dev_plugin {
-                match mgr.load_dev(dev_path) {
-                    Ok(id) => log::info!("Dev plugin loaded: {id}"),
-                    Err(e) => log::warn!("Failed to load dev plugin: {e}"),
-                }
-            }
-
-            let event_tx = mgr.event_sender();
-            (Some(mgr), Some(event_tx))
-        };
+        let plugin_manager: Option<arcterm_plugin::manager::PluginManager> = None;
+        let plugin_event_tx: Option<tokio::sync::broadcast::Sender<arcterm_plugin::manager::PluginEvent>> = None;
 
         // Pre-populate ai_states and pane_contexts for all initial panes.
         let mut ai_states: HashMap<PaneId, ai_detect::AiAgentState> = HashMap::new();
@@ -1236,6 +1222,9 @@ impl ApplicationHandler for App {
             plan_watcher_rx,
             workspace_root,
             overlay_review: None,
+            plugins_loaded: false,
+            #[cfg(feature = "latency-trace")]
+            key_press_t0: None,
         });
     }
 
@@ -1246,6 +1235,41 @@ impl ApplicationHandler for App {
 
         if state.shell_exited {
             return;
+        }
+
+        // ------------------------------------------------------------------
+        // Deferred plugin loading — runs once, after the first frame has been
+        // presented (fps_frame_count >= 1).  Loading WASM plugins involves
+        // Cranelift compilation which can take 100+ ms; deferring it here
+        // keeps the cold-start path fast.
+        // ------------------------------------------------------------------
+        if !state.plugins_loaded && state.fps_frame_count >= 1 {
+            state.plugins_loaded = true;
+            log::info!("[startup] loading plugins (deferred after first frame)");
+            match arcterm_plugin::manager::PluginManager::new() {
+                Ok(mut mgr) => {
+                    let results = mgr.load_all_installed();
+                    for result in results {
+                        match result {
+                            Ok(id) => log::info!("Plugin loaded: {id}"),
+                            Err(e) => log::warn!("Failed to load plugin: {e}"),
+                        }
+                    }
+                    // Load dev plugin if requested via `arcterm plugin dev <path>`.
+                    if let Some(ref dev_path) = self.dev_plugin {
+                        match mgr.load_dev(dev_path) {
+                            Ok(id) => log::info!("Dev plugin loaded: {id}"),
+                            Err(e) => log::warn!("Failed to load dev plugin: {e}"),
+                        }
+                    }
+                    let event_tx = mgr.event_sender();
+                    state.plugin_manager = Some(mgr);
+                    state.plugin_event_tx = Some(event_tx);
+                }
+                Err(e) => {
+                    log::warn!("Failed to initialize plugin manager: {e}");
+                }
+            }
         }
 
         // ------------------------------------------------------------------
@@ -2356,6 +2380,12 @@ impl ApplicationHandler for App {
                 #[cfg(feature = "latency-trace")]
                 {
                     log::debug!("[latency] frame submitted in {:?}", t0.elapsed());
+
+                    // Log key-to-frame-presented latency when a key press preceded this frame.
+                    if let Some(kp_t0) = state.key_press_t0.take() {
+                        log::info!("[latency] key → frame presented: {:?}", kp_t0.elapsed());
+                    }
+
                     static FIRST_FRAME: std::sync::atomic::AtomicBool =
                         std::sync::atomic::AtomicBool::new(true);
                     if FIRST_FRAME.swap(false, std::sync::atomic::Ordering::Relaxed) {
@@ -2374,6 +2404,12 @@ impl ApplicationHandler for App {
                 if event.state == ElementState::Pressed {
                     #[cfg(feature = "latency-trace")]
                     let t0 = TraceInstant::now();
+
+                    // Capture key-press timestamp for key→frame latency measurement.
+                    #[cfg(feature = "latency-trace")]
+                    {
+                        state.key_press_t0 = Some(TraceInstant::now());
+                    }
 
                     let super_key = self.modifiers.super_key();
 
