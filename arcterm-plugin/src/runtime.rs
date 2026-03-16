@@ -21,6 +21,16 @@ impl PluginRuntime {
         config.epoch_interruption(true);
 
         let engine = Engine::new(&config)?;
+
+        // Spawn the epoch ticker: increments the engine epoch every 10ms so that
+        // epoch deadlines fire. Without ticking, epoch_interruption(true) has no effect.
+        // Uses a plain OS thread so PluginRuntime::new() works in both sync and async contexts.
+        let engine_clone = engine.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            engine_clone.increment_epoch();
+        });
+
         let mut linker: Linker<PluginHostData> = Linker::new(&engine);
 
         // Add WASI p2 (synchronous) host functions to the linker.
@@ -50,7 +60,8 @@ impl PluginRuntime {
 
         let instance = ArctermPlugin::instantiate(&mut store, &component, &self.linker)?;
 
-        // Call the guest `load` export to initialise the plugin.
+        // 3000 epochs at 10ms tick interval = 30-second deadline.
+        store.set_epoch_deadline(3000);
         instance.call_load(&mut store)?;
 
         Ok(PluginInstance { store, instance })
@@ -77,6 +88,9 @@ impl PluginRuntime {
         store.limiter(|data| &mut data.limits);
 
         let instance = ArctermPlugin::instantiate(&mut store, &component, &self.linker)?;
+
+        // 3000 epochs at 10ms tick interval = 30-second deadline.
+        store.set_epoch_deadline(3000);
         instance.call_load(&mut store)?;
 
         Ok(PluginInstance { store, instance })
@@ -97,6 +111,8 @@ pub struct PluginInstance {
 impl PluginInstance {
     /// Deliver an event to the plugin. Returns `true` if the plugin consumed it.
     pub fn call_update(&mut self, event: WitPluginEvent) -> anyhow::Result<bool> {
+        // 3000 epochs at 10ms tick interval = 30-second deadline.
+        self.store.set_epoch_deadline(3000);
         let result = self.instance.call_update(&mut self.store, &event)?;
         Ok(result)
     }
@@ -105,6 +121,8 @@ impl PluginInstance {
     /// in the draw buffer via the host import, so we return the draw buffer contents.
     /// Clears the draw buffer before calling render.
     pub fn call_render(&mut self) -> anyhow::Result<Vec<StyledLine>> {
+        // 3000 epochs at 10ms tick interval = 30-second deadline.
+        self.store.set_epoch_deadline(3000);
         self.store.data_mut().draw_buffer.clear();
         self.instance.call_render(&mut self.store)?;
         Ok(self.store.data().draw_buffer.clone())
