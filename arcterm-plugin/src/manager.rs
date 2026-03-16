@@ -247,7 +247,12 @@ impl PluginManager {
             .map_err(|e| anyhow::anyhow!("plugin.toml validation failed: {e}"))?;
 
         let wasm_path = dir.join(&manifest.wasm);
-        let wasm_canonical = wasm_path.canonicalize().unwrap_or(wasm_path.clone());
+        let wasm_canonical = wasm_path.canonicalize().map_err(|e| {
+            anyhow::anyhow!(
+                "plugin wasm file '{}' not found: {e}",
+                wasm_path.display()
+            )
+        })?;
         let dir_canonical = dir.canonicalize().unwrap_or(dir.to_path_buf());
         if !wasm_canonical.starts_with(&dir_canonical) {
             anyhow::bail!(
@@ -363,23 +368,21 @@ impl PluginManager {
     }
 
     /// Invoke a named tool by dispatching to the WASM plugin that owns it.
+    ///
+    /// Uses a single mutable lock per plugin to check ownership and dispatch
+    /// within the same critical section (fixes ISSUE-017 TOCTOU). The
+    /// tool-not-found response is built with `serde_json::json!` so that
+    /// special characters in `name` are properly escaped (fixes ISSUE-014).
     pub fn call_tool(&self, name: &str, args_json: &str) -> anyhow::Result<String> {
         for lp in self.plugins.values() {
-            let owned = {
-                let inst = lp.instance.lock()
-                    .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
-                inst.host_data().registered_tools.iter().any(|t| t.name == name)
-            };
+            let mut inst = lp.instance.lock()
+                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let owned = inst.host_data().registered_tools.iter().any(|t| t.name == name);
             if owned {
-                let mut inst = lp.instance.lock()
-                    .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
                 return inst.call_tool_export(name, args_json);
             }
         }
-        Ok(format!(
-            "{{\"error\":\"tool not found\",\"tool\":\"{}\"}}",
-            name
-        ))
+        Ok(serde_json::json!({"error": "tool not found", "tool": name}).to_string())
     }
 
     /// Collect all MCP tool schemas from all loaded plugin instances.
@@ -752,6 +755,94 @@ wasm        = "plugin.wasm"
             .expect("no error");
 
         assert!(matches!(ev, PluginEvent::CommandExecuted(ref s) if s == "ls -la"));
+    }
+
+    // ── ISSUE-014: tool-not-found JSON properly escapes name ──────────────
+    //
+    // Regression test: a tool name containing `"` or `\` must produce valid JSON.
+    // The format!() approach does not JSON-escape, so serde_json::from_str would fail.
+
+    #[test]
+    fn call_tool_not_found_returns_valid_json() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let install_root = tmp.path().join("installed");
+        let mgr =
+            PluginManager::new_with_dir(install_root).expect("PluginManager::new_with_dir");
+
+        // A tool name with characters that would break format!()-based JSON assembly.
+        let tricky_name = r#"tool"with\"special\chars"#;
+        let result = mgr.call_tool(tricky_name, "{}").expect("call_tool should return Ok");
+
+        // The response must be valid JSON regardless of special chars in the name.
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("response must be valid JSON");
+
+        // The "tool" field must round-trip the original name exactly.
+        assert_eq!(
+            parsed["tool"].as_str().expect("tool field must be a string"),
+            tricky_name,
+            "tool field must preserve the original name"
+        );
+        assert_eq!(
+            parsed["error"].as_str().expect("error field must be a string"),
+            "tool not found"
+        );
+    }
+
+    // ── ISSUE-017: call_tool uses single lock (no TOCTOU) ─────────────────
+    //
+    // Structural regression test: this verifies the single-lock code path
+    // compiles correctly. The TOCTOU was a code structure issue; the runtime
+    // observable behavior in single-threaded tests is the same either way.
+
+    #[test]
+    fn call_tool_single_lock_no_toctou() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let install_root = tmp.path().join("installed");
+        let mgr =
+            PluginManager::new_with_dir(install_root).expect("PluginManager::new_with_dir");
+
+        // With no plugins loaded, call_tool must return a valid tool-not-found response
+        // using a single lock scope (verified by the implementation's structure).
+        let result = mgr.call_tool("any-tool", "{}").expect("call_tool should return Ok");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("response must be valid JSON");
+        assert_eq!(parsed["error"], "tool not found");
+    }
+
+    // ── ISSUE-018: load_from_dir propagates missing wasm error ───────────
+    //
+    // Regression test: when plugin.toml exists but the .wasm file does not,
+    // load_from_dir must return a clear "not found" error rather than silently
+    // falling back to the raw path and producing a confusing "resolves outside
+    // the plugin directory" error or an unhelpful OS-level message.
+
+    #[test]
+    fn load_from_dir_rejects_missing_wasm() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let plugin_dir = tmp.path().join("bad-plugin");
+        fs::create_dir_all(&plugin_dir).expect("create plugin dir");
+
+        // Write plugin.toml but deliberately omit the .wasm file.
+        let toml = r#"
+name        = "bad-plugin"
+version     = "0.1.0"
+api_version = "0.1"
+wasm        = "plugin.wasm"
+"#;
+        fs::write(plugin_dir.join("plugin.toml"), toml).expect("write plugin.toml");
+        // Intentionally do NOT write plugin.wasm.
+
+        let install_root = tmp.path().join("installed");
+        let mut mgr =
+            PluginManager::new_with_dir(install_root).expect("PluginManager::new_with_dir");
+
+        let err = mgr.load_from_dir(&plugin_dir).expect_err("should fail: wasm file missing");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("not found"),
+            "error should mention 'not found', got: {msg}"
+        );
     }
 
     // ── (e) load_all_installed scans plugin_dir but returns empty when not populated ─
