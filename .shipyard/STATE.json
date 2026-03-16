@@ -1,7 +1,7 @@
 {
   "phase": 10,
-  "status": "planned",
-  "position": "Phase 10 planned, ready for build",
-  "message": "2 plans across 2 waves. Wave 1: scroll_offset migration. Wave 2: regression tests + cursor fix. Critique: READY.",
-  "updated_at": "2026-03-16T03:25:00Z"
+  "status": "complete",
+  "position": "Phase 10 build complete",
+  "message": "All 5 app/input fixes verified. 342 tests pass (arcterm-app + arcterm-render). Ready for Phase 11.",
+  "updated_at": "2026-03-16T03:40:00Z"
 }
