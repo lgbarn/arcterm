@@ -589,6 +589,17 @@ impl Terminal {
         f(&mut *guard)
     }
 
+    /// Acquire the `FairMutex` guard for direct `Term` access.
+    ///
+    /// Use this when you need to pass a `&Term` to a function (e.g.
+    /// `snapshot_from_term`) and release the lock immediately afterwards.
+    /// Prefer [`with_term`] / [`with_term_mut`] for simple read/write operations.
+    ///
+    /// The returned guard implements `Deref<Target = Term<...>>`.
+    pub fn lock_term(&self) -> impl std::ops::Deref<Target = Term<ArcTermEventListener>> + '_ {
+        self.term.lock()
+    }
+
     // ── Grid dimensions ───────────────────────────────────────────────────────
 
     /// Number of grid columns.

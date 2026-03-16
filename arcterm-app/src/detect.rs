@@ -1,4 +1,3 @@
-#![allow(dead_code)] // Wired in PLAN-3.1 integration
 //! Auto-detection engine for structured content in terminal output.
 //!
 //! Scans rows of terminal grid output for patterns indicating structured
@@ -6,8 +5,7 @@
 //! OSC 7770 protocol. Detection is conservative: false negatives are
 //! preferred over false positives.
 
-use arcterm_core::Cell;
-use arcterm_render::ContentType;
+use arcterm_render::{ContentType, RenderSnapshot};
 
 // ---------------------------------------------------------------------------
 // DetectionResult
@@ -54,7 +52,8 @@ impl AutoDetector {
         self.last_scanned_row = 0;
     }
 
-    /// Scan grid rows for structured content and return any detections found.
+    /// Scan the visible rows of `snapshot` for structured content and return
+    /// any detections found.
     ///
     /// Only rows from `self.last_scanned_row` up to (and including)
     /// `cursor_row` are examined. After scanning, `last_scanned_row` is
@@ -64,12 +63,14 @@ impl AutoDetector {
     /// full-scrollback scans on the first frame.
     pub fn scan_rows(
         &mut self,
-        rows: &[Vec<Cell>],
+        snapshot: &RenderSnapshot,
         cursor_row: usize,
     ) -> Vec<DetectionResult> {
         if !self.enabled {
             return Vec::new();
         }
+
+        let num_rows = snapshot.rows;
 
         // If the cursor moved backwards (screen clear / alt-screen toggle),
         // reset to avoid scanning negative ranges.
@@ -78,7 +79,7 @@ impl AutoDetector {
         }
 
         let start = self.last_scanned_row;
-        let end = cursor_row.min(rows.len().saturating_sub(1));
+        let end = cursor_row.min(num_rows.saturating_sub(1));
 
         // Cap window at 200 rows.
         let window_start = if end.saturating_sub(start) > 200 {
@@ -97,7 +98,8 @@ impl AutoDetector {
         // Extract text from each row, trimming trailing whitespace.
         let text_rows: Vec<(usize, String)> = (window_start..=end)
             .map(|r| {
-                let text: String = rows[r].iter().map(|c| c.c).collect();
+                let row = snapshot.row(r);
+                let text: String = row.iter().map(|c| c.c).collect();
                 (r, text.trim_end().to_string())
             })
             .collect();
@@ -394,14 +396,33 @@ fn is_heading(line: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: build a Vec<Vec<Cell>> from string rows (for tests)
+// Helper: build a RenderSnapshot from string rows (for tests)
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-fn rows_from_strings(lines: &[&str]) -> Vec<Vec<Cell>> {
-    lines.iter().map(|line| {
-        line.chars().map(|c| Cell { c, ..Cell::default() }).collect()
-    }).collect()
+fn rows_from_strings(lines: &[&str]) -> RenderSnapshot {
+    use arcterm_render::{SnapshotCell, SnapshotColor};
+    use alacritty_terminal::vte::ansi::CursorShape;
+
+    let num_rows = lines.len();
+    let num_cols = lines.iter().map(|l| l.len()).max().unwrap_or(1);
+    let mut cells = vec![SnapshotCell::default(); num_rows * num_cols];
+    for (r, line) in lines.iter().enumerate() {
+        for (c, ch) in line.chars().enumerate() {
+            if c < num_cols {
+                cells[r * num_cols + c].c = ch;
+            }
+        }
+    }
+    RenderSnapshot {
+        cells,
+        cols: num_cols,
+        rows: num_rows,
+        cursor_row: 0,
+        cursor_col: 0,
+        cursor_visible: false,
+        cursor_shape: CursorShape::Block,
+    }
 }
 
 // ---------------------------------------------------------------------------

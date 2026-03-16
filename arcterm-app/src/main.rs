@@ -203,7 +203,7 @@ use winit::event_loop::ControlFlow;
 #[cfg(feature = "latency-trace")]
 use std::time::Instant as TraceInstant;
 
-use arcterm_core::{Cell, CellAttrs, Color, CursorPos, GridSize};
+use arcterm_core::GridSize;
 use arcterm_render::{
     ContentType, HighlightEngine, OverlayQuad, PaneRenderInfo, PluginPaneRenderInfo, PluginStyledLine,
     RenderPalette, Renderer, StructuredBlock,
@@ -343,10 +343,11 @@ type PaneBundle = (
 /// This is the normal (no workspace) startup path. Extracted into a function
 /// so that workspace restore can fall back to it when the session file is
 /// empty or invalid.
-fn spawn_default_pane(cfg: &config::ArctermConfig, initial_size: GridSize) -> PaneBundle {
+fn spawn_default_pane(cfg: &config::ArctermConfig, initial_size: (usize, usize)) -> PaneBundle {
     let first_id = PaneId::next();
+    let (rows, cols) = initial_size;
     let (terminal, image_rx) =
-        Terminal::new(initial_size.cols, initial_size.rows, 8, 16, cfg.shell.clone(), None)
+        Terminal::new(cols, rows, 8, 16, cfg.shell.clone(), None)
             .unwrap_or_else(|e| {
                 log::error!("Failed to create PTY session: {e}");
                 std::process::exit(1);
@@ -833,8 +834,8 @@ impl AppState {
     // -----------------------------------------------------------------------
 
     /// Spawn a new Terminal + PTY, insert into the pane and channel maps, and
-    /// return its `PaneId`.  The grid is sized to `size`.
-    fn spawn_pane(&mut self, size: GridSize) -> PaneId {
+    /// return its `PaneId`.  `size` is `(rows, cols)`.
+    fn spawn_pane(&mut self, size: (usize, usize)) -> PaneId {
         self.spawn_pane_with_cwd(size, None)
     }
 
@@ -842,10 +843,12 @@ impl AppState {
     ///
     /// Used by workspace restore to recreate panes in their saved directories.
     /// Pass `cwd = None` to inherit the process's current working directory.
-    fn spawn_pane_with_cwd(&mut self, size: GridSize, cwd: Option<&std::path::Path>) -> PaneId {
+    /// `size` is `(rows, cols)`.
+    fn spawn_pane_with_cwd(&mut self, size: (usize, usize), cwd: Option<&std::path::Path>) -> PaneId {
         let id = PaneId::next();
+        let (rows, cols) = size;
         let (cell_w, cell_h) = self.cell_dims();
-        match Terminal::new(size.cols, size.rows, cell_w, cell_h, self.config.shell.clone(), cwd) {
+        match Terminal::new(cols, rows, cell_w, cell_h, self.config.shell.clone(), cwd) {
             Ok((terminal, image_rx)) => {
                 self.panes.insert(id, terminal);
                 self.image_channels.insert(id, image_rx);
@@ -921,11 +924,12 @@ impl AppState {
         let (pane_tree, leaf_metadata) = ws.layout.to_pane_tree();
         let leaf_ids = pane_tree.all_pane_ids();
 
+        let (init_rows, init_cols) = initial_size;
         let (cell_w, cell_h) = self.cell_dims();
         for (id, meta) in leaf_ids.iter().zip(leaf_metadata.iter()) {
             let cwd: Option<std::path::PathBuf> =
                 meta.directory.as_deref().map(std::path::PathBuf::from);
-            match Terminal::new(initial_size.cols, initial_size.rows, cell_w, cell_h, self.config.shell.clone(), cwd.as_deref()) {
+            match Terminal::new(init_cols, init_rows, cell_w, cell_h, self.config.shell.clone(), cwd.as_deref()) {
                 Ok((terminal, image_rx)) => {
                     // Inject workspace-level environment variables.
                     for (key, val) in &ws.environment {
@@ -1082,9 +1086,10 @@ impl ApplicationHandler for App {
                     for (id, meta) in leaf_ids.iter().zip(leaf_metadata.iter()) {
                         let cwd: Option<std::path::PathBuf> =
                             meta.directory.as_deref().map(std::path::PathBuf::from);
+                        let (init_rows, init_cols) = initial_size;
                         match Terminal::new(
-                            initial_size.cols,
-                            initial_size.rows,
+                            init_cols,
+                            init_rows,
                             8,
                             16,
                             cfg.shell.clone(),
@@ -1502,10 +1507,14 @@ impl ApplicationHandler for App {
                     }
 
                     // Auto-detect structured content in newly-written rows.
+                    // Lock Term briefly to extract a snapshot for detection, then unlock.
                     let cursor_row = terminal.cursor_row();
-                    let grid_cells = terminal.grid_cells_for_detect();
+                    let detect_snapshot = {
+                        let term = terminal.lock_term();
+                        arcterm_render::snapshot_from_term(&*term)
+                    };
                     if let Some(detector) = state.auto_detectors.get_mut(&id) {
-                        let detections = detector.scan_rows(&grid_cells, cursor_row);
+                        let detections = detector.scan_rows(&detect_snapshot, cursor_row);
                         if !detections.is_empty() {
                             let pane_blocks = state.structured_blocks.entry(id).or_default();
                             for det in detections {
@@ -2065,38 +2074,30 @@ impl ApplicationHandler for App {
                     // Show exit banner on the focused pane (or first available).
                     let target_id = focused;
                     if let Some(terminal) = state.panes.get(&target_id) {
-                        let mut display = terminal.to_arcterm_grid();
-                        let last_row = display.size.rows.saturating_sub(1);
+                        let mut display = {
+                            let term = terminal.lock_term();
+                            arcterm_render::snapshot_from_term(&*term)
+                        };
+                        let last_row = display.rows.saturating_sub(1);
                         let msg = "[ Shell exited — press any key to close ]";
-                        let banner_attrs = CellAttrs {
-                            fg: Color::Indexed(11),
-                            bg: Color::Indexed(0),
-                            bold: true,
-                            ..CellAttrs::default()
-                        };
-                        if let Some(row) = display.cells.get_mut(last_row) {
-                            for cell in row.iter_mut() {
-                                *cell = Cell {
-                                    c: ' ',
-                                    attrs: banner_attrs,
-                                    dirty: true,
-                                };
-                            }
-                            for (col, ch) in msg.chars().enumerate() {
-                                if col >= display.size.cols {
-                                    break;
-                                }
-                                row[col] = Cell {
-                                    c: ch,
-                                    attrs: banner_attrs,
-                                    dirty: true,
-                                };
-                            }
+                        // Write the banner into the last row of the snapshot.
+                        let cols = display.cols;
+                        let row_start = last_row * cols;
+                        for col in 0..cols {
+                            let cell = &mut display.cells[row_start + col];
+                            cell.c = ' ';
+                            cell.fg = arcterm_render::SnapshotColor::Indexed(11);
+                            cell.bg = arcterm_render::SnapshotColor::Indexed(0);
+                            cell.bold = true;
                         }
-                        display.cursor = CursorPos {
-                            row: last_row.saturating_sub(1),
-                            col: 0,
-                        };
+                        for (col, ch) in msg.chars().enumerate() {
+                            if col >= cols {
+                                break;
+                            }
+                            display.cells[row_start + col].c = ch;
+                        }
+                        display.cursor_row = last_row.saturating_sub(1);
+                        display.cursor_col = 0;
                         // Render immediately as a single-pane frame.
                         state.renderer.render_frame(&display, scale);
                         return;
@@ -2104,21 +2105,25 @@ impl ApplicationHandler for App {
                 }
 
                 // Normal multi-pane render.
-                // We need to collect grid refs while panes is borrowed.
-                // Use a Vec of (rect, grid_clone, blocks_clone) to avoid lifetime issues.
-                let pane_frames: Vec<(PixelRect, arcterm_core::Grid, Vec<StructuredBlock>)> = rects
+                // Lock each terminal briefly to extract a snapshot, then release the lock
+                // before GPU rendering so the reader thread is not blocked.
+                let pane_frames: Vec<(PixelRect, arcterm_render::RenderSnapshot, Vec<StructuredBlock>)> = rects
                     .iter()
                     .filter_map(|(id, rect)| {
                         if rect.width <= 0.0 || rect.height <= 0.0 {
                             return None;
                         }
                         state.panes.get(id).map(|t| {
+                            let snapshot = {
+                                let term = t.lock_term();
+                                arcterm_render::snapshot_from_term(&*term)
+                            };
                             let blocks = state
                                 .structured_blocks
                                 .get(id)
                                 .cloned()
                                 .unwrap_or_default();
-                            (*rect, t.to_arcterm_grid(), blocks)
+                            (*rect, snapshot, blocks)
                         })
                     })
                     .collect();
@@ -2161,9 +2166,9 @@ impl ApplicationHandler for App {
                     }
                 }
 
-                for (rect, grid, blocks) in &pane_frames {
+                for (rect, snapshot, blocks) in &pane_frames {
                     pane_infos.push(PaneRenderInfo {
-                        grid,
+                        snapshot,
                         rect: [rect.x, rect.y, rect.width, rect.height],
                         structured_blocks: blocks,
                     });
@@ -2395,8 +2400,11 @@ impl ApplicationHandler for App {
                                 "c" | "C" => {
                                     let focused = state.focused_pane();
                                     if let Some(terminal) = state.panes.get(&focused) {
-                                        let arcterm_grid = terminal.to_arcterm_grid();
-                                    let text = state.selection.extract_text(&arcterm_grid);
+                                        let snapshot = {
+                                            let term = terminal.lock_term();
+                                            arcterm_render::snapshot_from_term(&*term)
+                                        };
+                                        let text = state.selection.extract_text(&snapshot);
                                         if !text.is_empty()
                                             && let Some(cb) = &mut state.clipboard
                                             && let Err(e) = cb.copy(&text)
@@ -2887,7 +2895,7 @@ impl ApplicationHandler for App {
                                 },
                             };
                             let new_size = state.grid_size_for_rect(new_rect);
-                            let new_id = state.spawn_pane(new_size);
+                            let new_id = state.spawn_pane((new_size.rows, new_size.cols));
 
                             // Also resize the original pane to its new half.
                             let orig_size = state.grid_size_for_rect(new_rect);
@@ -3202,7 +3210,7 @@ fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action
                 Axis::Vertical => PixelRect { height: focused_rect.height / 2.0, ..focused_rect },
             };
             let new_size = state.grid_size_for_rect(new_rect);
-            let new_id = state.spawn_pane(new_size);
+            let new_id = state.spawn_pane((new_size.rows, new_size.cols));
             let orig_size = state.grid_size_for_rect(new_rect);
             let (cell_w, cell_h) = state.cell_dims();
             if let Some(terminal) = state.panes.get_mut(&focused_id) {

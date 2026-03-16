@@ -1,6 +1,6 @@
 //! Text selection model, pixel→cell mapping, word boundaries, and clipboard.
 
-use arcterm_core::{Cell, Grid};
+use arcterm_render::{RenderSnapshot, SnapshotCell};
 
 // ---------------------------------------------------------------------------
 // SelectionQuad — a pixel-space rectangle representing one selected cell row
@@ -147,11 +147,11 @@ impl Selection {
             && (pos.row, pos.col) <= (end.row, end.col)
     }
 
-    /// Extract the selected text from `grid`.
+    /// Extract the selected text from `snapshot`.
     ///
     /// Rows are separated by `\n`. Trailing spaces on each line are preserved
     /// unless the selection ends before the last non-space character.
-    pub fn extract_text(&self, grid: &Grid) -> String {
+    pub fn extract_text(&self, snapshot: &RenderSnapshot) -> String {
         if self.mode == SelectionMode::None {
             return String::new();
         }
@@ -162,17 +162,19 @@ impl Selection {
             if row_idx > 0 && row_idx > start.row {
                 result.push('\n');
             }
+            if row_idx >= snapshot.rows {
+                break;
+            }
             let col_start = if row_idx == start.row { start.col } else { 0 };
             let col_end_exclusive = if row_idx == end.row {
                 end.col + 1
             } else {
-                grid.size.cols
+                snapshot.cols
             };
-            if let Some(row) = grid.cells.get(row_idx) {
-                let col_end_exclusive = col_end_exclusive.min(row.len());
-                for cell in &row[col_start..col_end_exclusive] {
-                    result.push(cell.c);
-                }
+            let row = snapshot.row(row_idx);
+            let col_end_exclusive = col_end_exclusive.min(row.len());
+            for cell in &row[col_start..col_end_exclusive] {
+                result.push(cell.c);
             }
         }
         result
@@ -221,7 +223,7 @@ pub fn pixel_to_cell(
 /// A "word" is defined as a contiguous run of non-whitespace characters.
 /// If `col` is on a whitespace character the boundary collapses to `(col, col)`.
 #[allow(dead_code)] // Used by tests; production use in Wave 3
-pub fn word_boundaries(row: &[Cell], col: usize) -> (usize, usize) {
+pub fn word_boundaries(row: &[SnapshotCell], col: usize) -> (usize, usize) {
     if col >= row.len() {
         return (col, col);
     }
@@ -284,7 +286,50 @@ impl Clipboard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arcterm_core::{Grid, GridSize};
+    use arcterm_render::{RenderSnapshot, SnapshotCell, SnapshotColor};
+    use alacritty_terminal::vte::ansi::CursorShape;
+
+    // -----------------------------------------------------------------------
+    // Helper: build a RenderSnapshot from text rows
+    // -----------------------------------------------------------------------
+
+    fn make_snapshot_with_text(rows: &[&str]) -> RenderSnapshot {
+        let num_rows = rows.len();
+        let num_cols = rows.iter().map(|r| r.len()).max().unwrap_or(1);
+        let mut cells = vec![SnapshotCell::default(); num_rows * num_cols];
+        for (r, text) in rows.iter().enumerate() {
+            for (c, ch) in text.chars().enumerate() {
+                cells[r * num_cols + c].c = ch;
+            }
+        }
+        RenderSnapshot {
+            cells,
+            cols: num_cols,
+            rows: num_rows,
+            cursor_row: 0,
+            cursor_col: 0,
+            cursor_visible: false,
+            cursor_shape: CursorShape::Block,
+        }
+    }
+
+    fn make_snapshot_row(s: &str) -> (RenderSnapshot, usize) {
+        let cols = s.len().max(1);
+        let mut cells = vec![SnapshotCell::default(); cols];
+        for (c, ch) in s.chars().enumerate() {
+            cells[c].c = ch;
+        }
+        let snap = RenderSnapshot {
+            cells,
+            cols,
+            rows: 1,
+            cursor_row: 0,
+            cursor_col: 0,
+            cursor_visible: false,
+            cursor_shape: CursorShape::Block,
+        };
+        (snap, cols)
+    }
 
     // -----------------------------------------------------------------------
     // Selection::normalized — order
@@ -366,43 +411,31 @@ mod tests {
     // Selection::extract_text
     // -----------------------------------------------------------------------
 
-    fn make_grid_with_text(rows: &[&str]) -> Grid {
-        let num_rows = rows.len();
-        let num_cols = rows.iter().map(|r| r.len()).max().unwrap_or(1);
-        let mut g = Grid::new(GridSize::new(num_rows, num_cols));
-        for (r, text) in rows.iter().enumerate() {
-            for (c, ch) in text.chars().enumerate() {
-                g.cells[r][c].c = ch;
-            }
-        }
-        g
-    }
-
     #[test]
     fn extract_text_single_row() {
-        let grid = make_grid_with_text(&["Hello World"]);
+        let snap = make_snapshot_with_text(&["Hello World"]);
         let mut sel = Selection::default();
         sel.start(CellPos { row: 0, col: 0 }, SelectionMode::Character);
         sel.update(CellPos { row: 0, col: 4 }); // "Hello"
-        let text = sel.extract_text(&grid);
+        let text = sel.extract_text(&snap);
         assert_eq!(text, "Hello");
     }
 
     #[test]
     fn extract_text_multi_row() {
-        let grid = make_grid_with_text(&["ABCDE", "FGHIJ"]);
+        let snap = make_snapshot_with_text(&["ABCDE", "FGHIJ"]);
         let mut sel = Selection::default();
         sel.start(CellPos { row: 0, col: 2 }, SelectionMode::Character);
         sel.update(CellPos { row: 1, col: 2 }); // "CDE\nFGH"
-        let text = sel.extract_text(&grid);
+        let text = sel.extract_text(&snap);
         assert_eq!(text, "CDE\nFGH");
     }
 
     #[test]
     fn extract_text_none_mode_returns_empty() {
-        let grid = make_grid_with_text(&["Hello"]);
+        let snap = make_snapshot_with_text(&["Hello"]);
         let sel = Selection::default();
-        assert_eq!(sel.extract_text(&grid), "");
+        assert_eq!(sel.extract_text(&snap), "");
     }
 
     // -----------------------------------------------------------------------
@@ -442,15 +475,15 @@ mod tests {
     // word_boundaries
     // -----------------------------------------------------------------------
 
-    fn make_row(s: &str) -> Vec<Cell> {
+    fn make_snapshot_row_cells(s: &str) -> Vec<SnapshotCell> {
         s.chars()
-            .map(|c| Cell { c, ..Cell::default() })
+            .map(|c| SnapshotCell { c, ..SnapshotCell::default() })
             .collect()
     }
 
     #[test]
     fn word_boundaries_single_word() {
-        let row = make_row("hello world");
+        let row = make_snapshot_row_cells("hello world");
         let (start, end) = word_boundaries(&row, 2); // 'l' in "hello"
         assert_eq!(start, 0);
         assert_eq!(end, 4); // "hello" spans 0-4
@@ -458,7 +491,7 @@ mod tests {
 
     #[test]
     fn word_boundaries_second_word() {
-        let row = make_row("hello world");
+        let row = make_snapshot_row_cells("hello world");
         let (start, end) = word_boundaries(&row, 7); // 'o' in "world"
         assert_eq!(start, 6);
         assert_eq!(end, 10);
@@ -466,7 +499,7 @@ mod tests {
 
     #[test]
     fn word_boundaries_on_whitespace() {
-        let row = make_row("hello world");
+        let row = make_snapshot_row_cells("hello world");
         let (start, end) = word_boundaries(&row, 5); // space
         assert_eq!(start, 5);
         assert_eq!(end, 5);
@@ -474,7 +507,7 @@ mod tests {
 
     #[test]
     fn word_boundaries_at_end_of_row() {
-        let row = make_row("abc");
+        let row = make_snapshot_row_cells("abc");
         let (start, end) = word_boundaries(&row, 2); // 'c'
         assert_eq!(start, 0);
         assert_eq!(end, 2);
@@ -482,7 +515,7 @@ mod tests {
 
     #[test]
     fn word_boundaries_single_char_word() {
-        let row = make_row("a b");
+        let row = make_snapshot_row_cells("a b");
         let (start, end) = word_boundaries(&row, 0); // 'a'
         assert_eq!(start, 0);
         assert_eq!(end, 0);
