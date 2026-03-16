@@ -1,7 +1,7 @@
 {
   "phase": 11,
-  "status": "complete",
-  "position": "Phase 11 build complete",
-  "message": "All 3 config/runtime hardening fixes applied. 603 tests pass. All v0.1.1 phases complete.",
-  "updated_at": "2026-03-16T19:10:00Z"
+  "status": "shipped",
+  "position": "Milestone shipped — Arcterm v0.1.1",
+  "message": "All 3 phases (9-11) complete. 606 tests. 21 fixes. Tagged v0.1.1.",
+  "updated_at": "2026-03-16T19:20:00Z"
 }
