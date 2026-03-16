@@ -128,6 +128,14 @@ impl PluginInstance {
         Ok(self.store.data().draw_buffer.clone())
     }
 
+    /// Dispatch a tool call to the WASM plugin's `call-tool` export.
+    pub fn call_tool_export(&mut self, name: &str, args_json: &str) -> anyhow::Result<String> {
+        // 3000 epochs at 10ms tick interval = 30-second deadline.
+        self.store.set_epoch_deadline(3000);
+        let result = self.instance.call_call_tool(&mut self.store, name, args_json)?;
+        Ok(result)
+    }
+
     /// Read-only access to the host data (for inspection in tests).
     pub fn host_data(&self) -> &PluginHostData {
         self.store.data()

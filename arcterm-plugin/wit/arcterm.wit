@@ -74,4 +74,5 @@ world arcterm-plugin {
     export load: func();
     export update: func(event: plugin-event) -> bool;
     export render: func() -> list<styled-line>;
+    export call-tool: func(name: string, args-json: string) -> string;
 }

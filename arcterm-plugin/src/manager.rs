@@ -362,22 +362,18 @@ impl PluginManager {
         Vec::new()
     }
 
-    /// Invoke a named tool by finding the plugin that owns it.
-    ///
-    /// For Phase 7, full WASM tool invocation is deferred.  Returns a JSON
-    /// stub so the OSC 7770 round-trip is exercised end-to-end.
-    pub fn call_tool(&self, name: &str, _args_json: &str) -> anyhow::Result<String> {
-        // Find which plugin owns this tool (by checking registered_tools).
+    /// Invoke a named tool by dispatching to the WASM plugin that owns it.
+    pub fn call_tool(&self, name: &str, args_json: &str) -> anyhow::Result<String> {
         for lp in self.plugins.values() {
-            if let Ok(inst) = lp.instance.lock() {
-                let owned = inst.host_data().registered_tools.iter().any(|t| t.name == name);
-                if owned {
-                    // Full WASM invocation is a Phase 8 deliverable.
-                    return Ok(format!(
-                        "{{\"error\":\"tool invocation not yet implemented\",\"tool\":\"{}\"}}",
-                        name
-                    ));
-                }
+            let owned = {
+                let inst = lp.instance.lock()
+                    .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+                inst.host_data().registered_tools.iter().any(|t| t.name == name)
+            };
+            if owned {
+                let mut inst = lp.instance.lock()
+                    .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+                return inst.call_tool_export(name, args_json);
             }
         }
         Ok(format!(
