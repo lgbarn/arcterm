@@ -146,6 +146,28 @@ impl Default for KeybindingConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+const MAX_SCROLLBACK_LINES: usize = 1_000_000;
+
+impl ArctermConfig {
+    /// Clamp fields to safe bounds. Returns `self` with any out-of-range values
+    /// corrected and a warning logged.
+    fn validate(mut self) -> Self {
+        if self.scrollback_lines > MAX_SCROLLBACK_LINES {
+            log::warn!(
+                "config: scrollback_lines {} exceeds maximum {}; clamping",
+                self.scrollback_lines,
+                MAX_SCROLLBACK_LINES
+            );
+            self.scrollback_lines = MAX_SCROLLBACK_LINES;
+        }
+        self
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Loading
 // ---------------------------------------------------------------------------
 
@@ -191,7 +213,7 @@ impl ArctermConfig {
         match toml::from_str::<Self>(&text) {
             Ok(cfg) => {
                 log::info!("config: loaded from {}", path.display());
-                cfg
+                cfg.validate()
             }
             Err(e) => {
                 log::warn!("config: invalid TOML in {}: {e}", path.display());
@@ -297,7 +319,8 @@ impl ArctermConfig {
         let cfg = merged
             .clone()
             .try_into::<Self>()
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .validate();
 
         (cfg, merged)
     }
@@ -667,6 +690,24 @@ mod tests {
         // Must be parseable back into ArctermConfig
         let cfg: ArctermConfig = toml::from_str(&toml_str).expect("flattened TOML must be valid");
         assert!((cfg.font_size - 14.0).abs() < 1e-5);
+    }
+
+    // -- scrollback_lines validation ------------------------------------------
+
+    #[test]
+    fn scrollback_lines_capped_at_maximum() {
+        let toml = r#"scrollback_lines = 999999999999"#;
+        let cfg: ArctermConfig = toml::from_str(toml).expect("valid TOML must parse");
+        let cfg = cfg.validate();
+        assert_eq!(cfg.scrollback_lines, 1_000_000, "extreme value must be clamped to 1_000_000");
+    }
+
+    #[test]
+    fn scrollback_lines_below_cap_unchanged() {
+        let toml = r#"scrollback_lines = 500000"#;
+        let cfg: ArctermConfig = toml::from_str(toml).expect("valid TOML must parse");
+        let cfg = cfg.validate();
+        assert_eq!(cfg.scrollback_lines, 500_000, "value below cap must not be modified");
     }
 
     // -- overlay dir helpers --------------------------------------------------
