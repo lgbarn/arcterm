@@ -30,3 +30,28 @@
 - Research agents before each phase prevented blocked builders and wrong architectural choices
 
 ---
+
+## [2026-03-16] Milestone: Arcterm v0.1.1 — Stabilization
+
+### What Went Well
+- Research agents finding issues already fixed saved significant builder effort (7 of 13 issues pre-resolved)
+- Team mode with parallel builders across independent crates worked smoothly
+- Review gates caught a real underflow regression (scroll_up/delete_lines) before it shipped
+- Organizing fixes by code path dependency enabled full parallelism in Phase 9 (4 crates simultaneously)
+
+### Surprises / Discoveries
+- wgpu `request_adapter()` returns `Result` not `Option` in this version — API documentation/plan mismatch required builder adaptation
+- `try_send` vs `blocking_send` matters in `spawn_blocking` contexts — blocking_send would stall the blocking thread pool
+- Pre-existing example files (`window.rs`) break when internal APIs change — examples should be included in CI or at minimum in `cargo check --workspace`
+
+### Pitfalls to Avoid
+- In-place copy scroll refactors can introduce usize underflow when `n == region_height` and `top == 0` — always use `checked_sub` for usize arithmetic in range bounds
+- Mode 1047 tests were omitted despite being in the plan's `must_haves` — reviewers should cross-reference the frontmatter checklist, not just the code
+- Making a field private (scroll_offset) intentionally breaks downstream crates — document the expected breakage clearly and verify only the target crate until the migration phase
+
+### Process Improvements
+- The "research first, discover what's already fixed" pattern dramatically reduced builder scope (from 21 planned fixes to ~10 actual code changes)
+- Stabilization phases benefit from strict issue-by-issue tracking with the ISSUES.md ledger
+- Review-driven issue logging (ISSUE-014 through ISSUE-019) creates a clean backlog for the next release
+
+---
