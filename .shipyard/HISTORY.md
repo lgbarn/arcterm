@@ -107,3 +107,8 @@
 - **Status:** complete
 - **Tests:** 457 passing (216 app, 51 core, 12 plugin, 3 plugin-integration, 10 pty, 38 render, 127 vt)
 - **Key Features:** wasmtime 42 runtime, WIT Component Model, plugin manifest + permissions, event bus, CLI, MCP tool registry, plugin pane rendering, example plugins
+
+## 2026-03-15 — Phase 7 Planned
+- **Phase:** 7
+- **Status:** planned
+- **Message:** 3 plans across 3 waves. Verdict: PASS. AI detection, cross-pane context, MCP discovery, plan status, error bridging.
