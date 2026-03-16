@@ -85,6 +85,8 @@ impl OverlayReviewState {
     }
 
     /// Reload the diff for the current file.
+    // Kept for future live-reload support; not yet wired to a keybinding.
+    #[allow(dead_code)]
     pub fn reload_diff(&mut self, base_config: &ArctermConfig) {
         if self.current_index < self.pending_files.len() {
             self.diff_text = compute_diff(base_config, &self.pending_files[self.current_index]);
@@ -248,8 +250,6 @@ impl OverlayReviewState {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
 
     // -----------------------------------------------------------------------

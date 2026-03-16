@@ -2312,7 +2312,7 @@ impl ApplicationHandler for App {
                 // Search overlay — input bar and match highlight quads.
                 if let Some(ref so) = state.search_overlay {
                     let win_w = state.renderer.gpu.surface_config.width as f32;
-                    let win_h = state.renderer.gpu.surface_config.height as f32;
+                    let _win_h = state.renderer.gpu.surface_config.height as f32;
                     let cell_h = state.renderer.text.cell_size.height * sf;
                     let cell_w = state.renderer.text.cell_size.width * sf;
                     let bar_h = cell_h * 1.5;
@@ -2643,17 +2643,17 @@ impl ApplicationHandler for App {
                                 overlay.next_match();
                                 if let Some(m) = overlay.current().cloned() {
                                     let focused = state.focused_pane();
-                                    if m.pane_id == focused {
-                                        if let Some(terminal) = state.panes.get_mut(&focused) {
-                                            let total = terminal.grid().all_text_rows().len();
-                                            let visible = terminal.grid().size.rows;
-                                            terminal.grid_mut().scroll_offset =
-                                                search::SearchOverlayState::scroll_offset_for_match(
-                                                    m.row_index,
-                                                    total,
-                                                    visible,
-                                                );
-                                        }
+                                    if m.pane_id == focused
+                                        && let Some(terminal) = state.panes.get_mut(&focused)
+                                    {
+                                        let total = terminal.grid().all_text_rows().len();
+                                        let visible = terminal.grid().size.rows;
+                                        terminal.grid_mut().scroll_offset =
+                                            search::SearchOverlayState::scroll_offset_for_match(
+                                                m.row_index,
+                                                total,
+                                                visible,
+                                            );
                                     }
                                 }
                                 state.search_overlay = Some(overlay);
@@ -2663,17 +2663,17 @@ impl ApplicationHandler for App {
                                 overlay.prev_match();
                                 if let Some(m) = overlay.current().cloned() {
                                     let focused = state.focused_pane();
-                                    if m.pane_id == focused {
-                                        if let Some(terminal) = state.panes.get_mut(&focused) {
-                                            let total = terminal.grid().all_text_rows().len();
-                                            let visible = terminal.grid().size.rows;
-                                            terminal.grid_mut().scroll_offset =
-                                                search::SearchOverlayState::scroll_offset_for_match(
-                                                    m.row_index,
-                                                    total,
-                                                    visible,
-                                                );
-                                        }
+                                    if m.pane_id == focused
+                                        && let Some(terminal) = state.panes.get_mut(&focused)
+                                    {
+                                        let total = terminal.grid().all_text_rows().len();
+                                        let visible = terminal.grid().size.rows;
+                                        terminal.grid_mut().scroll_offset =
+                                            search::SearchOverlayState::scroll_offset_for_match(
+                                                m.row_index,
+                                                total,
+                                                visible,
+                                            );
                                     }
                                 }
                                 state.search_overlay = Some(overlay);

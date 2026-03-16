@@ -245,6 +245,9 @@ impl SearchOverlayState {
     /// `visible_rows` — total number of rows in the viewport.
     /// `total_rows` — total number of rows in `all_text_rows()` for this pane
     ///   (scrollback_len + grid rows).
+    // All 8 parameters are distinct physical quantities; a struct wrapper
+    // would add boilerplate without improving clarity at call sites.
+    #[allow(clippy::too_many_arguments)]
     pub fn match_quads_for_pane(
         &self,
         pane_id: PaneId,
@@ -324,11 +327,7 @@ impl SearchOverlayState {
         let desired_start = match_row.saturating_sub(half);
         // scroll_offset cannot push past the available scrollback.
         let live_start = total_rows.saturating_sub(visible_rows);
-        if desired_start >= live_start {
-            0
-        } else {
-            live_start - desired_start
-        }
+        live_start.saturating_sub(desired_start)
     }
 }
 
