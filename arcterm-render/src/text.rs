@@ -232,6 +232,7 @@ impl TextRenderer {
         clip: Option<ClipRect>,
         scale_factor: f32,
         palette: &RenderPalette,
+        row_hashes: &mut Vec<u64>,
     ) {
         let num_rows = snapshot.rows;
         let cell_w = self.cell_size.width;
@@ -254,16 +255,27 @@ impl TextRenderer {
         }
         buf_vec.truncate(num_rows);
 
+        // Sync hash vec length with row count (u64::MAX forces first-frame reshaping).
+        row_hashes.resize(num_rows, u64::MAX);
+
         // Shape each row.
         for (row_idx, buf) in buf_vec.iter_mut().enumerate() {
             let row = snapshot.row(row_idx);
+            let cursor_col = if row_idx == snapshot.cursor_row { Some(snapshot.cursor_col) } else { None };
+
+            // Dirty-row skip: reuse existing Buffer when content is unchanged.
+            let row_hash = hash_row(row, row_idx, cursor_col);
+            if row_idx != snapshot.cursor_row && row_hashes.get(row_idx) == Some(&row_hash) {
+                continue;
+            }
+            row_hashes[row_idx] = row_hash;
+
             let width_px = cell_w * row.len() as f32;
             buf.set_size(
                 &mut self.font_system,
                 Some(width_px * scale_factor),
                 Some(cell_h * scale_factor),
             );
-            let cursor_col = if row_idx == snapshot.cursor_row { Some(snapshot.cursor_col) } else { None };
             shape_row_into_buffer(buf, row, &mut self.font_system, palette, cursor_col);
         }
 

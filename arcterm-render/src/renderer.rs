@@ -71,6 +71,12 @@ pub struct Renderer {
     pub image_store: HashMap<u32, ImageTexture>,
     /// Active image placements for the current frame: (image_id, pixel-rect).
     pub image_placements: Vec<(u32, [f32; 4])>,
+    /// Per-pane dirty-row hash cache, keyed by slot index (0-based pane order).
+    ///
+    /// Each entry is a `Vec<u64>` parallel to the pane's rows.  Rows with
+    /// matching hashes are skipped by `prepare_grid_at`, avoiding re-shaping
+    /// of unchanged content every frame.  Cleared on resize or palette change.
+    pub pane_row_hashes: HashMap<usize, Vec<u64>>,
     /// Active colour palette — hot-reloadable via [`set_palette`].
     pub palette: RenderPalette,
 }
@@ -98,6 +104,7 @@ impl Renderer {
             images,
             image_store: HashMap::new(),
             image_placements: Vec::new(),
+            pane_row_hashes: HashMap::new(),
             palette: RenderPalette::default(),
         })
     }
@@ -110,6 +117,7 @@ impl Renderer {
         self.palette = palette;
         // Force full re-shape so text picks up the new palette colours.
         self.text.row_hashes.clear();
+        self.pane_row_hashes.clear();
     }
 
     /// Handle window resize: reconfigure the surface and clear row hashes.
@@ -117,6 +125,7 @@ impl Renderer {
         self.gpu.resize(width, height);
         // Clear row hashes so all rows are re-shaped after a resize.
         self.text.row_hashes.clear();
+        self.pane_row_hashes.clear();
     }
 
     /// Render a full terminal snapshot frame.
@@ -167,7 +176,11 @@ impl Renderer {
         // Build all quad instances: cell backgrounds + cursor per pane, then overlays.
         let mut all_quads: Vec<QuadInstance> = Vec::new();
 
-        for pane in panes {
+        // Split-borrow: extract pane_row_hashes so we can call self.text methods
+        // while also holding a mutable reference to the hash map.
+        let hashes = &mut self.pane_row_hashes;
+
+        for (slot_idx, pane) in panes.iter().enumerate() {
             let [px, py, pw, ph] = pane.rect;
             let clip = ClipRect {
                 x: px as i32,
@@ -193,6 +206,7 @@ impl Renderer {
                 Some(clip),
                 sf,
                 &self.palette,
+                hashes.entry(slot_idx).or_default(),
             );
 
             // Overlay structured blocks on top of the plain grid text.
