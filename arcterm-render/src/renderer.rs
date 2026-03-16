@@ -81,8 +81,8 @@ impl Renderer {
     /// `font_size` is in logical pixels / points.  Pass `FONT_SIZE` (14.0) to
     /// use the compiled-in default, or a value from configuration to honour the
     /// user's preference.
-    pub fn new(window: Arc<Window>, font_size: f32) -> Self {
-        let gpu = GpuState::new(window);
+    pub fn new(window: Arc<Window>, font_size: f32) -> Result<Self, String> {
+        let gpu = GpuState::new(window)?;
         let text = TextRenderer::new(
             &gpu.device,
             &gpu.queue,
@@ -91,7 +91,7 @@ impl Renderer {
         );
         let quads = QuadRenderer::new(&gpu.device, gpu.surface_format);
         let images = ImageQuadRenderer::new(&gpu.device, gpu.surface_format);
-        Self {
+        Ok(Self {
             gpu,
             text,
             quads,
@@ -99,7 +99,7 @@ impl Renderer {
             image_store: HashMap::new(),
             image_placements: Vec::new(),
             palette: RenderPalette::default(),
-        }
+        })
     }
 
     /// Replace the active colour palette.

@@ -1000,7 +1000,14 @@ impl ApplicationHandler for App {
                 .expect("failed to create window"),
         );
 
-        let mut renderer = Renderer::new(window.clone(), cfg.font_size);
+        let mut renderer = match Renderer::new(window.clone(), cfg.font_size) {
+            Ok(r) => r,
+            Err(e) => {
+                log::error!("GPU initialization failed: {e}");
+                event_loop.exit();
+                return;
+            }
+        };
 
         let palette = palette_from_config(&cfg);
         log::info!("config: color_scheme={:?}", cfg.color_scheme);
