@@ -3,8 +3,32 @@
 //! This module transforms raw text content (code, diff, JSON, markdown) into
 //! coloured line spans (`Vec<RenderedLine>`) suitable for GPU rendering by glyphon.
 
-use arcterm_vt::ContentType;
 use std::sync::OnceLock;
+
+// ---------------------------------------------------------------------------
+// ContentType — semantic classification for OSC 7770 structured content
+// ---------------------------------------------------------------------------
+
+/// Classifies the type of structured content carried in an OSC 7770 block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContentType {
+    /// A syntax-highlighted source code block.
+    CodeBlock,
+    /// A unified diff.
+    Diff,
+    /// A structured plan or checklist.
+    Plan,
+    /// Markdown-formatted text.
+    Markdown,
+    /// JSON data.
+    Json,
+    /// An error message.
+    Error,
+    /// A progress indicator.
+    Progress,
+    /// An inline image (Kitty protocol).
+    Image,
+}
 use syntect::{
     easy::HighlightLines,
     highlighting::{FontStyle, ThemeSet},

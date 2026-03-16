@@ -7,7 +7,7 @@
 //! preferred over false positives.
 
 use arcterm_core::Cell;
-use arcterm_vt::ContentType;
+use arcterm_render::ContentType;
 
 // ---------------------------------------------------------------------------
 // DetectionResult

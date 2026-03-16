@@ -214,7 +214,7 @@ impl Renderer {
                 });
 
                 // For code blocks: add a small "Copy" button quad at the top-right corner.
-                use arcterm_vt::ContentType;
+                use crate::structured::ContentType;
                 if matches!(block.block_type, ContentType::CodeBlock) {
                     let btn_size = 14.0_f32 * sf;
                     let btn_x = px + pw - btn_size - 4.0 * sf;
