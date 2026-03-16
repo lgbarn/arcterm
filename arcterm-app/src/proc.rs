@@ -8,6 +8,7 @@
 // ── Platform-specific detection helpers ──────────────────────────────────────
 
 /// Return the process name (comm) for `pid`, or `None` on error.
+#[allow(dead_code)]
 #[cfg(target_os = "macos")]
 pub fn process_comm(pid: u32) -> Option<String> {
     // libc::proc_name writes the short process name (up to MAXCOMLEN bytes)
@@ -47,6 +48,7 @@ pub fn process_comm(_pid: u32) -> Option<String> {
 
 /// Return the command-line arguments for `pid` as a vector of strings, or
 /// `None` on error / unsupported platform.
+#[allow(dead_code)]
 #[cfg(target_os = "macos")]
 pub fn process_args(pid: u32) -> Option<Vec<String>> {
     use libc::{c_int, c_void, CTL_KERN, KERN_PROCARGS2};

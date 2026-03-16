@@ -1,6 +1,6 @@
 //! Text rendering using glyphon (cosmic-text + wgpu atlas).
 
-use arcterm_core::{Color as TermColor, Grid};
+use crate::snapshot::{RenderSnapshot, SnapshotCell, SnapshotColor};
 use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, Style, SwashCache,
     TextArea, TextAtlas, TextBounds, TextRenderer as GlyphonTextRenderer, Viewport, Weight,
@@ -134,21 +134,19 @@ impl TextRenderer {
         self.pane_buffer_pool.truncate(0);
     }
 
-    /// Convert a Grid into glyphon TextAreas and upload to the atlas.
+    /// Convert a `RenderSnapshot` into glyphon TextAreas and upload to the atlas.
     ///
-    /// Uses `rows_for_viewport()` so scrollback is rendered correctly.
     /// The cursor row is always re-shaped; other rows are skipped when their
     /// content hash is unchanged (dirty-row optimization).
     pub fn prepare_grid(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        grid: &Grid,
+        snapshot: &RenderSnapshot,
         scale_factor: f32,
         palette: &RenderPalette,
     ) -> Result<(), glyphon::PrepareError> {
-        let rows = grid.rows_for_viewport();
-        let num_rows = rows.len();
+        let num_rows = snapshot.rows;
         let cell_w = self.cell_size.width;
         let cell_h = self.cell_size.height;
 
@@ -163,14 +161,14 @@ impl TextRenderer {
         // Sync hash vec length with row count (resize clears stale hashes).
         self.row_hashes.resize(num_rows, u64::MAX);
 
-        let cursor = grid.cursor;
-
         // Populate each row buffer with per-cell colored spans.
-        for (row_idx, row) in rows.iter().enumerate() {
-            let is_cursor_row = row_idx == cursor.row;
+        for row_idx in 0..num_rows {
+            let row = snapshot.row(row_idx);
+            let is_cursor_row = row_idx == snapshot.cursor_row;
 
             // Compute a cheap content hash for dirty-row skipping.
-            let row_hash = hash_row(row, row_idx, cursor);
+            let cursor_col_opt = if is_cursor_row { Some(snapshot.cursor_col) } else { None };
+            let row_hash = hash_row(row, row_idx, cursor_col_opt);
 
             if !is_cursor_row && self.row_hashes[row_idx] == row_hash {
                 // Row is unchanged — reuse existing Buffer, skip re-shaping.
@@ -186,8 +184,7 @@ impl TextRenderer {
                 Some(cell_h * scale_factor),
             );
 
-            let cursor_col = if row_idx == cursor.row { Some(cursor.col) } else { None };
-            shape_row_into_buffer(buf, row, &mut self.font_system, palette, cursor_col);
+            shape_row_into_buffer(buf, row, &mut self.font_system, palette, cursor_col_opt);
         }
 
         // Build TextArea slice from the now-stable row_buffers.
@@ -219,8 +216,8 @@ impl TextRenderer {
         )
     }
 
-    /// Shape a grid at a given pixel offset and optional clip, accumulating it
-    /// for a later [`submit_text_areas`] call.
+    /// Shape a `RenderSnapshot` at a given pixel offset and optional clip,
+    /// accumulating it for a later [`submit_text_areas`] call.
     ///
     /// This is the multi-pane variant of [`prepare_grid`].  Call
     /// [`reset_frame`] at the start of each frame, then call this method once
@@ -231,18 +228,16 @@ impl TextRenderer {
     /// applied by the caller).
     pub fn prepare_grid_at(
         &mut self,
-        grid: &Grid,
+        snapshot: &RenderSnapshot,
         offset_x: f32,
         offset_y: f32,
         clip: Option<ClipRect>,
         scale_factor: f32,
         palette: &RenderPalette,
     ) {
-        let rows = grid.rows_for_viewport();
-        let num_rows = rows.len();
+        let num_rows = snapshot.rows;
         let cell_w = self.cell_size.width;
         let cell_h = self.cell_size.height;
-        let cursor = grid.cursor;
 
         // Allocate or reuse a buffer vector for this slot.
         let slot_idx = self.pane_slots.len();
@@ -262,22 +257,15 @@ impl TextRenderer {
         buf_vec.truncate(num_rows);
 
         // Shape each row.
-        for (row_idx, row) in rows.iter().enumerate() {
-            let is_cursor_row = row_idx == cursor.row;
-
-            // For multi-pane we always re-shape (no per-pane hash cache yet).
-            // This is intentional for correctness — a hash cache per pane can
-            // be added as a follow-up optimisation.
-            let _ = is_cursor_row;
-
-            let buf = &mut buf_vec[row_idx];
+        for (row_idx, buf) in buf_vec.iter_mut().enumerate() {
+            let row = snapshot.row(row_idx);
             let width_px = cell_w * row.len() as f32;
             buf.set_size(
                 &mut self.font_system,
                 Some(width_px * scale_factor),
                 Some(cell_h * scale_factor),
             );
-            let cursor_col = if row_idx == cursor.row { Some(cursor.col) } else { None };
+            let cursor_col = if row_idx == snapshot.cursor_row { Some(snapshot.cursor_col) } else { None };
             shape_row_into_buffer(buf, row, &mut self.font_system, palette, cursor_col);
         }
 
@@ -653,7 +641,7 @@ impl TextRenderer {
 /// `cursor_col` — `Some(col)` when this is the cursor row, `None` otherwise.
 /// A blank cell is one whose character is `' '` (space) or `'\0'` (null).
 pub(crate) fn substitute_cursor_char(
-    row: &[arcterm_core::Cell],
+    row: &[SnapshotCell],
     cursor_col: Option<usize>,
 ) -> Vec<char> {
     row.iter()
@@ -673,34 +661,41 @@ pub(crate) fn substitute_cursor_char(
 /// `cursor_col` — `Some(col)` when this row is the cursor row.  When the
 /// cursor sits on a blank/space cell, U+2588 (FULL BLOCK) is substituted so
 /// the text layer shows a visible glyph at the cursor position.  The
-/// substitution is render-only; the stored [`arcterm_core::Cell`] data is
+/// substitution is render-only; the stored [`SnapshotCell`] data is
 /// never modified.
 fn shape_row_into_buffer(
     buf: &mut Buffer,
-    row: &[arcterm_core::Cell],
+    row: &[SnapshotCell],
     font_system: &mut FontSystem,
     palette: &RenderPalette,
     cursor_col: Option<usize>,
 ) {
     let chars = substitute_cursor_char(row, cursor_col);
-    let span_strings: Vec<(String, Color)> = row
+    let span_strings: Vec<(String, Color, bool, bool)> = row
         .iter()
         .zip(chars.iter())
-        .map(|(cell, &ch)| {
+        .map(|(cell, &ch): (&SnapshotCell, &char)| {
             let s = ch.to_string();
-            let fg = if cell.attrs.reverse {
-                ansi_color_to_glyphon(cell.attrs.bg, false, palette)
+            let fg = if cell.inverse {
+                ansi_color_to_glyphon(cell.bg, false, palette)
             } else {
-                ansi_color_to_glyphon(cell.attrs.fg, true, palette)
+                ansi_color_to_glyphon(cell.fg, true, palette)
             };
-            (s, fg)
+            (s, fg, cell.bold, cell.italic)
         })
         .collect();
 
     buf.set_rich_text(
         font_system,
-        span_strings.iter().map(|(s, fg)| {
-            (s.as_str(), Attrs::new().family(Family::Monospace).color(*fg))
+        span_strings.iter().map(|item: &(String, Color, bool, bool)| {
+            let mut attrs = Attrs::new().family(Family::Monospace).color(item.1);
+            if item.2 {
+                attrs = attrs.weight(Weight::BOLD);
+            }
+            if item.3 {
+                attrs = attrs.style(Style::Italic);
+            }
+            (item.0.as_str(), attrs)
         }),
         &Attrs::new().family(Family::Monospace),
         Shaping::Basic,
@@ -734,13 +729,13 @@ fn measure_cell(font_system: &mut FontSystem, font_size: f32, line_height: f32) 
     }
 }
 
-/// Map a terminal Color to a glyphon Color using the active palette.
+/// Map a `SnapshotColor` to a glyphon `Color` using the active palette.
 ///
 /// `is_fg` controls the default: palette foreground for fg, palette
 /// background for bg.
-pub fn ansi_color_to_glyphon(color: TermColor, is_fg: bool, palette: &RenderPalette) -> Color {
+pub fn ansi_color_to_glyphon(color: SnapshotColor, is_fg: bool, palette: &RenderPalette) -> Color {
     match color {
-        TermColor::Default => {
+        SnapshotColor::Default => {
             if is_fg {
                 palette.fg_glyphon()
             } else {
@@ -748,8 +743,8 @@ pub fn ansi_color_to_glyphon(color: TermColor, is_fg: bool, palette: &RenderPale
                 Color::rgb(r, g, b)
             }
         }
-        TermColor::Rgb(r, g, b) => Color::rgb(r, g, b),
-        TermColor::Indexed(n) => palette.indexed_glyphon(n),
+        SnapshotColor::Rgb(r, g, b) => Color::rgb(r, g, b),
+        SnapshotColor::Indexed(n) => palette.indexed_glyphon(n),
     }
 }
 
@@ -758,13 +753,13 @@ pub fn ansi_color_to_glyphon(color: TermColor, is_fg: bool, palette: &RenderPale
 /// The hash encodes:
 /// - Each cell's character code point.
 /// - Each cell's fg and bg color discriminants and values.
-/// - Each cell's attribute flags (bold, italic, underline, reverse).
-/// - The cursor column when `row_idx` is the cursor row (so cursor movement
+/// - Each cell's attribute flags (bold, italic, underline, inverse).
+/// - The cursor column (`cursor_col`) when provided (so cursor movement
 ///   always invalidates the row hash).
 pub fn hash_row(
-    row: &[arcterm_core::Cell],
+    row: &[SnapshotCell],
     row_idx: usize,
-    cursor: arcterm_core::CursorPos,
+    cursor_col: Option<usize>,
 ) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -772,30 +767,30 @@ pub fn hash_row(
     let mut h = DefaultHasher::new();
     row_idx.hash(&mut h);
     // Include cursor column so that cursor movement within a row is detected.
-    if row_idx == cursor.row {
-        cursor.col.hash(&mut h);
+    if let Some(col) = cursor_col {
+        col.hash(&mut h);
     }
     for cell in row {
         (cell.c as u32).hash(&mut h);
-        hash_color(cell.attrs.fg, &mut h);
-        hash_color(cell.attrs.bg, &mut h);
-        cell.attrs.bold.hash(&mut h);
-        cell.attrs.italic.hash(&mut h);
-        cell.attrs.underline.hash(&mut h);
-        cell.attrs.reverse.hash(&mut h);
+        hash_snapshot_color(cell.fg, &mut h);
+        hash_snapshot_color(cell.bg, &mut h);
+        cell.bold.hash(&mut h);
+        cell.italic.hash(&mut h);
+        cell.underline.hash(&mut h);
+        cell.inverse.hash(&mut h);
     }
     h.finish()
 }
 
-fn hash_color(c: TermColor, h: &mut impl std::hash::Hasher) {
+fn hash_snapshot_color(c: SnapshotColor, h: &mut impl std::hash::Hasher) {
     use std::hash::Hash;
     match c {
-        TermColor::Default => 0u8.hash(h),
-        TermColor::Indexed(n) => {
+        SnapshotColor::Default => 0u8.hash(h),
+        SnapshotColor::Indexed(n) => {
             1u8.hash(h);
             n.hash(h);
         }
-        TermColor::Rgb(r, g, b) => {
+        SnapshotColor::Rgb(r, g, b) => {
             2u8.hash(h);
             r.hash(h);
             g.hash(h);
@@ -810,49 +805,48 @@ fn hash_color(c: TermColor, h: &mut impl std::hash::Hasher) {
 
 #[cfg(test)]
 mod tests {
-    use arcterm_core::{Cell, Color as TermColor, CursorPos};
+    use crate::snapshot::{SnapshotCell, SnapshotColor};
     use super::{hash_row, substitute_cursor_char};
+
+    fn default_row(n: usize) -> Vec<SnapshotCell> {
+        (0..n).map(|_| SnapshotCell::default()).collect()
+    }
 
     /// Two identical rows must produce the same hash.
     #[test]
     fn hash_row_identical_rows_match() {
-        let row: Vec<Cell> = (0..5).map(|_| Cell::default()).collect();
-        let cursor = CursorPos { row: 1, col: 0 }; // not this row
-        let h1 = hash_row(&row, 0, cursor);
-        let h2 = hash_row(&row, 0, cursor);
+        let row = default_row(5);
+        let h1 = hash_row(&row, 0, None); // cursor not on this row
+        let h2 = hash_row(&row, 0, None);
         assert_eq!(h1, h2, "identical rows must hash identically");
     }
 
     /// Changing a cell character must change the hash.
     #[test]
     fn hash_row_char_change_invalidates() {
-        let mut row: Vec<Cell> = (0..5).map(|_| Cell::default()).collect();
-        let cursor = CursorPos { row: 1, col: 0 };
-        let h1 = hash_row(&row, 0, cursor);
+        let mut row = default_row(5);
+        let h1 = hash_row(&row, 0, None);
         row[2].c = 'X';
-        let h2 = hash_row(&row, 0, cursor);
+        let h2 = hash_row(&row, 0, None);
         assert_ne!(h1, h2, "character change must alter hash");
     }
 
     /// Moving the cursor within the cursor row must change the hash.
     #[test]
     fn hash_row_cursor_column_movement_invalidates() {
-        let row: Vec<Cell> = (0..5).map(|_| Cell::default()).collect();
-        let c1 = CursorPos { row: 0, col: 1 };
-        let c2 = CursorPos { row: 0, col: 3 };
-        let h1 = hash_row(&row, 0, c1);
-        let h2 = hash_row(&row, 0, c2);
+        let row = default_row(5);
+        let h1 = hash_row(&row, 0, Some(1));
+        let h2 = hash_row(&row, 0, Some(3));
         assert_ne!(h1, h2, "cursor column change in cursor row must alter hash");
     }
 
     /// Cursor movement in a non-cursor row must NOT change that row's hash.
     #[test]
     fn hash_row_cursor_movement_other_row_unchanged() {
-        let row: Vec<Cell> = (0..5).map(|_| Cell::default()).collect();
-        let c1 = CursorPos { row: 3, col: 1 }; // cursor on different row
-        let c2 = CursorPos { row: 3, col: 4 };
-        let h1 = hash_row(&row, 0, c1);
-        let h2 = hash_row(&row, 0, c2);
+        let row = default_row(5);
+        // row_idx=0 with cursor_col=None (cursor is on a different row)
+        let h1 = hash_row(&row, 0, None);
+        let h2 = hash_row(&row, 0, None);
         assert_eq!(
             h1, h2,
             "cursor movement on another row must not change hash of row 0"
@@ -862,23 +856,21 @@ mod tests {
     /// Changing a cell's fg color must change the hash.
     #[test]
     fn hash_row_fg_color_change_invalidates() {
-        let mut row: Vec<Cell> = (0..3).map(|_| Cell::default()).collect();
-        let cursor = CursorPos { row: 1, col: 0 };
-        let h1 = hash_row(&row, 0, cursor);
-        row[1].attrs.fg = TermColor::Rgb(255, 0, 0);
-        let h2 = hash_row(&row, 0, cursor);
+        let mut row = default_row(3);
+        let h1 = hash_row(&row, 0, None);
+        row[1].fg = SnapshotColor::Rgb(255, 0, 0);
+        let h2 = hash_row(&row, 0, None);
         assert_ne!(h1, h2, "fg color change must alter hash");
     }
 
-    /// Changing a cell's reverse flag must change the hash.
+    /// Changing a cell's inverse flag must change the hash.
     #[test]
     fn hash_row_reverse_flag_invalidates() {
-        let mut row: Vec<Cell> = (0..3).map(|_| Cell::default()).collect();
-        let cursor = CursorPos { row: 1, col: 0 };
-        let h1 = hash_row(&row, 0, cursor);
-        row[0].attrs.reverse = true;
-        let h2 = hash_row(&row, 0, cursor);
-        assert_ne!(h1, h2, "reverse attribute change must alter hash");
+        let mut row = default_row(3);
+        let h1 = hash_row(&row, 0, None);
+        row[0].inverse = true;
+        let h2 = hash_row(&row, 0, None);
+        assert_ne!(h1, h2, "inverse attribute change must alter hash");
     }
 
     // ---- ISSUE-006 regression: cursor on blank cell uses block glyph ----
@@ -887,7 +879,7 @@ mod tests {
     /// be U+2588 (FULL BLOCK). All other cells must remain unchanged.
     #[test]
     fn cursor_on_blank_substitutes_block_glyph() {
-        let row: Vec<Cell> = (0..5).map(|_| Cell::default()).collect();
+        let row = default_row(5);
         // cursor_col=Some(2) means the cursor sits on column 2 of this row.
         let chars = substitute_cursor_char(&row, Some(2));
         assert_eq!(chars[2], '\u{2588}', "cursor on blank cell must yield U+2588");
@@ -900,7 +892,7 @@ mod tests {
     /// When cursor_col is None (not the cursor row), no substitution is made.
     #[test]
     fn no_cursor_no_substitution() {
-        let row: Vec<Cell> = (0..5).map(|_| Cell::default()).collect();
+        let row = default_row(5);
         let chars = substitute_cursor_char(&row, None);
         assert!(
             chars.iter().all(|&c| c == ' '),
@@ -911,7 +903,7 @@ mod tests {
     /// A non-blank character at the cursor position must NOT be substituted.
     #[test]
     fn cursor_on_non_blank_no_substitution() {
-        let mut row: Vec<Cell> = (0..5).map(|_| Cell::default()).collect();
+        let mut row = default_row(5);
         row[2].c = 'A';
         let chars = substitute_cursor_char(&row, Some(2));
         assert_eq!(chars[2], 'A', "cursor on non-blank cell must not substitute");

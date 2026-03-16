@@ -1,11 +1,10 @@
-//! Window example: renders a test grid using arcterm-render.
+//! Window example: renders a test snapshot using arcterm-render.
 //!
 //! Run with: cargo run --package arcterm-render --example window
 
 use std::sync::Arc;
 
-use arcterm_core::{Cell, CellAttrs, Color, Grid, GridSize};
-use arcterm_render::Renderer;
+use arcterm_render::{RenderSnapshot, Renderer, SnapshotCell, SnapshotColor};
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -29,7 +28,7 @@ fn main() {
 struct AppState {
     window: Arc<Window>,
     renderer: Renderer,
-    grid: Grid,
+    snapshot: RenderSnapshot,
 }
 
 struct App {
@@ -60,18 +59,18 @@ impl ApplicationHandler for App {
             }
         };
 
-        // Build a test grid with "Hello, Arcterm!" and colored rows.
-        let size = renderer.grid_size_for_window(
+        // Build a test snapshot with demo content.
+        let (rows, cols) = renderer.grid_size_for_window(
             window.inner_size().width,
             window.inner_size().height,
             window.scale_factor(),
         );
-        let grid = build_test_grid(size);
+        let snapshot = build_test_snapshot(rows, cols);
 
         self.state = Some(AppState {
             window,
             renderer,
-            grid,
+            snapshot,
         });
     }
 
@@ -92,19 +91,19 @@ impl ApplicationHandler for App {
 
             WindowEvent::Resized(size) => {
                 state.renderer.resize(size.width, size.height);
-                let new_size = state.renderer.grid_size_for_window(
+                let (rows, cols) = state.renderer.grid_size_for_window(
                     size.width,
                     size.height,
                     state.window.scale_factor(),
                 );
-                state.grid = build_test_grid(new_size);
+                state.snapshot = build_test_snapshot(rows, cols);
                 state.window.request_redraw();
             }
 
             WindowEvent::RedrawRequested => {
                 state
                     .renderer
-                    .render_frame(&state.grid, state.window.scale_factor());
+                    .render_frame(&state.snapshot, state.window.scale_factor());
             }
 
             _ => {}
@@ -121,74 +120,64 @@ impl ApplicationHandler for App {
 }
 
 // ---------------------------------------------------------------------------
-// Test grid construction
+// Test snapshot construction
 // ---------------------------------------------------------------------------
 
-/// Build a grid filled with demo content.
-fn build_test_grid(size: GridSize) -> Grid {
-    let mut grid = Grid::new(size);
-    let cols = size.cols;
+/// Build a `RenderSnapshot` filled with demo content.
+fn build_test_snapshot(rows: usize, cols: usize) -> RenderSnapshot {
+    let mut cells: Vec<SnapshotCell> = vec![SnapshotCell::default(); rows * cols];
 
     // Row 0: "Hello, Arcterm!" in default colors.
-    write_row(&mut grid, 0, "Hello, Arcterm!", &CellAttrs::default(), cols);
+    write_row(&mut cells, 0, cols, "Hello, Arcterm!", SnapshotColor::Default, false);
 
     // Row 1: bright red label.
-    let red_attrs = CellAttrs {
-        fg: Color::Indexed(9), // bright red
-        ..Default::default()
-    };
-    write_row(&mut grid, 1, "  Red text row", &red_attrs, cols);
+    write_row(&mut cells, 1, cols, "  Red text row", SnapshotColor::Indexed(9), false);
 
     // Row 2: bright green label.
-    let green_attrs = CellAttrs {
-        fg: Color::Indexed(10), // bright green
-        ..Default::default()
-    };
-    write_row(&mut grid, 2, "  Green text row", &green_attrs, cols);
+    write_row(&mut cells, 2, cols, "  Green text row", SnapshotColor::Indexed(10), false);
 
     // Row 3: bright cyan label.
-    let cyan_attrs = CellAttrs {
-        fg: Color::Indexed(14), // bright cyan
-        ..Default::default()
-    };
-    write_row(&mut grid, 3, "  Cyan text row", &cyan_attrs, cols);
+    write_row(&mut cells, 3, cols, "  Cyan text row", SnapshotColor::Indexed(14), false);
 
-    // Row 4: true-color RGB example.
-    let rgb_attrs = CellAttrs {
-        fg: Color::Rgb(255, 165, 0), // orange
-        ..Default::default()
-    };
-    write_row(&mut grid, 4, "  RGB orange text", &rgb_attrs, cols);
+    // Row 4: true-color RGB example (orange).
+    write_row(&mut cells, 4, cols, "  RGB orange text", SnapshotColor::Rgb(255, 165, 0), false);
 
     // Row 5: color cube strip (indices 16–51).
-    if size.rows > 5 {
+    if rows > 5 {
         for col in 0..cols.min(36) {
-            let cell = grid.cell_mut(5, col);
+            let cell = &mut cells[5 * cols + col];
             cell.c = '#';
-            cell.attrs = CellAttrs {
-                fg: Color::Indexed(16 + col as u8),
-                ..Default::default()
-            };
+            cell.fg = SnapshotColor::Indexed(16 + col as u8);
         }
     }
 
-    grid
+    RenderSnapshot {
+        cells,
+        cols,
+        rows,
+        cursor_row: 0,
+        cursor_col: 0,
+        cursor_visible: true,
+        cursor_shape: alacritty_terminal::vte::ansi::CursorShape::Block,
+    }
 }
 
-/// Write a string into a grid row, padding with spaces.
-fn write_row(grid: &mut Grid, row: usize, text: &str, attrs: &CellAttrs, cols: usize) {
-    if row >= grid.size.rows {
-        return;
-    }
+/// Write a string into a row of the snapshot cell buffer.
+fn write_row(
+    cells: &mut [SnapshotCell],
+    row: usize,
+    cols: usize,
+    text: &str,
+    fg: SnapshotColor,
+    bold: bool,
+) {
     for (col, ch) in text.chars().enumerate() {
         if col >= cols {
             break;
         }
-        let cell = grid.cell_mut(row, col);
-        *cell = Cell {
-            c: ch,
-            attrs: *attrs,
-            dirty: true,
-        };
+        let cell = &mut cells[row * cols + col];
+        cell.c = ch;
+        cell.fg = fg;
+        cell.bold = bold;
     }
 }

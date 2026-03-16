@@ -1,8 +1,5 @@
 [workspace]
 members = [
-    "arcterm-core",
-    "arcterm-vt",
-    "arcterm-pty",
     "arcterm-render",
     "arcterm-app",
     "arcterm-plugin",
@@ -18,8 +15,7 @@ repository = "https://github.com/lgbarn/arcterm"
 homepage = "https://github.com/lgbarn/arcterm"
 
 [workspace.dependencies]
-vte = "0.15"
-portable-pty = "0.9"
+alacritty_terminal = "0.25"
 wgpu = "28"
 winit = "0.30"
 glyphon = "0.10"
@@ -40,9 +36,6 @@ wasmtime = { version = "42", features = ["component-model", "cranelift"] }
 wasmtime-wasi = "42"
 anyhow = "1"
 
-arcterm-core = { path = "arcterm-core" }
-arcterm-vt = { path = "arcterm-vt" }
-arcterm-pty = { path = "arcterm-pty" }
 arcterm-render = { path = "arcterm-render" }
 
 # The profile that 'dist' will build with

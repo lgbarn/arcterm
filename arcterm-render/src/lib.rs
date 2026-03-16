@@ -5,6 +5,7 @@ pub mod image_quad;
 pub mod palette;
 pub mod quad;
 pub mod renderer;
+pub mod snapshot;
 pub mod structured;
 pub mod text;
 
@@ -16,5 +17,6 @@ pub use renderer::{
     OverlayQuad, PaneRenderInfo, PluginPaneRenderInfo, Renderer, build_quad_instances_at,
     render_tab_bar_quads, tab_bar_height,
 };
+pub use snapshot::{RenderSnapshot, SnapshotCell, SnapshotColor, snapshot_from_term};
 pub use text::{ClipRect, PluginStyledLine, TextRenderer};
-pub use structured::{HighlightEngine, RenderedLine, StructuredBlock, StyledSpan};
+pub use structured::{ContentType, HighlightEngine, RenderedLine, StructuredBlock, StyledSpan};

@@ -180,11 +180,14 @@ mod context;
 mod detect;
 mod input;
 mod keymap;
+mod kitty_types;
 mod layout;
 mod neovim;
+mod osc7770;
 mod overlay;
 mod palette;
 mod plan;
+mod prefilter;
 mod proc;
 mod search;
 mod selection;
@@ -200,12 +203,10 @@ use winit::event_loop::ControlFlow;
 #[cfg(feature = "latency-trace")]
 use std::time::Instant as TraceInstant;
 
-use arcterm_core::{Cell, CellAttrs, Color, CursorPos, GridSize};
 use arcterm_render::{
-    HighlightEngine, OverlayQuad, PaneRenderInfo, PluginPaneRenderInfo, PluginStyledLine,
+    ContentType, HighlightEngine, OverlayQuad, PaneRenderInfo, PluginPaneRenderInfo, PluginStyledLine,
     RenderPalette, Renderer, StructuredBlock,
 };
-use arcterm_vt::ContentType;
 use keymap::{KeyAction, KeymapHandler};
 use palette::{PaletteState, WorkspaceSwitcherState};
 use layout::{Axis, Direction, PaneId, PaneNode, PixelRect};
@@ -329,7 +330,6 @@ fn count_leaves(node: &workspace::WorkspacePaneNode) -> usize {
 /// Collections returned by pane-spawn helpers, consumed by `AppState` init.
 type PaneBundle = (
     HashMap<PaneId, Terminal>,
-    HashMap<PaneId, tokio::sync::mpsc::Receiver<Vec<u8>>>,
     HashMap<PaneId, mpsc::Receiver<PendingImage>>,
     TabManager,
     Vec<PaneNode>,
@@ -342,20 +342,18 @@ type PaneBundle = (
 /// This is the normal (no workspace) startup path. Extracted into a function
 /// so that workspace restore can fall back to it when the session file is
 /// empty or invalid.
-fn spawn_default_pane(cfg: &config::ArctermConfig, initial_size: GridSize) -> PaneBundle {
+fn spawn_default_pane(cfg: &config::ArctermConfig, initial_size: (usize, usize)) -> PaneBundle {
     let first_id = PaneId::next();
-    let (mut terminal, pty_rx, image_rx) =
-        Terminal::new(initial_size, cfg.shell.clone(), None).unwrap_or_else(|e| {
-            log::error!("Failed to create PTY session: {e}");
-            std::process::exit(1);
-        });
-    terminal.grid_mut().max_scrollback = cfg.scrollback_lines;
+    let (rows, cols) = initial_size;
+    let (terminal, image_rx) =
+        Terminal::new(cols, rows, 8, 16, cfg.shell.clone(), None)
+            .unwrap_or_else(|e| {
+                log::error!("Failed to create PTY session: {e}");
+                std::process::exit(1);
+            });
 
     let mut panes = HashMap::new();
     panes.insert(first_id, terminal);
-
-    let mut pty_channels = HashMap::new();
-    pty_channels.insert(first_id, pty_rx);
 
     let mut image_channels = HashMap::new();
     image_channels.insert(first_id, image_rx);
@@ -368,7 +366,7 @@ fn spawn_default_pane(cfg: &config::ArctermConfig, initial_size: GridSize) -> Pa
     let mut structured_blocks_map: HashMap<PaneId, Vec<StructuredBlock>> = HashMap::new();
     structured_blocks_map.insert(first_id, Vec::new());
 
-    (panes, pty_channels, image_channels, tab_manager, tab_layouts, auto_detectors, structured_blocks_map)
+    (panes, image_channels, tab_manager, tab_layouts, auto_detectors, structured_blocks_map)
 }
 
 fn main() {
@@ -545,13 +543,11 @@ struct AppState {
     // ---- multiplexer core ----
     /// All open terminal instances, keyed by pane ID.
     panes: HashMap<PaneId, Terminal>,
-    /// PTY byte channels for every open pane.
-    pty_channels: HashMap<PaneId, mpsc::Receiver<Vec<u8>>>,
     /// Decoded Kitty image channels for every open pane.
     ///
     /// Receivers are drained via `try_recv` in `about_to_wait` before each
     /// frame, delivering decoded `PendingImage` values produced on the tokio
-    /// blocking thread pool by `terminal::process_pty_output`.
+    /// blocking thread pool by the pre-filter reader thread.
     image_channels: HashMap<PaneId, mpsc::Receiver<PendingImage>>,
     /// Tab manager: tab labels, per-tab focused pane, per-tab zoom state.
     tab_manager: TabManager,
@@ -808,17 +804,28 @@ impl AppState {
         }
     }
 
-    /// Given a rect, compute the grid size (rows × cols) for a pane.
-    fn grid_size_for_rect(&self, rect: PixelRect) -> GridSize {
+    /// Returns cell pixel dimensions `(cell_width, cell_height)` from the renderer.
+    ///
+    /// Used when creating a new `Terminal` which requires pixel-level cell dimensions
+    /// to configure the PTY TIOCSWINSZ correctly.
+    fn cell_dims(&self) -> (u16, u16) {
+        let sf = self.window.scale_factor() as f32;
+        let cell_w = (self.renderer.text.cell_size.width * sf).max(1.0) as u16;
+        let cell_h = (self.renderer.text.cell_size.height * sf).max(1.0) as u16;
+        (cell_w, cell_h)
+    }
+
+    /// Given a rect, compute the grid size (rows, cols) for a pane.
+    fn grid_size_for_rect(&self, rect: PixelRect) -> (usize, usize) {
         let sf = self.window.scale_factor() as f32;
         let cell_w = self.renderer.text.cell_size.width * sf;
         let cell_h = self.renderer.text.cell_size.height * sf;
         if cell_w <= 0.0 || cell_h <= 0.0 || rect.width <= 0.0 || rect.height <= 0.0 {
-            return GridSize::new(1, 1);
+            return (1, 1);
         }
         let cols = (rect.width / cell_w).floor() as usize;
         let rows = (rect.height / cell_h).floor() as usize;
-        GridSize::new(rows.max(1), cols.max(1))
+        (rows.max(1), cols.max(1))
     }
 
     // -----------------------------------------------------------------------
@@ -826,8 +833,8 @@ impl AppState {
     // -----------------------------------------------------------------------
 
     /// Spawn a new Terminal + PTY, insert into the pane and channel maps, and
-    /// return its `PaneId`.  The grid is sized to `size`.
-    fn spawn_pane(&mut self, size: GridSize) -> PaneId {
+    /// return its `PaneId`.  `size` is `(rows, cols)`.
+    fn spawn_pane(&mut self, size: (usize, usize)) -> PaneId {
         self.spawn_pane_with_cwd(size, None)
     }
 
@@ -835,13 +842,14 @@ impl AppState {
     ///
     /// Used by workspace restore to recreate panes in their saved directories.
     /// Pass `cwd = None` to inherit the process's current working directory.
-    fn spawn_pane_with_cwd(&mut self, size: GridSize, cwd: Option<&std::path::Path>) -> PaneId {
+    /// `size` is `(rows, cols)`.
+    fn spawn_pane_with_cwd(&mut self, size: (usize, usize), cwd: Option<&std::path::Path>) -> PaneId {
         let id = PaneId::next();
-        match Terminal::new(size, self.config.shell.clone(), cwd) {
-            Ok((mut terminal, pty_rx, image_rx)) => {
-                terminal.grid_mut().max_scrollback = self.config.scrollback_lines;
+        let (rows, cols) = size;
+        let (cell_w, cell_h) = self.cell_dims();
+        match Terminal::new(cols, rows, cell_w, cell_h, self.config.shell.clone(), cwd) {
+            Ok((terminal, image_rx)) => {
                 self.panes.insert(id, terminal);
-                self.pty_channels.insert(id, pty_rx);
                 self.image_channels.insert(id, image_rx);
                 self.auto_detectors.insert(id, AutoDetector::new());
                 self.structured_blocks.insert(id, Vec::new());
@@ -880,11 +888,10 @@ impl AppState {
             self.window.scale_factor(),
         );
 
-        // Shut down all current PTY channels and remove pane state.
+        // Shut down all current panes and remove pane state.
         let all_ids: Vec<PaneId> = self.panes.keys().copied().collect();
         for id in &all_ids {
             self.panes.remove(id);
-            self.pty_channels.remove(id);
             self.image_channels.remove(id);
             self.auto_detectors.remove(id);
             self.structured_blocks.remove(id);
@@ -916,12 +923,13 @@ impl AppState {
         let (pane_tree, leaf_metadata) = ws.layout.to_pane_tree();
         let leaf_ids = pane_tree.all_pane_ids();
 
+        let (init_rows, init_cols) = initial_size;
+        let (cell_w, cell_h) = self.cell_dims();
         for (id, meta) in leaf_ids.iter().zip(leaf_metadata.iter()) {
             let cwd: Option<std::path::PathBuf> =
                 meta.directory.as_deref().map(std::path::PathBuf::from);
-            match Terminal::new(initial_size, self.config.shell.clone(), cwd.as_deref()) {
-                Ok((mut terminal, pty_rx, image_rx)) => {
-                    terminal.grid_mut().max_scrollback = self.config.scrollback_lines;
+            match Terminal::new(init_cols, init_rows, cell_w, cell_h, self.config.shell.clone(), cwd.as_deref()) {
+                Ok((terminal, image_rx)) => {
                     // Inject workspace-level environment variables.
                     for (key, val) in &ws.environment {
                         terminal.write_input(format!("export {key}={val}\n").as_bytes());
@@ -937,7 +945,6 @@ impl AppState {
                         terminal.write_input(format!("{cmd}\n").as_bytes());
                     }
                     self.panes.insert(*id, terminal);
-                    self.pty_channels.insert(*id, pty_rx);
                     self.image_channels.insert(*id, image_rx);
                 }
                 Err(e) => {
@@ -1047,7 +1054,7 @@ impl ApplicationHandler for App {
         // of `_last_session.toml`), restore panes from the workspace layout.
         // Otherwise spawn a single default pane.
         // ---------------------------------------------------------------
-        let (panes, pty_channels, image_channels, tab_manager, tab_layouts, auto_detectors, structured_blocks_map) =
+        let (panes, image_channels, tab_manager, tab_layouts, auto_detectors, structured_blocks_map) =
             if let Some(ref ws) = self.initial_workspace {
                 let ws_layout = &ws.layout;
 
@@ -1065,7 +1072,6 @@ impl ApplicationHandler for App {
                     let (pane_tree, leaf_metadata) = ws_layout.to_pane_tree();
 
                     let mut panes = HashMap::new();
-                    let mut pty_channels = HashMap::new();
                     let mut image_channels = HashMap::new();
                     let mut auto_detectors = HashMap::new();
                     let mut structured_blocks_map: HashMap<PaneId, Vec<StructuredBlock>> =
@@ -1079,13 +1085,16 @@ impl ApplicationHandler for App {
                     for (id, meta) in leaf_ids.iter().zip(leaf_metadata.iter()) {
                         let cwd: Option<std::path::PathBuf> =
                             meta.directory.as_deref().map(std::path::PathBuf::from);
+                        let (init_rows, init_cols) = initial_size;
                         match Terminal::new(
-                            initial_size,
+                            init_cols,
+                            init_rows,
+                            8,
+                            16,
                             cfg.shell.clone(),
                             cwd.as_deref(),
                         ) {
-                            Ok((mut terminal, pty_rx, image_rx)) => {
-                                terminal.grid_mut().max_scrollback = cfg.scrollback_lines;
+                            Ok((terminal, image_rx)) => {
                                 // Inject workspace-level environment variables.
                                 for (key, val) in &ws.environment {
                                     terminal.write_input(
@@ -1105,7 +1114,6 @@ impl ApplicationHandler for App {
                                     terminal.write_input(format!("{cmd}\n").as_bytes());
                                 }
                                 panes.insert(*id, terminal);
-                                pty_channels.insert(*id, pty_rx);
                                 image_channels.insert(*id, image_rx);
                             }
                             Err(e) => {
@@ -1130,7 +1138,7 @@ impl ApplicationHandler for App {
                         leaf_count
                     );
 
-                    (panes, pty_channels, image_channels, tab_manager, tab_layouts, auto_detectors, structured_blocks_map)
+                    (panes, image_channels, tab_manager, tab_layouts, auto_detectors, structured_blocks_map)
                 }
             } else {
                 spawn_default_pane(&cfg, initial_size)
@@ -1207,7 +1215,6 @@ impl ApplicationHandler for App {
             window,
             renderer,
             panes,
-            pty_channels,
             image_channels,
             tab_manager,
             tab_layouts,
@@ -1317,9 +1324,9 @@ impl ApplicationHandler for App {
                                 new_cfg.scrollback_lines,
                             );
                             // Update all live panes.
-                            for terminal in state.panes.values_mut() {
-                                terminal.grid_mut().max_scrollback = new_cfg.scrollback_lines;
-                            }
+                            // NOTE: alacritty Term scrollback is configured at construction time;
+                            // dynamic update not yet supported — tracked for Plan 3.1.
+                            let _ = new_cfg.scrollback_lines; // acknowledged
                         }
 
                         if new_cfg.color_scheme != state.config.color_scheme
@@ -1415,7 +1422,7 @@ impl ApplicationHandler for App {
                 let pane_rows: Vec<(PaneId, Vec<String>)> = state
                     .panes
                     .iter()
-                    .map(|(&id, t)| (id, t.grid().all_text_rows()))
+                    .map(|(&id, t)| (id, t.all_text_rows()))
                     .collect();
                 overlay.execute_search(&pane_rows);
             }
@@ -1423,271 +1430,230 @@ impl ApplicationHandler for App {
         }
 
         // ------------------------------------------------------------------
-        // Poll ALL PTY channels (all tabs, all panes).
+        // Poll all panes for new PTY data via wakeup signals.
+        //
+        // The alacritty reader thread processes PTY bytes and sends `Wakeup`
+        // events via `ArcTermEventListener::send_event`. We drain those here
+        // and process all structured content that arrived since the last call.
         // ------------------------------------------------------------------
         let mut got_data = false;
         let mut closed_panes: Vec<PaneId> = Vec::new();
 
         // Collect pane IDs to avoid borrow checker conflicts.
-        let pane_ids: Vec<PaneId> = state.pty_channels.keys().copied().collect();
+        let pane_ids: Vec<PaneId> = state.panes.keys().copied().collect();
 
         for id in pane_ids {
-            'drain: loop {
-                let Some(rx) = state.pty_channels.get_mut(&id) else {
-                    break 'drain;
-                };
-                match rx.try_recv() {
-                    Ok(bytes) => {
-                        #[cfg(feature = "latency-trace")]
-                        let t0 = TraceInstant::now();
+            #[cfg(feature = "latency-trace")]
+            let t0 = TraceInstant::now();
 
-                        if let Some(terminal) = state.panes.get_mut(&id) {
-                            terminal.process_pty_output(&bytes);
+            let had_wakeup = if let Some(terminal) = state.panes.get_mut(&id) {
+                terminal.has_wakeup()
+            } else {
+                false
+            };
 
-                            // Drain completed OSC 7770 blocks and render them.
-                            let completed = terminal.take_completed_blocks();
-                            if !completed.is_empty() {
-                                let cursor_row = terminal.grid().cursor.row;
-                                let pane_blocks = state
-                                    .structured_blocks
-                                    .entry(id)
-                                    .or_default();
-                                for acc in completed {
-                                    let attrs: Vec<(String, String)> =
-                                        acc.attrs.into_iter().collect();
-                                    let rendered = state.highlight_engine.render_block(
-                                        acc.content_type.clone(),
-                                        &acc.buffer,
-                                        &attrs,
-                                    );
-                                    let line_count = rendered.len();
-                                    pane_blocks.push(StructuredBlock {
-                                        block_type: acc.content_type,
-                                        start_row: cursor_row.saturating_sub(line_count),
-                                        line_count,
-                                        rendered_lines: rendered,
-                                        raw_content: acc.buffer,
-                                    });
-                                }
-                            }
+            // Check if the terminal has exited.
+            let has_exited = state.panes.get(&id).is_some_and(|t| t.has_exited());
+            if has_exited {
+                log::info!("PTY child exited for pane {:?}", id);
+                closed_panes.push(id);
+            }
 
-                            // Drain Kitty inline images decoded asynchronously
-                            // by process_pty_output via spawn_blocking.
-                            // Images arrive with one-frame latency (acceptable).
-                            if let Some(img_rx) = state.image_channels.get_mut(&id) {
-                                while let Ok(img) = img_rx.try_recv() {
-                                    state.renderer.upload_image(
-                                        img.command.image_id,
-                                        &img.rgba,
-                                        img.width,
-                                        img.height,
-                                    );
-                                    // Place the image at the current cursor row.
-                                    // Full Kitty placement semantics (column, z-index, scale)
-                                    // are a Phase 5 enhancement; for now we place images at
-                                    // cursor-row-y, pane-left-x, at their natural pixel size.
-                                    let sf = state.window.scale_factor() as f32;
-                                    let cell_h = state.renderer.text.cell_size.height * sf;
-                                    let cursor_row_y =
-                                        terminal.grid().cursor().row as f32 * cell_h;
-                                    let image_w = img.width as f32;
-                                    let image_h = img.height as f32;
-                                    state.renderer.image_placements.push((
-                                        img.command.image_id,
-                                        [0.0, cursor_row_y, image_w, image_h],
-                                    ));
-                                }
-                            }
+            if had_wakeup || has_exited {
+                if let Some(terminal) = state.panes.get_mut(&id) {
+                    // Drain completed OSC 7770 blocks.
+                    let completed = terminal.take_completed_blocks();
+                    if !completed.is_empty() {
+                        let cursor_row = terminal.cursor_row();
+                        let pane_blocks = state.structured_blocks.entry(id).or_default();
+                        for acc in completed {
+                            let attrs: Vec<(String, String)> = acc.attrs.into_iter().collect();
+                            let rendered = state.highlight_engine.render_block(
+                                acc.content_type.clone(),
+                                &acc.buffer,
+                                &attrs,
+                            );
+                            let line_count = rendered.len();
+                            pane_blocks.push(StructuredBlock {
+                                block_type: acc.content_type,
+                                start_row: cursor_row.saturating_sub(line_count),
+                                line_count,
+                                rendered_lines: rendered,
+                                raw_content: acc.buffer,
+                            });
+                        }
+                    }
 
-                            // Auto-detect structured content in newly-written rows.
-                            let cursor_row = terminal.grid().cursor.row;
-                            let grid_cells = terminal.grid().cells.clone();
-                            if let Some(detector) = state.auto_detectors.get_mut(&id) {
-                                let detections = detector.scan_rows(&grid_cells, cursor_row);
-                                if !detections.is_empty() {
-                                    let pane_blocks = state
-                                        .structured_blocks
-                                        .entry(id)
-                                        .or_default();
-                                    for det in detections {
-                                        let attrs: Vec<(String, String)> = det.attrs.clone();
-                                        let rendered = state.highlight_engine.render_block(
-                                            det.content_type.clone(),
-                                            &det.content,
-                                            &attrs,
-                                        );
-                                        let line_count = rendered.len();
-                                        pane_blocks.push(StructuredBlock {
-                                            block_type: det.content_type,
-                                            start_row: det.start_row,
-                                            line_count,
-                                            rendered_lines: rendered,
-                                            raw_content: det.content,
-                                        });
-                                    }
-                                }
+                    // Drain Kitty inline images decoded asynchronously.
+                    if let Some(img_rx) = state.image_channels.get_mut(&id) {
+                        while let Ok(img) = img_rx.try_recv() {
+                            state.renderer.upload_image(
+                                img.command.image_id,
+                                &img.rgba,
+                                img.width,
+                                img.height,
+                            );
+                            let sf = state.window.scale_factor() as f32;
+                            let cell_h = state.renderer.text.cell_size.height * sf;
+                            let cursor_row_y = terminal.cursor_row() as f32 * cell_h;
+                            let image_w = img.width as f32;
+                            let image_h = img.height as f32;
+                            state.renderer.image_placements.push((
+                                img.command.image_id,
+                                [0.0, cursor_row_y, image_w, image_h],
+                            ));
+                        }
+                    }
+
+                    // Auto-detect structured content in newly-written rows.
+                    // Lock Term briefly to extract a snapshot for detection, then unlock.
+                    let cursor_row = terminal.cursor_row();
+                    let detect_snapshot = {
+                        let term = terminal.lock_term();
+                        arcterm_render::snapshot_from_term(&*term)
+                    };
+                    if let Some(detector) = state.auto_detectors.get_mut(&id) {
+                        let detections = detector.scan_rows(&detect_snapshot, cursor_row);
+                        if !detections.is_empty() {
+                            let pane_blocks = state.structured_blocks.entry(id).or_default();
+                            for det in detections {
+                                let attrs: Vec<(String, String)> = det.attrs.clone();
+                                let rendered = state.highlight_engine.render_block(
+                                    det.content_type.clone(),
+                                    &det.content,
+                                    &attrs,
+                                );
+                                let line_count = rendered.len();
+                                pane_blocks.push(StructuredBlock {
+                                    block_type: det.content_type,
+                                    start_row: det.start_row,
+                                    line_count,
+                                    rendered_lines: rendered,
+                                    raw_content: det.content,
+                                });
                             }
                         }
+                    }
+                }
 
-                        // Capture output lines into the ring buffer (best-effort, line-split).
+                // Drain OSC 133 exit codes into PaneContext.
+                {
+                    let (exit_codes, cwd) = if let Some(terminal) = state.panes.get_mut(&id) {
+                        (terminal.take_exit_codes(), terminal.cwd())
+                    } else {
+                        (Vec::new(), None)
+                    };
+                    if !exit_codes.is_empty() {
+                        let last_code = *exit_codes.last().unwrap();
                         {
                             let ctx = state.pane_contexts.entry(id).or_insert_with(|| {
                                 context::PaneContext::new(200)
                             });
-                            for line in bytes.split(|&b| b == b'\n') {
-                                if !line.is_empty() {
-                                    // Strip trailing CR and non-printable VT sequences
-                                    // from the raw line before storing it.
-                                    let clean: String = line
-                                        .iter()
-                                        .filter(|&&b| (0x20..0x80).contains(&b))
-                                        .map(|&b| b as char)
-                                        .collect();
-                                    if !clean.is_empty() {
-                                        ctx.push_output_line(clean);
-                                    }
-                                }
+                            ctx.set_exit_code(last_code);
+                        }
+                        if last_code != 0 && state.last_ai_pane.is_some() {
+                            let maybe_err = state
+                                .pane_contexts
+                                .get(&id)
+                                .and_then(|ctx| ctx.error_context_for(id, cwd));
+                            if let Some(err_ctx) = maybe_err {
+                                state.pending_errors.push(err_ctx);
                             }
                         }
-
-                        // Drain OSC 133 exit codes into PaneContext.
-                        // When a non-zero exit code is received and an AI pane exists,
-                        // store an ErrorContext in pending_errors for injection on Leader+a.
-                        {
-                            let (exit_codes, cwd) =
-                                if let Some(terminal) = state.panes.get_mut(&id) {
-                                    (terminal.take_exit_codes(), terminal.cwd())
-                                } else {
-                                    (Vec::new(), None)
-                                };
-                            if !exit_codes.is_empty() {
-                                let last_code = *exit_codes.last().unwrap();
-                                {
-                                    let ctx = state.pane_contexts.entry(id).or_insert_with(|| {
-                                        context::PaneContext::new(200)
-                                    });
-                                    ctx.set_exit_code(last_code);
-                                }
-                                // Queue error context for AI pane injection (privacy-safe:
-                                // only injected when user explicitly navigates via Leader+a).
-                                if last_code != 0 && state.last_ai_pane.is_some() {
-                                    let maybe_err = state
-                                        .pane_contexts
-                                        .get(&id)
-                                        .and_then(|ctx| ctx.error_context_for(id, cwd));
-                                    if let Some(err_ctx) = maybe_err {
-                                        state.pending_errors.push(err_ctx);
-                                    }
-                                }
-                            }
-                        }
-
-                        // Drain MCP tool-list queries and write responses back to PTY.
-                        {
-                            let tool_queries = state.panes.get_mut(&id)
-                                .map(|t| t.take_tool_queries())
-                                .unwrap_or_default();
-
-                            if !tool_queries.is_empty()
-                                && let Some(ref mgr) = state.plugin_manager
-                            {
-                                let tools = mgr.list_tools();
-                                // Serialize tool schemas as JSON manually
-                                // (ToolSchema is WIT-generated without Serialize).
-                                let entries: Vec<String> = tools.iter().map(|t| {
-                                    format!(
-                                        "{{\"name\":{},\"description\":{},\"inputSchema\":{}}}",
-                                        serde_json::Value::String(t.name.clone()),
-                                        serde_json::Value::String(t.description.clone()),
-                                        t.input_schema.as_str(),
-                                    )
-                                }).collect();
-                                let json = format!("[{}]", entries.join(","));
-                                // Base64-encode the JSON for safe OSC transport.
-                                use base64::Engine as _;
-                                let b64 = base64::engine::general_purpose::STANDARD.encode(json.as_bytes());
-                                // Write the OSC 7770 tools/response sequence.
-                                let response = format!("\x1b]7770;tools/response;{}\x07", b64);
-                                if let Some(terminal) = state.panes.get_mut(&id) {
-                                    terminal.write_input(response.as_bytes());
-                                }
-                            }
-                        }
-
-                        // Drain MCP tool calls and write results back to PTY.
-                        {
-                            let tool_calls = state.panes.get_mut(&id)
-                                .map(|t| t.take_tool_calls())
-                                .unwrap_or_default();
-
-                            for (name, args_json) in tool_calls {
-                                let result_json = if let Some(ref mgr) = state.plugin_manager {
-                                    mgr.call_tool(&name, &args_json)
-                                        .unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
-                                } else {
-                                    "{\"error\":\"plugin manager unavailable\"}".to_string()
-                                };
-                                use base64::Engine as _;
-                                let b64 = base64::engine::general_purpose::STANDARD.encode(result_json.as_bytes());
-                                let response = format!("\x1b]7770;tools/result;result={}\x07", b64);
-                                if let Some(terminal) = state.panes.get_mut(&id) {
-                                    terminal.write_input(response.as_bytes());
-                                }
-                            }
-                        }
-
-                        // Drain cross-pane context queries and write responses back to PTY.
-                        {
-                            let queries = state.panes.get_mut(&id)
-                                .map(|t| t.take_context_queries())
-                                .unwrap_or_default();
-
-                            if !queries.is_empty() {
-                                let siblings = context::collect_sibling_contexts(
-                                    &state.pane_contexts,
-                                    &state.panes,
-                                    id,
-                                );
-                                let response_bytes =
-                                    context::format_context_osc7770(&siblings);
-                                if let Some(terminal) = state.panes.get_mut(&id) {
-                                    terminal.write_input(&response_bytes);
-                                }
-                            }
-                        }
-
-                        // Update last_ai_pane when an AI-detected pane receives data.
-                        let is_ai_pane = state
-                            .ai_states
-                            .get(&id)
-                            .map(|s| s.kind.is_some())
-                            .unwrap_or(false);
-                        if is_ai_pane {
-                            state.last_ai_pane = Some(id);
-                        }
-
-                        got_data = true;
-
-                        #[cfg(feature = "latency-trace")]
-                        log::debug!(
-                            "[latency] PTY output processed: {} bytes in {:?}",
-                            bytes.len(),
-                            t0.elapsed()
-                        );
-                    }
-                    Err(mpsc::error::TryRecvError::Empty) => break 'drain,
-                    Err(mpsc::error::TryRecvError::Disconnected) => {
-                        log::info!("PTY channel closed for pane {:?}", id);
-                        closed_panes.push(id);
-                        break 'drain;
                     }
                 }
+
+                // Drain MCP tool-list queries and write responses back to PTY.
+                {
+                    let tool_queries = state.panes.get_mut(&id)
+                        .map(|t| t.take_tool_queries())
+                        .unwrap_or_default();
+
+                    if !tool_queries.is_empty()
+                        && let Some(ref mgr) = state.plugin_manager
+                    {
+                        let tools = mgr.list_tools();
+                        let entries: Vec<String> = tools.iter().map(|t| {
+                            format!(
+                                "{{\"name\":{},\"description\":{},\"inputSchema\":{}}}",
+                                serde_json::Value::String(t.name.clone()),
+                                serde_json::Value::String(t.description.clone()),
+                                t.input_schema.as_str(),
+                            )
+                        }).collect();
+                        let json = format!("[{}]", entries.join(","));
+                        use base64::Engine as _;
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(json.as_bytes());
+                        let response = format!("\x1b]7770;tools/response;{}\x07", b64);
+                        if let Some(terminal) = state.panes.get_mut(&id) {
+                            terminal.write_input(response.as_bytes());
+                        }
+                    }
+                }
+
+                // Drain MCP tool calls and write results back to PTY.
+                {
+                    let tool_calls = state.panes.get_mut(&id)
+                        .map(|t| t.take_tool_calls())
+                        .unwrap_or_default();
+
+                    for (name, args_json) in tool_calls {
+                        let result_json = if let Some(ref mgr) = state.plugin_manager {
+                            mgr.call_tool(&name, &args_json)
+                                .unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+                        } else {
+                            "{\"error\":\"plugin manager unavailable\"}".to_string()
+                        };
+                        use base64::Engine as _;
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(result_json.as_bytes());
+                        let response = format!("\x1b]7770;tools/result;result={}\x07", b64);
+                        if let Some(terminal) = state.panes.get_mut(&id) {
+                            terminal.write_input(response.as_bytes());
+                        }
+                    }
+                }
+
+                // Drain cross-pane context queries.
+                {
+                    let queries = state.panes.get_mut(&id)
+                        .map(|t| t.take_context_queries())
+                        .unwrap_or_default();
+
+                    if !queries.is_empty() {
+                        let siblings = context::collect_sibling_contexts(
+                            &state.pane_contexts,
+                            &state.panes,
+                            id,
+                        );
+                        let response_bytes = context::format_context_osc7770(&siblings);
+                        if let Some(terminal) = state.panes.get_mut(&id) {
+                            terminal.write_input(&response_bytes);
+                        }
+                    }
+                }
+
+                // Update last_ai_pane when an AI-detected pane receives data.
+                let is_ai_pane = state
+                    .ai_states
+                    .get(&id)
+                    .map(|s| s.kind.is_some())
+                    .unwrap_or(false);
+                if is_ai_pane {
+                    state.last_ai_pane = Some(id);
+                }
+
+                if had_wakeup {
+                    got_data = true;
+                }
+
+                #[cfg(feature = "latency-trace")]
+                log::debug!("[latency] PTY wakeup processed in {:?}", t0.elapsed());
             }
         }
 
-        // Remove closed pane channels and associated structured-output state.
+        // Remove closed panes and associated state.
         for id in closed_panes {
-            state.pty_channels.remove(&id);
+            state.panes.remove(&id);
             state.image_channels.remove(&id);
             state.auto_detectors.remove(&id);
             state.structured_blocks.remove(&id);
@@ -1705,9 +1671,9 @@ impl ApplicationHandler for App {
             }
         }
 
-        // When ALL channels are gone, the session has ended.
-        if state.pty_channels.is_empty() {
-            log::info!("All PTY channels closed — shell has exited");
+        // When ALL panes are gone, the session has ended.
+        if state.panes.is_empty() {
+            log::info!("All panes closed — shell has exited");
             state.shell_exited = true;
             state.window.request_redraw();
         }
@@ -1715,12 +1681,11 @@ impl ApplicationHandler for App {
         if got_data {
             // Clear selection and scroll-to-live on the focused pane only.
             let focused = state.focused_pane();
-            if let Some(terminal) = state.panes.get_mut(&focused) {
-                let grid = terminal.grid_mut();
-                if grid.scroll_offset() > 0 {
-                    state.selection.clear();
-                    grid.set_scroll_offset(0);
-                }
+            if let Some(terminal) = state.panes.get_mut(&focused)
+                && terminal.scroll_offset() > 0
+            {
+                state.selection.clear();
+                terminal.set_scroll_offset(0);
             }
             state.window.request_redraw();
             state.idle_cycles = 0;
@@ -1734,22 +1699,14 @@ impl ApplicationHandler for App {
             }
         }
 
-        // Drain pending DSR/DA replies for ALL panes and write them back.
-        let pane_ids: Vec<PaneId> = state.panes.keys().copied().collect();
-        for id in pane_ids {
-            if let Some(terminal) = state.panes.get_mut(&id) {
-                let replies = terminal.take_pending_replies();
-                for reply in replies {
-                    terminal.write_input(&reply);
-                }
-            }
-        }
+        // DSR/DA replies are handled by ArcTermEventListener::send_event(PtyWrite).
+        // No need to drain take_pending_replies() here.
 
         // Wire window title from focused pane.
         {
             let focused = state.focused_pane();
             if let Some(terminal) = state.panes.get(&focused) {
-                let title = terminal.grid().title().map(|t| t.to_string());
+                let title = terminal.title();
                 if let Some(t) = title
                     && !t.is_empty()
                 {
@@ -1792,10 +1749,11 @@ impl ApplicationHandler for App {
 
                 // Resize every pane to its new rect.
                 let rects = state.compute_pane_rects();
+                let (cell_w, cell_h) = state.cell_dims();
                 for (id, rect) in &rects {
-                    let new_size = state.grid_size_for_rect(*rect);
+                    let (new_rows, new_cols) = state.grid_size_for_rect(*rect);
                     if let Some(terminal) = state.panes.get_mut(id) {
-                        terminal.resize(new_size);
+                        terminal.resize(new_cols, new_rows, cell_w, cell_h);
                     }
                 }
                 state.window.request_redraw();
@@ -2004,11 +1962,10 @@ impl ApplicationHandler for App {
                 if lines != 0 {
                     let focused = state.focused_pane();
                     if let Some(terminal) = state.panes.get_mut(&focused) {
-                        let grid = terminal.grid_mut();
-                        let current = grid.scroll_offset() as i32;
+                        let current = terminal.scroll_offset() as i32;
                         let new_offset = (current - lines * SCROLL_LINES_PER_TICK as i32)
                             .max(0) as usize;
-                        grid.set_scroll_offset(new_offset);
+                        terminal.set_scroll_offset(new_offset);
                         state.window.request_redraw();
                     }
                 }
@@ -2041,13 +1998,12 @@ impl ApplicationHandler for App {
                     if let (Some(&focus_rect), Some(terminal)) =
                         (rects.get(&focused), state.panes.get(&focused))
                     {
-                        let grid = terminal.grid();
                         let cell_w = state.renderer.text.cell_size.width;
                         let cell_h = state.renderer.text.cell_size.height;
                         state.selection_quads = generate_selection_quads(
                             &state.selection,
-                            grid.size.rows,
-                            grid.size.cols,
+                            terminal.rows(),
+                            terminal.cols(),
                             cell_w,
                             cell_h,
                             sf,
@@ -2117,38 +2073,30 @@ impl ApplicationHandler for App {
                     // Show exit banner on the focused pane (or first available).
                     let target_id = focused;
                     if let Some(terminal) = state.panes.get(&target_id) {
-                        let mut display = terminal.grid().clone();
-                        let last_row = display.size.rows.saturating_sub(1);
+                        let mut display = {
+                            let term = terminal.lock_term();
+                            arcterm_render::snapshot_from_term(&*term)
+                        };
+                        let last_row = display.rows.saturating_sub(1);
                         let msg = "[ Shell exited — press any key to close ]";
-                        let banner_attrs = CellAttrs {
-                            fg: Color::Indexed(11),
-                            bg: Color::Indexed(0),
-                            bold: true,
-                            ..CellAttrs::default()
-                        };
-                        if let Some(row) = display.cells.get_mut(last_row) {
-                            for cell in row.iter_mut() {
-                                *cell = Cell {
-                                    c: ' ',
-                                    attrs: banner_attrs,
-                                    dirty: true,
-                                };
-                            }
-                            for (col, ch) in msg.chars().enumerate() {
-                                if col >= display.size.cols {
-                                    break;
-                                }
-                                row[col] = Cell {
-                                    c: ch,
-                                    attrs: banner_attrs,
-                                    dirty: true,
-                                };
-                            }
+                        // Write the banner into the last row of the snapshot.
+                        let cols = display.cols;
+                        let row_start = last_row * cols;
+                        for col in 0..cols {
+                            let cell = &mut display.cells[row_start + col];
+                            cell.c = ' ';
+                            cell.fg = arcterm_render::SnapshotColor::Indexed(11);
+                            cell.bg = arcterm_render::SnapshotColor::Indexed(0);
+                            cell.bold = true;
                         }
-                        display.cursor = CursorPos {
-                            row: last_row.saturating_sub(1),
-                            col: 0,
-                        };
+                        for (col, ch) in msg.chars().enumerate() {
+                            if col >= cols {
+                                break;
+                            }
+                            display.cells[row_start + col].c = ch;
+                        }
+                        display.cursor_row = last_row.saturating_sub(1);
+                        display.cursor_col = 0;
                         // Render immediately as a single-pane frame.
                         state.renderer.render_frame(&display, scale);
                         return;
@@ -2156,21 +2104,25 @@ impl ApplicationHandler for App {
                 }
 
                 // Normal multi-pane render.
-                // We need to collect grid refs while panes is borrowed.
-                // Use a Vec of (rect, grid_clone, blocks_clone) to avoid lifetime issues.
-                let pane_frames: Vec<(PixelRect, arcterm_core::Grid, Vec<StructuredBlock>)> = rects
+                // Lock each terminal briefly to extract a snapshot, then release the lock
+                // before GPU rendering so the reader thread is not blocked.
+                let pane_frames: Vec<(PixelRect, arcterm_render::RenderSnapshot, Vec<StructuredBlock>)> = rects
                     .iter()
                     .filter_map(|(id, rect)| {
                         if rect.width <= 0.0 || rect.height <= 0.0 {
                             return None;
                         }
                         state.panes.get(id).map(|t| {
+                            let snapshot = {
+                                let term = t.lock_term();
+                                arcterm_render::snapshot_from_term(&*term)
+                            };
                             let blocks = state
                                 .structured_blocks
                                 .get(id)
                                 .cloned()
                                 .unwrap_or_default();
-                            (*rect, t.grid().clone(), blocks)
+                            (*rect, snapshot, blocks)
                         })
                     })
                     .collect();
@@ -2213,9 +2165,9 @@ impl ApplicationHandler for App {
                     }
                 }
 
-                for (rect, grid, blocks) in &pane_frames {
+                for (rect, snapshot, blocks) in &pane_frames {
                     pane_infos.push(PaneRenderInfo {
-                        grid,
+                        snapshot,
                         rect: [rect.x, rect.y, rect.width, rect.height],
                         structured_blocks: blocks,
                     });
@@ -2364,10 +2316,9 @@ impl ApplicationHandler for App {
                     // Match highlight quads on each pane's grid.
                     for (&pane_id, rect) in &rects {
                         if let Some(terminal) = state.panes.get(&pane_id) {
-                            let grid = terminal.grid();
-                            let total_rows = grid.all_text_rows().len();
-                            let visible_rows = grid.size.rows;
-                            let scroll_offset = grid.scroll_offset();
+                            let total_rows = terminal.all_text_rows().len();
+                            let visible_rows = terminal.rows();
+                            let scroll_offset = terminal.scroll_offset();
                             let quads = so.match_quads_for_pane(
                                 pane_id,
                                 [rect.x, rect.y, rect.width, rect.height],
@@ -2448,7 +2399,11 @@ impl ApplicationHandler for App {
                                 "c" | "C" => {
                                     let focused = state.focused_pane();
                                     if let Some(terminal) = state.panes.get(&focused) {
-                                        let text = state.selection.extract_text(terminal.grid());
+                                        let snapshot = {
+                                            let term = terminal.lock_term();
+                                            arcterm_render::snapshot_from_term(&*term)
+                                        };
+                                        let text = state.selection.extract_text(&snapshot);
                                         if !text.is_empty()
                                             && let Some(cb) = &mut state.clipboard
                                             && let Err(e) = cb.copy(&text)
@@ -2464,7 +2419,7 @@ impl ApplicationHandler for App {
                                             Ok(text) => {
                                                 let focused = state.focused_pane();
                                                 if let Some(terminal) = state.panes.get_mut(&focused) {
-                                                    let bracketed = terminal.grid_state().modes.bracketed_paste;
+                                                    let bracketed = terminal.bracketed_paste();
                                                     if bracketed {
                                                         let mut payload = b"\x1b[200~".to_vec();
                                                         payload.extend_from_slice(text.as_bytes());
@@ -2656,7 +2611,7 @@ impl ApplicationHandler for App {
                                 let pane_rows: Vec<(PaneId, Vec<String>)> = state
                                     .panes
                                     .iter()
-                                    .map(|(&id, t)| (id, t.grid().all_text_rows()))
+                                    .map(|(&id, t)| (id, t.all_text_rows()))
                                     .collect();
                                 overlay.execute_search(&pane_rows);
                                 state.search_overlay = Some(overlay);
@@ -2673,9 +2628,9 @@ impl ApplicationHandler for App {
                                     if m.pane_id == focused
                                         && let Some(terminal) = state.panes.get_mut(&focused)
                                     {
-                                        let total = terminal.grid().all_text_rows().len();
-                                        let visible = terminal.grid().size.rows;
-                                        terminal.grid_mut().set_scroll_offset(
+                                        let total = terminal.all_text_rows().len();
+                                        let visible = terminal.rows();
+                                        terminal.set_scroll_offset(
                                             search::SearchOverlayState::scroll_offset_for_match(
                                                 m.row_index,
                                                 total,
@@ -2694,9 +2649,9 @@ impl ApplicationHandler for App {
                                     if m.pane_id == focused
                                         && let Some(terminal) = state.panes.get_mut(&focused)
                                     {
-                                        let total = terminal.grid().all_text_rows().len();
-                                        let visible = terminal.grid().size.rows;
-                                        terminal.grid_mut().set_scroll_offset(
+                                        let total = terminal.all_text_rows().len();
+                                        let visible = terminal.rows();
+                                        terminal.set_scroll_offset(
                                             search::SearchOverlayState::scroll_offset_for_match(
                                                 m.row_index,
                                                 total,
@@ -2720,7 +2675,7 @@ impl ApplicationHandler for App {
                     let app_cursor = state
                         .panes
                         .get(&focused_id)
-                        .map(|t| t.grid_state().modes.app_cursor_keys)
+                        .map(|t| t.app_cursor_keys())
                         .unwrap_or(false);
 
                     let action = state.keymap.handle_key(&event, self.modifiers, app_cursor);
@@ -2943,8 +2898,9 @@ impl ApplicationHandler for App {
 
                             // Also resize the original pane to its new half.
                             let orig_size = state.grid_size_for_rect(new_rect);
+                            let (cell_w, cell_h) = state.cell_dims();
                             if let Some(terminal) = state.panes.get_mut(&focused) {
-                                terminal.resize(orig_size);
+                                terminal.resize(orig_size.1, orig_size.0, cell_w, cell_h);
                             }
 
                             // Update the layout tree.
@@ -2971,7 +2927,7 @@ impl ApplicationHandler for App {
                                 for id in removed_ids {
                                     let lid = id;
                                     state.panes.remove(&lid);
-                                    state.pty_channels.remove(&lid);
+                                    // pty_channels removed (alacritty reader thread owns PTY)
                                     state.image_channels.remove(&lid);
                                     state.nvim_states.remove(&lid);
                                     state.ai_states.remove(&lid);
@@ -2997,7 +2953,7 @@ impl ApplicationHandler for App {
 
                                 // Remove the terminal and channel.
                                 state.panes.remove(&focused);
-                                state.pty_channels.remove(&focused);
+                                // pty_channels removed (alacritty reader thread owns PTY)
                                 state.image_channels.remove(&focused);
                                 state.nvim_states.remove(&focused);
                                 state.ai_states.remove(&focused);
@@ -3077,7 +3033,7 @@ impl ApplicationHandler for App {
                                 for id in removed_ids {
                                     let lid = id;
                                     state.panes.remove(&lid);
-                                    state.pty_channels.remove(&lid);
+                                    // pty_channels removed (alacritty reader thread owns PTY)
                                     state.image_channels.remove(&lid);
                                 }
                                 // Focus active tab's pane.
@@ -3255,8 +3211,9 @@ fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action
             let new_size = state.grid_size_for_rect(new_rect);
             let new_id = state.spawn_pane(new_size);
             let orig_size = state.grid_size_for_rect(new_rect);
+            let (cell_w, cell_h) = state.cell_dims();
             if let Some(terminal) = state.panes.get_mut(&focused_id) {
-                terminal.resize(orig_size);
+                terminal.resize(orig_size.1, orig_size.0, cell_w, cell_h);
             }
             let active = state.tab_manager.active;
             state.tab_layouts[active].split(focused_id, axis, new_id);
@@ -3274,7 +3231,7 @@ fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action
                 for id in removed_ids {
                     let lid = id;
                     state.panes.remove(&lid);
-                    state.pty_channels.remove(&lid);
+                    // pty_channels removed (alacritty reader thread owns PTY)
                     state.image_channels.remove(&lid);
                 }
                 if state.tab_manager.tab_count() == 0 {
@@ -3289,7 +3246,7 @@ fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action
                     state.tab_layouts[active] = new_root;
                 }
                 state.panes.remove(&focused_id);
-                state.pty_channels.remove(&focused_id);
+                // pty_channels removed (alacritty reader thread owns PTY)
                 state.image_channels.remove(&focused_id);
                 let remaining = state.tab_layouts[active].all_pane_ids();
                 if let Some(&new_focus) = remaining.first() {
@@ -3333,7 +3290,7 @@ fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action
                 for id in removed_ids {
                     let lid = id;
                     state.panes.remove(&lid);
-                    state.pty_channels.remove(&lid);
+                    // pty_channels removed (alacritty reader thread owns PTY)
                     state.image_channels.remove(&lid);
                 }
                 let new_focus = state.tab_manager.active_tab().focus;
