@@ -111,14 +111,17 @@
 //!
 //! Pass criteria: 4-pane workspace is fully interactive within 500ms of launch.
 
+mod ai_detect;
 mod colors;
 mod config;
+mod context;
 mod detect;
 mod input;
 mod keymap;
 mod layout;
 mod neovim;
 mod palette;
+mod proc;
 mod selection;
 mod tab;
 mod terminal;
