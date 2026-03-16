@@ -53,12 +53,8 @@ impl GpuState {
         let caps = surface.get_capabilities(&adapter);
         let surface_format = caps.formats.first().copied().unwrap_or(wgpu::TextureFormat::Bgra8UnormSrgb);
 
-        // Prefer Mailbox (non-blocking, low-latency) for 120+ FPS; fall back to Fifo.
-        let present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
-            wgpu::PresentMode::Mailbox
-        } else {
-            wgpu::PresentMode::Fifo
-        };
+        // VSync: cap frame rate to display refresh rate, preventing tearing and idle GPU spinning.
+        let present_mode = wgpu::PresentMode::Fifo;
         log::debug!("wgpu present mode: {:?}", present_mode);
 
         let surface_config = wgpu::SurfaceConfiguration {
