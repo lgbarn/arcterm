@@ -1,0 +1,12 @@
+name        = "hello-world"
+version     = "0.1.0"
+api_version = "0.1"
+description = "Minimal example plugin: renders a greeting and echoes key presses."
+wasm        = "hello_world_plugin.wasm"
+
+[permissions]
+# No filesystem or network access needed for a hello-world plugin.
+filesystem  = []
+network     = false
+panes       = "read"
+ai          = false

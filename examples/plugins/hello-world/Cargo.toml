@@ -1,0 +1,40 @@
+# Standalone crate — excluded from the main arcterm workspace.
+[workspace]
+
+[package]
+name = "hello-world-plugin"
+version = "0.1.0"
+edition = "2024"
+
+# Build as a cdylib (C dynamic library) so wasm-tools / cargo-component can
+# produce a WebAssembly Component from the cdylib output.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Guest-side WIT binding generator.  The version must match the WIT file's
+# package version in arcterm-plugin/wit/arcterm.wit.
+wit-bindgen = "0.36"
+
+# ---------------------------------------------------------------------------
+# Build instructions
+# ---------------------------------------------------------------------------
+# 1. Install the wasm32-wasip2 target (requires Rust 1.82+ / nightly):
+#       rustup target add wasm32-wasip2
+#
+# 2. Install cargo-component (optional — required for Component Model output):
+#       cargo install cargo-component
+#
+# 3a. Build with cargo-component (recommended, produces a WASM component):
+#       cargo component build --release
+#
+# 3b. Build with plain cargo + wasm32-wasip2 (requires post-processing with
+#     wasm-tools to wrap as a Component):
+#       cargo build --target wasm32-wasip2 --release
+#       wasm-tools component new \
+#           target/wasm32-wasip2/release/hello_world_plugin.wasm \
+#           -o hello_world_plugin.wasm
+#
+# The resulting hello_world_plugin.wasm should be < 1 MB and can be loaded
+# via:
+#       arcterm-app plugin dev /path/to/examples/plugins/hello-world
