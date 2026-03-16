@@ -911,6 +911,150 @@ mod osc7770_tools_tests {
 }
 
 // ---------------------------------------------------------------------------
+// Tests — Phase 9 Plan 1.2: VT regression tests (ISSUE-011, 012, 013)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod phase9_regression_tests {
+    use arcterm_core::{CursorPos, Grid, GridSize};
+
+    use crate::{GridState, Processor};
+
+    fn make_gs() -> GridState {
+        GridState::new(Grid::new(GridSize::new(24, 80)))
+    }
+
+    fn make_gs_with_size(rows: usize, cols: usize) -> GridState {
+        GridState::new(Grid::new(GridSize::new(rows, cols)))
+    }
+
+    // -------------------------------------------------------------------------
+    // ISSUE-011: esc_dispatch intermediates guard
+    // -------------------------------------------------------------------------
+
+    /// ESC ( 7 (SCS — Select Character Set) must NOT trigger save_cursor_position.
+    /// The byte 0x37 ('7') is also DECSC's final byte, but only when there are
+    /// no intermediates.  With the intermediate '(', it's SCS and must be ignored.
+    #[test]
+    fn esc_dispatch_with_intermediates_does_not_save_cursor() {
+        let mut gs = make_gs();
+        gs.grid.set_cursor(CursorPos { row: 3, col: 5 });
+        let mut proc = Processor::new();
+        // ESC ( 7 — SCS select character set — must NOT trigger save_cursor_position.
+        proc.advance(&mut gs, b"\x1b(7");
+        assert!(
+            gs.saved_cursor.is_none(),
+            "SCS ESC(7 must not trigger save_cursor"
+        );
+    }
+
+    /// ESC 7 (bare DECSC, no intermediates) MUST save the cursor, and ESC 8
+    /// (DECRC) must restore it.
+    #[test]
+    fn esc_dispatch_bare_esc7_saves_cursor() {
+        let mut gs = make_gs();
+        gs.grid.set_cursor(CursorPos { row: 3, col: 5 });
+        let mut proc = Processor::new();
+        proc.advance(&mut gs, b"\x1b7");
+        // Move cursor elsewhere
+        gs.grid.set_cursor(CursorPos { row: 0, col: 0 });
+        // ESC 8 (DECRC) should restore to (3, 5)
+        proc.advance(&mut gs, b"\x1b8");
+        assert_eq!(gs.grid.cursor(), CursorPos { row: 3, col: 5 });
+    }
+
+    // -------------------------------------------------------------------------
+    // ISSUE-012: modes 47/1047 (alt screen) and mouse modes 1000/1006
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn set_mode_47_enters_alt_screen() {
+        let mut gs = make_gs();
+        let mut proc = Processor::new();
+        proc.advance(&mut gs, b"hello");
+        // CSI ? 47 h — enter alt screen
+        proc.advance(&mut gs, b"\x1b[?47h");
+        assert!(gs.modes.alt_screen, "mode 47 should enter alt screen");
+    }
+
+    #[test]
+    fn reset_mode_47_leaves_alt_screen() {
+        let mut gs = make_gs();
+        let mut proc = Processor::new();
+        proc.advance(&mut gs, b"\x1b[?47h");
+        assert!(gs.modes.alt_screen);
+        proc.advance(&mut gs, b"\x1b[?47l");
+        assert!(!gs.modes.alt_screen, "mode 47 reset should leave alt screen");
+    }
+
+    #[test]
+    fn set_mode_1000_enables_mouse_click_report() {
+        let mut gs = make_gs();
+        let mut proc = Processor::new();
+        proc.advance(&mut gs, b"\x1b[?1000h");
+        assert!(gs.modes.mouse_report_click);
+    }
+
+    #[test]
+    fn reset_mode_1000_disables_mouse_click_report() {
+        let mut gs = make_gs();
+        let mut proc = Processor::new();
+        proc.advance(&mut gs, b"\x1b[?1000h");
+        assert!(gs.modes.mouse_report_click);
+        proc.advance(&mut gs, b"\x1b[?1000l");
+        assert!(!gs.modes.mouse_report_click);
+    }
+
+    #[test]
+    fn set_mode_1006_enables_sgr_mouse_ext() {
+        let mut gs = make_gs();
+        let mut proc = Processor::new();
+        proc.advance(&mut gs, b"\x1b[?1006h");
+        assert!(gs.modes.mouse_sgr_ext);
+    }
+
+    // -------------------------------------------------------------------------
+    // ISSUE-013: newline cursor-above-scroll-region behavior
+    // -------------------------------------------------------------------------
+
+    /// A cursor above the scroll region advances row-by-row toward the region
+    /// without triggering a scroll.  Once at the scroll bottom, further newlines
+    /// scroll the region and keep the cursor pinned at the bottom row.
+    #[test]
+    fn newline_cursor_above_scroll_region_advances_into_region() {
+        let mut gs = make_gs_with_size(10, 80); // 10 rows, 80 cols
+        let mut proc = Processor::new();
+        // Set scroll region to rows 4–8 (1-indexed) = rows 3–7 (0-indexed): CSI 4;8 r
+        proc.advance(&mut gs, b"\x1b[4;8r");
+        // Move cursor to row 0: CSI 1;1 H (1-indexed)
+        proc.advance(&mut gs, b"\x1b[1;1H");
+        assert_eq!(gs.grid.cursor().row, 0);
+
+        // Cursor above scroll region: advance freely row-by-row
+        proc.advance(&mut gs, b"\n");
+        assert_eq!(gs.grid.cursor().row, 1);
+        proc.advance(&mut gs, b"\n");
+        assert_eq!(gs.grid.cursor().row, 2);
+        proc.advance(&mut gs, b"\n");
+        assert_eq!(gs.grid.cursor().row, 3); // entered scroll region
+
+        // Continue advancing within the region
+        proc.advance(&mut gs, b"\n");
+        assert_eq!(gs.grid.cursor().row, 4);
+        proc.advance(&mut gs, b"\n");
+        assert_eq!(gs.grid.cursor().row, 5);
+        proc.advance(&mut gs, b"\n");
+        assert_eq!(gs.grid.cursor().row, 6);
+        proc.advance(&mut gs, b"\n");
+        assert_eq!(gs.grid.cursor().row, 7); // at scroll bottom
+
+        // Next newline should scroll the region; cursor stays pinned at row 7
+        proc.advance(&mut gs, b"\n");
+        assert_eq!(gs.grid.cursor().row, 7, "cursor should stay pinned at scroll bottom");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests — Plan 7.1 Task 2: OSC 133 shell integration
 // ---------------------------------------------------------------------------
 
