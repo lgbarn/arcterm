@@ -318,7 +318,6 @@ name = "arcterm-render"
 version = "0.1.0"
 dependencies = [
  "arcterm-core",
- "arcterm-vt",
  "bytemuck",
  "env_logger",
  "glyphon",
