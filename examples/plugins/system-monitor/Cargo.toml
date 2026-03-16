@@ -1,0 +1,35 @@
+# Standalone crate — excluded from the main arcterm workspace.
+[workspace]
+
+[package]
+name = "system-monitor-plugin"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Guest-side WIT binding generator.
+wit-bindgen = "0.36"
+
+# ---------------------------------------------------------------------------
+# Build instructions
+# ---------------------------------------------------------------------------
+# 1. Install the wasm32-wasip2 target (requires Rust 1.82+):
+#       rustup target add wasm32-wasip2
+#
+# 2. Install cargo-component (produces a WIT Component):
+#       cargo install cargo-component
+#
+# 3a. Build with cargo-component (recommended):
+#       cargo component build --release
+#
+# 3b. Build with plain cargo + wasm-tools:
+#       cargo build --target wasm32-wasip2 --release
+#       wasm-tools component new \
+#           target/wasm32-wasip2/release/system_monitor_plugin.wasm \
+#           -o system_monitor_plugin.wasm
+#
+# Load in arcterm:
+#       arcterm-app plugin dev /path/to/examples/plugins/system-monitor

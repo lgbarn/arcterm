@@ -1,0 +1,12 @@
+name        = "system-monitor"
+version     = "0.1.0"
+api_version = "0.1"
+description = "System monitor plugin: shows hostname, uptime, and command stats."
+wasm        = "system_monitor_plugin.wasm"
+
+[permissions]
+# Read /proc (Linux) or /etc (macOS) for system info via WASI filesystem.
+filesystem  = ["/proc", "/etc"]
+network     = false
+panes       = "read"
+ai          = true
