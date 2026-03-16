@@ -671,7 +671,7 @@ fn shape_row_into_buffer(
     cursor_col: Option<usize>,
 ) {
     let chars = substitute_cursor_char(row, cursor_col);
-    let span_strings: Vec<(String, Color)> = row
+    let span_strings: Vec<(String, Color, bool, bool)> = row
         .iter()
         .zip(chars.iter())
         .map(|(cell, &ch): (&SnapshotCell, &char)| {
@@ -681,14 +681,21 @@ fn shape_row_into_buffer(
             } else {
                 ansi_color_to_glyphon(cell.fg, true, palette)
             };
-            (s, fg)
+            (s, fg, cell.bold, cell.italic)
         })
         .collect();
 
     buf.set_rich_text(
         font_system,
-        span_strings.iter().map(|item: &(String, Color)| {
-            (item.0.as_str(), Attrs::new().family(Family::Monospace).color(item.1))
+        span_strings.iter().map(|item: &(String, Color, bool, bool)| {
+            let mut attrs = Attrs::new().family(Family::Monospace).color(item.1);
+            if item.2 {
+                attrs = attrs.weight(Weight::BOLD);
+            }
+            if item.3 {
+                attrs = attrs.style(Style::Italic);
+            }
+            (item.0.as_str(), attrs)
         }),
         &Attrs::new().family(Family::Monospace),
         Shaping::Basic,
