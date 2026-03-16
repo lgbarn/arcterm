@@ -230,7 +230,11 @@ impl Grid {
     }
 
     /// Set the scroll region to [top, bottom] (0-indexed, inclusive).
+    /// Silently rejects invalid bounds: top >= rows, bottom >= rows, or top >= bottom.
     pub fn set_scroll_region(&mut self, top: usize, bottom: usize) {
+        if top >= self.size.rows || bottom >= self.size.rows || top >= bottom {
+            return;
+        }
         self.scroll_region = Some((top, bottom));
     }
 
@@ -528,6 +532,10 @@ impl Grid {
         }
         if self.cursor.col >= new_size.cols {
             self.cursor.col = new_size.cols.saturating_sub(1);
+        }
+
+        if let Some(ref mut ag) = self.alt_grid {
+            ag.resize(new_size);
         }
     }
 
@@ -938,6 +946,38 @@ mod tests {
         assert_eq!(g.cell(1, 0).c, ' ');
         assert_eq!(g.cell(2, 0).c, 'B');
         assert_eq!(g.cell(3, 0).c, 'C');
+    }
+
+    #[test]
+    fn set_scroll_region_rejects_inverted_bounds() {
+        let mut g = Grid::new(GridSize::new(10, 10));
+        g.set_scroll_region(5, 2);
+        assert_eq!(g.scroll_region, None, "inverted bounds must be rejected");
+    }
+
+    #[test]
+    fn set_scroll_region_rejects_bottom_out_of_range() {
+        let mut g = Grid::new(GridSize::new(10, 10));
+        g.set_scroll_region(0, g.size.rows);
+        assert_eq!(g.scroll_region, None, "bottom == rows must be rejected");
+    }
+
+    #[test]
+    fn set_scroll_region_rejects_top_out_of_range() {
+        let mut g = Grid::new(GridSize::new(10, 10));
+        g.set_scroll_region(g.size.rows, 5);
+        assert_eq!(g.scroll_region, None, "top == rows must be rejected");
+    }
+
+    #[test]
+    fn resize_also_resizes_alt_grid() {
+        let mut g = Grid::new(GridSize::new(5, 10));
+        g.enter_alt_screen();
+        let new_size = GridSize::new(8, 20);
+        g.resize(new_size);
+        g.leave_alt_screen();
+        assert_eq!(g.cells.len(), new_size.rows, "after leave_alt_screen rows must match new_size");
+        assert_eq!(g.cells[0].len(), new_size.cols, "after leave_alt_screen cols must match new_size");
     }
 
     #[test]
