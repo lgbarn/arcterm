@@ -212,7 +212,7 @@ use layout::{Axis, Direction, PaneId, PaneNode, PixelRect};
 use selection::{generate_selection_quads, pixel_to_cell, Clipboard, Selection, SelectionMode, SelectionQuad};
 use tab::TabManager;
 use detect::AutoDetector;
-use terminal::Terminal;
+use terminal::{PendingImage, Terminal};
 use tokio::sync::mpsc;
 use winit::{
     application::ApplicationHandler,
@@ -330,6 +330,7 @@ fn count_leaves(node: &workspace::WorkspacePaneNode) -> usize {
 type PaneBundle = (
     HashMap<PaneId, Terminal>,
     HashMap<PaneId, tokio::sync::mpsc::Receiver<Vec<u8>>>,
+    HashMap<PaneId, mpsc::Receiver<PendingImage>>,
     TabManager,
     Vec<PaneNode>,
     HashMap<PaneId, AutoDetector>,
@@ -343,7 +344,7 @@ type PaneBundle = (
 /// empty or invalid.
 fn spawn_default_pane(cfg: &config::ArctermConfig, initial_size: GridSize) -> PaneBundle {
     let first_id = PaneId::next();
-    let (mut terminal, pty_rx) =
+    let (mut terminal, pty_rx, image_rx) =
         Terminal::new(initial_size, cfg.shell.clone(), None).unwrap_or_else(|e| {
             log::error!("Failed to create PTY session: {e}");
             std::process::exit(1);
@@ -356,6 +357,9 @@ fn spawn_default_pane(cfg: &config::ArctermConfig, initial_size: GridSize) -> Pa
     let mut pty_channels = HashMap::new();
     pty_channels.insert(first_id, pty_rx);
 
+    let mut image_channels = HashMap::new();
+    image_channels.insert(first_id, image_rx);
+
     let tab_manager = TabManager::new(first_id);
     let tab_layouts = vec![PaneNode::Leaf { pane_id: first_id }];
 
@@ -364,7 +368,7 @@ fn spawn_default_pane(cfg: &config::ArctermConfig, initial_size: GridSize) -> Pa
     let mut structured_blocks_map: HashMap<PaneId, Vec<StructuredBlock>> = HashMap::new();
     structured_blocks_map.insert(first_id, Vec::new());
 
-    (panes, pty_channels, tab_manager, tab_layouts, auto_detectors, structured_blocks_map)
+    (panes, pty_channels, image_channels, tab_manager, tab_layouts, auto_detectors, structured_blocks_map)
 }
 
 fn main() {
@@ -543,6 +547,12 @@ struct AppState {
     panes: HashMap<PaneId, Terminal>,
     /// PTY byte channels for every open pane.
     pty_channels: HashMap<PaneId, mpsc::Receiver<Vec<u8>>>,
+    /// Decoded Kitty image channels for every open pane.
+    ///
+    /// Receivers are drained via `try_recv` in `about_to_wait` before each
+    /// frame, delivering decoded `PendingImage` values produced on the tokio
+    /// blocking thread pool by `terminal::process_pty_output`.
+    image_channels: HashMap<PaneId, mpsc::Receiver<PendingImage>>,
     /// Tab manager: tab labels, per-tab focused pane, per-tab zoom state.
     tab_manager: TabManager,
     /// Layout trees for each tab, index-aligned with `tab_manager.tabs`.
@@ -828,10 +838,11 @@ impl AppState {
     fn spawn_pane_with_cwd(&mut self, size: GridSize, cwd: Option<&std::path::Path>) -> PaneId {
         let id = PaneId::next();
         match Terminal::new(size, self.config.shell.clone(), cwd) {
-            Ok((mut terminal, rx)) => {
+            Ok((mut terminal, pty_rx, image_rx)) => {
                 terminal.grid_mut().max_scrollback = self.config.scrollback_lines;
                 self.panes.insert(id, terminal);
-                self.pty_channels.insert(id, rx);
+                self.pty_channels.insert(id, pty_rx);
+                self.image_channels.insert(id, image_rx);
                 self.auto_detectors.insert(id, AutoDetector::new());
                 self.structured_blocks.insert(id, Vec::new());
                 self.ai_states.insert(id, ai_detect::AiAgentState::check(None));
@@ -874,6 +885,7 @@ impl AppState {
         for id in &all_ids {
             self.panes.remove(id);
             self.pty_channels.remove(id);
+            self.image_channels.remove(id);
             self.auto_detectors.remove(id);
             self.structured_blocks.remove(id);
             self.nvim_states.remove(id);
@@ -908,7 +920,7 @@ impl AppState {
             let cwd: Option<std::path::PathBuf> =
                 meta.directory.as_deref().map(std::path::PathBuf::from);
             match Terminal::new(initial_size, self.config.shell.clone(), cwd.as_deref()) {
-                Ok((mut terminal, rx)) => {
+                Ok((mut terminal, pty_rx, image_rx)) => {
                     terminal.grid_mut().max_scrollback = self.config.scrollback_lines;
                     // Inject workspace-level environment variables.
                     for (key, val) in &ws.environment {
@@ -925,7 +937,8 @@ impl AppState {
                         terminal.write_input(format!("{cmd}\n").as_bytes());
                     }
                     self.panes.insert(*id, terminal);
-                    self.pty_channels.insert(*id, rx);
+                    self.pty_channels.insert(*id, pty_rx);
+                    self.image_channels.insert(*id, image_rx);
                 }
                 Err(e) => {
                     log::error!("Failed to spawn restored pane {:?}: {e}", id);
@@ -1034,7 +1047,7 @@ impl ApplicationHandler for App {
         // of `_last_session.toml`), restore panes from the workspace layout.
         // Otherwise spawn a single default pane.
         // ---------------------------------------------------------------
-        let (panes, pty_channels, tab_manager, tab_layouts, auto_detectors, structured_blocks_map) =
+        let (panes, pty_channels, image_channels, tab_manager, tab_layouts, auto_detectors, structured_blocks_map) =
             if let Some(ref ws) = self.initial_workspace {
                 let ws_layout = &ws.layout;
 
@@ -1053,6 +1066,7 @@ impl ApplicationHandler for App {
 
                     let mut panes = HashMap::new();
                     let mut pty_channels = HashMap::new();
+                    let mut image_channels = HashMap::new();
                     let mut auto_detectors = HashMap::new();
                     let mut structured_blocks_map: HashMap<PaneId, Vec<StructuredBlock>> =
                         HashMap::new();
@@ -1070,7 +1084,7 @@ impl ApplicationHandler for App {
                             cfg.shell.clone(),
                             cwd.as_deref(),
                         ) {
-                            Ok((mut terminal, rx)) => {
+                            Ok((mut terminal, pty_rx, image_rx)) => {
                                 terminal.grid_mut().max_scrollback = cfg.scrollback_lines;
                                 // Inject workspace-level environment variables.
                                 for (key, val) in &ws.environment {
@@ -1091,7 +1105,8 @@ impl ApplicationHandler for App {
                                     terminal.write_input(format!("{cmd}\n").as_bytes());
                                 }
                                 panes.insert(*id, terminal);
-                                pty_channels.insert(*id, rx);
+                                pty_channels.insert(*id, pty_rx);
+                                image_channels.insert(*id, image_rx);
                             }
                             Err(e) => {
                                 log::error!(
@@ -1115,7 +1130,7 @@ impl ApplicationHandler for App {
                         leaf_count
                     );
 
-                    (panes, pty_channels, tab_manager, tab_layouts, auto_detectors, structured_blocks_map)
+                    (panes, pty_channels, image_channels, tab_manager, tab_layouts, auto_detectors, structured_blocks_map)
                 }
             } else {
                 spawn_default_pane(&cfg, initial_size)
@@ -1193,6 +1208,7 @@ impl ApplicationHandler for App {
             renderer,
             panes,
             pty_channels,
+            image_channels,
             tab_manager,
             tab_layouts,
             keymap,
@@ -1455,28 +1471,32 @@ impl ApplicationHandler for App {
                                 }
                             }
 
-                            // Drain Kitty inline images decoded by process_pty_output.
-                            let pending = terminal.take_pending_images();
-                            for img in pending {
-                                state.renderer.upload_image(
-                                    img.command.image_id,
-                                    &img.rgba,
-                                    img.width,
-                                    img.height,
-                                );
-                                // Place the image at the current cursor row.
-                                // Full Kitty placement semantics (column, z-index, scale)
-                                // are a Phase 5 enhancement; for now we place images at
-                                // cursor-row-y, pane-left-x, at their natural pixel size.
-                                let sf = state.window.scale_factor() as f32;
-                                let cell_h = state.renderer.text.cell_size.height * sf;
-                                let cursor_row_y = terminal.grid().cursor().row as f32 * cell_h;
-                                let image_w = img.width as f32;
-                                let image_h = img.height as f32;
-                                state.renderer.image_placements.push((
-                                    img.command.image_id,
-                                    [0.0, cursor_row_y, image_w, image_h],
-                                ));
+                            // Drain Kitty inline images decoded asynchronously
+                            // by process_pty_output via spawn_blocking.
+                            // Images arrive with one-frame latency (acceptable).
+                            if let Some(img_rx) = state.image_channels.get_mut(&id) {
+                                while let Ok(img) = img_rx.try_recv() {
+                                    state.renderer.upload_image(
+                                        img.command.image_id,
+                                        &img.rgba,
+                                        img.width,
+                                        img.height,
+                                    );
+                                    // Place the image at the current cursor row.
+                                    // Full Kitty placement semantics (column, z-index, scale)
+                                    // are a Phase 5 enhancement; for now we place images at
+                                    // cursor-row-y, pane-left-x, at their natural pixel size.
+                                    let sf = state.window.scale_factor() as f32;
+                                    let cell_h = state.renderer.text.cell_size.height * sf;
+                                    let cursor_row_y =
+                                        terminal.grid().cursor().row as f32 * cell_h;
+                                    let image_w = img.width as f32;
+                                    let image_h = img.height as f32;
+                                    state.renderer.image_placements.push((
+                                        img.command.image_id,
+                                        [0.0, cursor_row_y, image_w, image_h],
+                                    ));
+                                }
                             }
 
                             // Auto-detect structured content in newly-written rows.
@@ -1668,6 +1688,7 @@ impl ApplicationHandler for App {
         // Remove closed pane channels and associated structured-output state.
         for id in closed_panes {
             state.pty_channels.remove(&id);
+            state.image_channels.remove(&id);
             state.auto_detectors.remove(&id);
             state.structured_blocks.remove(&id);
             state.ai_states.remove(&id);
@@ -2951,6 +2972,7 @@ impl ApplicationHandler for App {
                                     let lid = id;
                                     state.panes.remove(&lid);
                                     state.pty_channels.remove(&lid);
+                                    state.image_channels.remove(&lid);
                                     state.nvim_states.remove(&lid);
                                     state.ai_states.remove(&lid);
                                     state.pane_contexts.remove(&lid);
@@ -2976,6 +2998,7 @@ impl ApplicationHandler for App {
                                 // Remove the terminal and channel.
                                 state.panes.remove(&focused);
                                 state.pty_channels.remove(&focused);
+                                state.image_channels.remove(&focused);
                                 state.nvim_states.remove(&focused);
                                 state.ai_states.remove(&focused);
                                 state.pane_contexts.remove(&focused);
@@ -3055,6 +3078,7 @@ impl ApplicationHandler for App {
                                     let lid = id;
                                     state.panes.remove(&lid);
                                     state.pty_channels.remove(&lid);
+                                    state.image_channels.remove(&lid);
                                 }
                                 // Focus active tab's pane.
                                 let new_focus = state.tab_manager.active_tab().focus;
@@ -3251,6 +3275,7 @@ fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action
                     let lid = id;
                     state.panes.remove(&lid);
                     state.pty_channels.remove(&lid);
+                    state.image_channels.remove(&lid);
                 }
                 if state.tab_manager.tab_count() == 0 {
                     event_loop.exit();
@@ -3265,6 +3290,7 @@ fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action
                 }
                 state.panes.remove(&focused_id);
                 state.pty_channels.remove(&focused_id);
+                state.image_channels.remove(&focused_id);
                 let remaining = state.tab_layouts[active].all_pane_ids();
                 if let Some(&new_focus) = remaining.first() {
                     state.set_focused_pane(new_focus);
@@ -3308,6 +3334,7 @@ fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action
                     let lid = id;
                     state.panes.remove(&lid);
                     state.pty_channels.remove(&lid);
+                    state.image_channels.remove(&lid);
                 }
                 let new_focus = state.tab_manager.active_tab().focus;
                 state.set_focused_pane(new_focus);

@@ -23,6 +23,14 @@ pub struct PendingImage {
     pub height: u32,
 }
 
+/// Return type of [`Terminal::new()`]: the terminal instance plus its two receivers.
+///
+/// - `Terminal` — the terminal struct itself.
+/// - `mpsc::Receiver<Vec<u8>>` — raw PTY byte stream.
+/// - `mpsc::Receiver<PendingImage>` — decoded Kitty images, produced on the
+///   tokio blocking thread pool and ready for GPU texture upload.
+pub type TerminalChannels = (Terminal, mpsc::Receiver<Vec<u8>>, mpsc::Receiver<PendingImage>);
+
 /// Integrates PTY I/O, VT parsing, and the terminal grid.
 pub struct Terminal {
     pty: PtySession,
@@ -56,7 +64,7 @@ impl Terminal {
         size: GridSize,
         shell: Option<String>,
         cwd: Option<&Path>,
-    ) -> Result<(Self, mpsc::Receiver<Vec<u8>>, mpsc::Receiver<PendingImage>), PtyError> {
+    ) -> Result<TerminalChannels, PtyError> {
         let (pty, rx) = PtySession::new(size, shell, cwd)?;
         let scanner = ApcScanner::new();
         let grid_state = GridState::new(Grid::new(size));
