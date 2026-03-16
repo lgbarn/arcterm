@@ -177,6 +177,32 @@ enum CliCommand {
     },
     /// List available workspaces
     List,
+    /// Manage plugins
+    Plugin {
+        #[command(subcommand)]
+        subcommand: PluginSubcommand,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum PluginSubcommand {
+    /// Install a plugin from a directory containing plugin.toml
+    Install {
+        /// Path to the plugin directory
+        path: std::path::PathBuf,
+    },
+    /// List installed plugins
+    List,
+    /// Remove an installed plugin by name
+    Remove {
+        /// Plugin name (as declared in plugin.toml)
+        name: String,
+    },
+    /// Load a plugin directly from a directory (for development, no copy)
+    Dev {
+        /// Path to the plugin directory
+        path: std::path::PathBuf,
+    },
 }
 
 /// Maximum gap between clicks to be counted as a multi-click (in ms).
@@ -265,6 +291,10 @@ fn main() {
     let cli = <Cli as clap::Parser>::parse();
 
     // Handle non-GUI subcommands before touching the event loop.
+    // `dev_plugin` carries the path for `arcterm plugin dev <path>` so the
+    // GUI startup can load the plugin without copying it.
+    let mut dev_plugin: Option<std::path::PathBuf> = None;
+
     let initial_workspace: Option<workspace::WorkspaceFile> = match cli.command {
         Some(CliCommand::List) => {
             let workspaces = workspace::list_workspaces();
@@ -291,6 +321,66 @@ fn main() {
                 Err(e) => {
                     eprintln!("arcterm: failed to open workspace '{name}': {e}");
                     std::process::exit(1);
+                }
+            }
+        }
+        Some(CliCommand::Plugin { subcommand }) => {
+            match subcommand {
+                PluginSubcommand::Install { path } => {
+                    let mut mgr = arcterm_plugin::manager::PluginManager::new()
+                        .unwrap_or_else(|e| {
+                            eprintln!("arcterm: failed to initialize plugin manager: {e}");
+                            std::process::exit(1);
+                        });
+                    match mgr.install(&path) {
+                        Ok(id) => println!("Plugin installed with id {id}"),
+                        Err(e) => {
+                            eprintln!("arcterm: plugin install failed: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                    return;
+                }
+                PluginSubcommand::List => {
+                    let mgr = arcterm_plugin::manager::PluginManager::new()
+                        .unwrap_or_else(|e| {
+                            eprintln!("arcterm: failed to initialize plugin manager: {e}");
+                            std::process::exit(1);
+                        });
+                    let plugins = mgr.list_installed();
+                    if plugins.is_empty() {
+                        println!("No plugins installed.");
+                    } else {
+                        println!("{:<20} {:<10} {}", "NAME", "VERSION", "ID");
+                        for (id, name, version) in plugins {
+                            println!("{name:<20} {version:<10} {id}");
+                        }
+                    }
+                    return;
+                }
+                PluginSubcommand::Remove { name } => {
+                    let plugin_dir = dirs::config_dir()
+                        .unwrap_or_else(|| std::path::PathBuf::from("."))
+                        .join("arcterm")
+                        .join("plugins")
+                        .join(&name);
+                    if plugin_dir.exists() {
+                        match std::fs::remove_dir_all(&plugin_dir) {
+                            Ok(_) => println!("Plugin '{name}' removed."),
+                            Err(e) => {
+                                eprintln!("arcterm: failed to remove plugin '{name}': {e}");
+                                std::process::exit(1);
+                            }
+                        }
+                    } else {
+                        eprintln!("arcterm: plugin '{name}' not found.");
+                        std::process::exit(1);
+                    }
+                    return;
+                }
+                PluginSubcommand::Dev { path } => {
+                    dev_plugin = Some(path);
+                    None
                 }
             }
         }
@@ -334,6 +424,7 @@ fn main() {
         state: None,
         modifiers: ModifiersState::empty(),
         initial_workspace,
+        dev_plugin,
         #[cfg(feature = "latency-trace")]
         cold_start,
     };
@@ -409,6 +500,12 @@ struct AppState {
     /// Cached Neovim detection state for each pane.  Updated lazily on
     /// `NavigatePane` events with a 2-second TTL to avoid syscall spam.
     nvim_states: HashMap<PaneId, neovim::NeovimState>,
+
+    // ---- plugin system ----
+    /// Plugin manager: owns all loaded plugin instances.
+    plugin_manager: Option<arcterm_plugin::manager::PluginManager>,
+    /// Sender for broadcasting terminal lifecycle events to plugins.
+    plugin_event_tx: Option<tokio::sync::broadcast::Sender<arcterm_plugin::manager::PluginEvent>>,
 }
 
 impl AppState {
@@ -590,6 +687,14 @@ impl AppState {
                 log::error!("Failed to create PTY for pane {:?}: {e}", id);
             }
         }
+
+        // Notify plugins that a new pane was opened.
+        if let Some(ref tx) = self.plugin_event_tx {
+            let _ = tx.send(arcterm_plugin::manager::PluginEvent::PaneOpened(
+                format!("{:?}", id),
+            ));
+        }
+
         id
     }
 
@@ -705,6 +810,8 @@ struct App {
     modifiers: ModifiersState,
     /// Workspace to restore on launch, set by `arcterm open <name>`.
     initial_workspace: Option<workspace::WorkspaceFile>,
+    /// Dev plugin path, set by `arcterm plugin dev <path>`.
+    dev_plugin: Option<std::path::PathBuf>,
     #[cfg(feature = "latency-trace")]
     cold_start: TraceInstant,
 }
@@ -853,6 +960,40 @@ impl ApplicationHandler for App {
             window.set_title(&format!("Arcterm — {}", ws.workspace.name));
         }
 
+        // ---------------------------------------------------------------
+        // Plugin manager initialization.
+        //
+        // Create the manager, load all installed plugins, and optionally
+        // load a dev plugin if `arcterm plugin dev <path>` was used.
+        // ---------------------------------------------------------------
+        let (plugin_manager, plugin_event_tx) = {
+            let mut mgr = match arcterm_plugin::manager::PluginManager::new() {
+                Ok(m) => m,
+                Err(e) => {
+                    log::warn!("Failed to initialize plugin manager: {e}");
+                    return;
+                }
+            };
+
+            let results = mgr.load_all_installed();
+            for result in results {
+                match result {
+                    Ok(id) => log::info!("Plugin loaded: {id}"),
+                    Err(e) => log::warn!("Failed to load plugin: {e}"),
+                }
+            }
+
+            if let Some(ref dev_path) = self.dev_plugin {
+                match mgr.load_dev(dev_path) {
+                    Ok(id) => log::info!("Dev plugin loaded: {id}"),
+                    Err(e) => log::warn!("Failed to load dev plugin: {e}"),
+                }
+            }
+
+            let event_tx = mgr.event_sender();
+            (Some(mgr), Some(event_tx))
+        };
+
         self.state = Some(AppState {
             window,
             renderer,
@@ -881,6 +1022,8 @@ impl ApplicationHandler for App {
             palette_mode: None,
             workspace_switcher: None,
             nvim_states: HashMap::new(),
+            plugin_manager,
+            plugin_event_tx,
         });
     }
 
@@ -1088,6 +1231,13 @@ impl ApplicationHandler for App {
             state.pty_channels.remove(&id);
             state.auto_detectors.remove(&id);
             state.structured_blocks.remove(&id);
+
+            // Notify plugins that a pane was closed.
+            if let Some(ref tx) = state.plugin_event_tx {
+                let _ = tx.send(arcterm_plugin::manager::PluginEvent::PaneClosed(
+                    format!("{:?}", id),
+                ));
+            }
         }
 
         // When ALL channels are gone, the session has ended.
