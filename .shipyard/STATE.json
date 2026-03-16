@@ -1,7 +1,7 @@
 {
   "phase": 8,
-  "status": "complete",
-  "position": "ALL PHASES COMPLETE — Arcterm v0.1.0",
-  "message": "562 tests, 8 phases, release-ready",
-  "updated_at": "2026-03-16T00:30:00Z"
+  "status": "shipped",
+  "position": "Milestone shipped — Arcterm v0.1.0",
+  "message": "All 8 phases complete. 570 tests. Security audit passed. Tagged v0.1.0.",
+  "updated_at": "2026-03-16T01:00:00Z"
 }
