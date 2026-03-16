@@ -1255,6 +1255,60 @@ impl ApplicationHandler for App {
                             }
                         }
 
+                        // Drain MCP tool-list queries and write responses back to PTY.
+                        {
+                            let tool_queries = state.panes.get_mut(&id)
+                                .map(|t| t.take_tool_queries())
+                                .unwrap_or_default();
+
+                            if !tool_queries.is_empty() {
+                                if let Some(ref mgr) = state.plugin_manager {
+                                    let tools = mgr.list_tools();
+                                    // Serialize tool schemas as JSON manually
+                                    // (ToolSchema is WIT-generated without Serialize).
+                                    let entries: Vec<String> = tools.iter().map(|t| {
+                                        format!(
+                                            "{{\"name\":{},\"description\":{},\"inputSchema\":{}}}",
+                                            serde_json::Value::String(t.name.clone()),
+                                            serde_json::Value::String(t.description.clone()),
+                                            t.input_schema.as_str(),
+                                        )
+                                    }).collect();
+                                    let json = format!("[{}]", entries.join(","));
+                                    // Base64-encode the JSON for safe OSC transport.
+                                    use base64::Engine as _;
+                                    let b64 = base64::engine::general_purpose::STANDARD.encode(json.as_bytes());
+                                    // Write the OSC 7770 tools/response sequence.
+                                    let response = format!("\x1b]7770;tools/response;{}\x07", b64);
+                                    if let Some(terminal) = state.panes.get_mut(&id) {
+                                        terminal.write_input(response.as_bytes());
+                                    }
+                                }
+                            }
+                        }
+
+                        // Drain MCP tool calls and write results back to PTY.
+                        {
+                            let tool_calls = state.panes.get_mut(&id)
+                                .map(|t| t.take_tool_calls())
+                                .unwrap_or_default();
+
+                            for (name, args_json) in tool_calls {
+                                let result_json = if let Some(ref mgr) = state.plugin_manager {
+                                    mgr.call_tool(&name, &args_json)
+                                        .unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+                                } else {
+                                    "{\"error\":\"plugin manager unavailable\"}".to_string()
+                                };
+                                use base64::Engine as _;
+                                let b64 = base64::engine::general_purpose::STANDARD.encode(result_json.as_bytes());
+                                let response = format!("\x1b]7770;tools/result;result={}\x07", b64);
+                                if let Some(terminal) = state.panes.get_mut(&id) {
+                                    terminal.write_input(response.as_bytes());
+                                }
+                            }
+                        }
+
                         // Update last_ai_pane when an AI-detected pane receives data.
                         let is_ai_pane = state
                             .ai_states

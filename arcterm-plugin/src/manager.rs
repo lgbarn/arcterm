@@ -346,6 +346,30 @@ impl PluginManager {
         Vec::new()
     }
 
+    /// Invoke a named tool by finding the plugin that owns it.
+    ///
+    /// For Phase 7, full WASM tool invocation is deferred.  Returns a JSON
+    /// stub so the OSC 7770 round-trip is exercised end-to-end.
+    pub fn call_tool(&self, name: &str, _args_json: &str) -> anyhow::Result<String> {
+        // Find which plugin owns this tool (by checking registered_tools).
+        for lp in self.plugins.values() {
+            if let Ok(inst) = lp.instance.lock() {
+                let owned = inst.host_data().registered_tools.iter().any(|t| t.name == name);
+                if owned {
+                    // Full WASM invocation is a Phase 8 deliverable.
+                    return Ok(format!(
+                        "{{\"error\":\"tool invocation not yet implemented\",\"tool\":\"{}\"}}",
+                        name
+                    ));
+                }
+            }
+        }
+        Ok(format!(
+            "{{\"error\":\"tool not found\",\"tool\":\"{}\"}}",
+            name
+        ))
+    }
+
     /// Collect all MCP tool schemas from all loaded plugin instances.
     ///
     /// Returns a flat list of `ToolSchema` records suitable for serialising

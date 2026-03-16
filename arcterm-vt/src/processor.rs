@@ -288,6 +288,49 @@ fn dispatch_osc7770<H: Handler>(handler: &mut H, params: &[&[u8]]) {
         b"end" => {
             handler.structured_content_end();
         }
+
+        // MCP tool discovery: AI agent queries available plugin tools.
+        // ESC ] 7770 ; tools/list ST
+        b"tools/list" => {
+            handler.tool_list_query();
+        }
+
+        // MCP tool invocation: AI agent calls a named plugin tool.
+        // ESC ] 7770 ; tools/call ; name=<tool_name> ; args=<base64_json> ST
+        b"tools/call" => {
+            // Parse name= and args= from params[2..].
+            let mut tool_name: Option<String> = None;
+            let mut args_b64: Option<&[u8]> = None;
+            for raw in &params[2..] {
+                if let Ok(kv) = std::str::from_utf8(raw)
+                    && let Some((key, val)) = kv.split_once('=')
+                {
+                    match key {
+                        "name" => tool_name = Some(val.to_string()),
+                        "args" => args_b64 = Some(&raw[5..]), // skip "args="
+                        _ => {}
+                    }
+                }
+            }
+
+            let (Some(name), Some(b64)) = (tool_name, args_b64) else {
+                return; // missing required params — silently ignore
+            };
+
+            // Base64-decode the args.
+            use base64::Engine as _;
+            let decoded = match base64::engine::general_purpose::STANDARD.decode(b64) {
+                Ok(bytes) => bytes,
+                Err(_) => return, // invalid base64 — silently ignore
+            };
+            let args_json = match String::from_utf8(decoded) {
+                Ok(s) => s,
+                Err(_) => return, // not valid UTF-8 — silently ignore
+            };
+
+            handler.tool_call(name, args_json);
+        }
+
         _ => {} // unknown action — ignore
     }
 }
@@ -757,6 +800,94 @@ mod phase4_task2_tests {
         assert!(gs.accumulator.is_none());
         feed(&mut gs, &osc7770_end());
         assert!(gs.completed_blocks.is_empty());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Plan 7.2 Task 1: OSC 7770 tools/list and tools/call dispatch
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod osc7770_tools_tests {
+    use arcterm_core::{Grid, GridSize};
+
+    use crate::{GridState, Processor};
+
+    fn make_gs() -> GridState {
+        GridState::new(Grid::new(GridSize::new(24, 80)))
+    }
+
+    fn feed(gs: &mut GridState, bytes: &[u8]) {
+        let mut proc = Processor::new();
+        proc.advance(gs, bytes);
+    }
+
+    /// ESC ] 7770 ; tools/list BEL — should push one entry to tool_queries.
+    #[test]
+    fn tools_list_sets_flag() {
+        let mut gs = make_gs();
+        feed(&mut gs, b"\x1b]7770;tools/list\x07");
+        assert_eq!(gs.tool_queries.len(), 1, "expected one tool_query entry");
+    }
+
+    /// A second tools/list accumulates.
+    #[test]
+    fn tools_list_accumulates() {
+        let mut gs = make_gs();
+        feed(&mut gs, b"\x1b]7770;tools/list\x07");
+        feed(&mut gs, b"\x1b]7770;tools/list\x07");
+        assert_eq!(gs.tool_queries.len(), 2);
+    }
+
+    /// take_tool_queries drains the buffer.
+    #[test]
+    fn take_tool_queries_drains() {
+        let mut gs = make_gs();
+        feed(&mut gs, b"\x1b]7770;tools/list\x07");
+        let drained = gs.take_tool_queries();
+        assert_eq!(drained.len(), 1);
+        assert!(gs.tool_queries.is_empty(), "buffer must be empty after drain");
+    }
+
+    /// ESC ] 7770 ; tools/call ; name=get_pods ; args=<base64("{}") BEL
+    #[test]
+    fn tools_call_parses_name_and_args() {
+        // base64("{}")  = "e30="
+        let seq = b"\x1b]7770;tools/call;name=get_pods;args=e30=\x07";
+        let mut gs = make_gs();
+        feed(&mut gs, seq);
+        assert_eq!(gs.tool_calls.len(), 1);
+        let (name, args) = &gs.tool_calls[0];
+        assert_eq!(name, "get_pods");
+        assert_eq!(args, "{}");
+    }
+
+    /// take_tool_calls drains the buffer.
+    #[test]
+    fn take_tool_calls_drains() {
+        let seq = b"\x1b]7770;tools/call;name=foo;args=e30=\x07";
+        let mut gs = make_gs();
+        feed(&mut gs, seq);
+        let drained = gs.take_tool_calls();
+        assert_eq!(drained.len(), 1);
+        assert!(gs.tool_calls.is_empty(), "buffer must be empty after drain");
+    }
+
+    /// Malformed tools/call (missing name=) is silently ignored.
+    #[test]
+    fn tools_call_missing_name_is_ignored() {
+        let mut gs = make_gs();
+        feed(&mut gs, b"\x1b]7770;tools/call;args=e30=\x07");
+        assert!(gs.tool_calls.is_empty(), "malformed call must be ignored");
+    }
+
+    /// tools/list without a name param is still valid (it has no extra params).
+    #[test]
+    fn tools_list_extra_params_ignored() {
+        let mut gs = make_gs();
+        // Extra params after tools/list should not cause a panic; query still recorded.
+        feed(&mut gs, b"\x1b]7770;tools/list;extra=val\x07");
+        assert_eq!(gs.tool_queries.len(), 1);
     }
 }
 

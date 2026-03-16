@@ -228,6 +228,25 @@ pub trait Handler {
     ///
     /// `exit_code` defaults to 0 when the OSC sequence omits the code field.
     fn shell_command_end(&mut self, _exit_code: i32) {}
+
+    // -------------------------------------------------------------------------
+    // OSC 7770 — MCP tool discovery (Phase 7)
+    // -------------------------------------------------------------------------
+
+    /// Called when the VT processor receives `ESC ] 7770 ; tools/list ST`.
+    ///
+    /// Signals that the AI agent is querying available MCP tools.
+    /// The app layer drains the resulting flag, calls `PluginManager::list_tools()`,
+    /// and writes back an `ESC ] 7770 ; tools/response ; <base64_json> ST`.
+    fn tool_list_query(&mut self) {}
+
+    /// Called when the VT processor receives
+    /// `ESC ] 7770 ; tools/call ; name=<n> ; args=<base64> ST`.
+    ///
+    /// `name` is the tool name; `args_json` is the decoded JSON arguments string.
+    /// The app layer drains the call, invokes the tool, and writes back
+    /// `ESC ] 7770 ; tools/result ; result=<base64_json> ST`.
+    fn tool_call(&mut self, _name: String, _args_json: String) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -265,6 +284,16 @@ pub struct GridState {
     /// Set to `true` by `shell_command_start()` (OSC 133 B). Cleared when
     /// the corresponding `shell_command_end()` (OSC 133 D) is received.
     pub pending_command_start: bool,
+    /// Drain buffer for `tools/list` queries (OSC 7770 ; tools/list).
+    ///
+    /// Each `()` entry represents one pending tool-list query from an AI agent.
+    /// The app layer drains these, calls `PluginManager::list_tools()`, and
+    /// writes the response back to the PTY.
+    pub tool_queries: Vec<()>,
+    /// Drain buffer for `tools/call` invocations (OSC 7770 ; tools/call).
+    ///
+    /// Each entry is `(tool_name, decoded_args_json)`.
+    pub tool_calls: Vec<(String, String)>,
 }
 
 impl GridState {
@@ -282,6 +311,8 @@ impl GridState {
             kitty_payloads: Vec::new(),
             shell_exit_codes: Vec::new(),
             pending_command_start: false,
+            tool_queries: Vec::new(),
+            tool_calls: Vec::new(),
         }
     }
 
@@ -294,6 +325,16 @@ impl GridState {
     /// last call. The caller (app layer) stores the last value in `PaneContext`.
     pub fn take_exit_codes(&mut self) -> Vec<i32> {
         std::mem::take(&mut self.shell_exit_codes)
+    }
+
+    /// Drain and return all pending tool-list queries (one `()` per query).
+    pub fn take_tool_queries(&mut self) -> Vec<()> {
+        std::mem::take(&mut self.tool_queries)
+    }
+
+    /// Drain and return all pending tool calls as `(name, args_json)` pairs.
+    pub fn take_tool_calls(&mut self) -> Vec<(String, String)> {
+        std::mem::take(&mut self.tool_calls)
     }
 
     /// Effective scroll bottom, clamped to grid dimensions.
@@ -864,6 +905,14 @@ impl Handler for GridState {
     fn shell_command_start(&mut self) {
         // OSC 133 ; B — note that a command has begun.
         self.pending_command_start = true;
+    }
+
+    fn tool_list_query(&mut self) {
+        self.tool_queries.push(());
+    }
+
+    fn tool_call(&mut self, name: String, args_json: String) {
+        self.tool_calls.push((name, args_json));
     }
 
     fn shell_command_end(&mut self, exit_code: i32) {

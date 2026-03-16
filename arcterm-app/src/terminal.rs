@@ -136,6 +136,23 @@ impl Terminal {
         self.grid_state.take_exit_codes()
     }
 
+    /// Drain and return all pending MCP tool-list queries.
+    ///
+    /// One `()` per `ESC ] 7770 ; tools/list ST` sequence received since the
+    /// last call.  The app layer responds with `ESC ] 7770 ; tools/response ; … ST`.
+    pub fn take_tool_queries(&mut self) -> Vec<()> {
+        self.grid_state.take_tool_queries()
+    }
+
+    /// Drain and return all pending MCP tool calls as `(name, args_json)` pairs.
+    ///
+    /// One entry per `ESC ] 7770 ; tools/call ; name=… ; args=… ST` sequence received
+    /// since the last call.  The app layer invokes the tool and writes back
+    /// `ESC ] 7770 ; tools/result ; result=<base64_json> ST`.
+    pub fn take_tool_calls(&mut self) -> Vec<(String, String)> {
+        self.grid_state.take_tool_calls()
+    }
+
     /// Return a reference to the underlying GridState.
     pub fn grid_state(&self) -> &GridState {
         &self.grid_state
