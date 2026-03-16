@@ -13,8 +13,8 @@ pub use image_quad::{ImageQuadRenderer, ImageTexture, ImageVertex};
 pub use palette::RenderPalette;
 pub use quad::{QuadInstance, QuadRenderer};
 pub use renderer::{
-    OverlayQuad, PaneRenderInfo, Renderer, build_quad_instances_at, render_tab_bar_quads,
-    tab_bar_height,
+    OverlayQuad, PaneRenderInfo, PluginPaneRenderInfo, Renderer, build_quad_instances_at,
+    render_tab_bar_quads, tab_bar_height,
 };
-pub use text::{ClipRect, TextRenderer};
+pub use text::{ClipRect, PluginStyledLine, TextRenderer};
 pub use structured::{HighlightEngine, RenderedLine, StructuredBlock, StyledSpan};

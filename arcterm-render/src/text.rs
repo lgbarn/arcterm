@@ -17,6 +17,23 @@ pub struct CellSize {
     pub height: f32,
 }
 
+/// A plugin-rendered styled line, as produced by the WASM `render()` export
+/// and translated by the caller before passing to `TextRenderer::prepare_plugin_pane`.
+///
+/// This type lives in arcterm-render so that the renderer does not need to
+/// import arcterm-plugin (which would introduce a circular dependency via
+/// arcterm-app).
+#[derive(Clone, Debug, Default)]
+pub struct PluginStyledLine {
+    pub text: String,
+    /// Foreground RGB colour, or `None` to use the default palette foreground.
+    pub fg: Option<(u8, u8, u8)>,
+    /// Background RGB colour (currently unused in rendering, reserved for future).
+    pub bg: Option<(u8, u8, u8)>,
+    pub bold: bool,
+    pub italic: bool,
+}
+
 /// Clip rectangle for text rendering.
 #[derive(Clone, Copy, Debug)]
 pub struct ClipRect {
@@ -508,6 +525,98 @@ impl TextRenderer {
                 num_rows: 1,
                 scale_factor,
                 default_fg: Color::rgb(200, 200, 200),
+            });
+        }
+    }
+
+    /// Prepare plugin pane output for rendering.
+    ///
+    /// Takes a slice of `PluginStyledLine` values (translated from the WIT
+    /// `StyledLine` records produced by a plugin's `render()` export) and
+    /// appends them to the multi-pane accumulator positioned within `pane_rect`.
+    ///
+    /// Each line is placed at `(pane_rect.x, pane_rect.y + line_idx * cell_h)`
+    /// in physical pixels.  The clip region is set to the pane rect so lines
+    /// cannot bleed into adjacent panes.
+    ///
+    /// Call after `reset_frame()` and before `submit_text_areas()`.
+    pub fn prepare_plugin_pane(
+        &mut self,
+        pane_rect: &[f32; 4], // [x, y, width, height] in physical pixels
+        lines: &[PluginStyledLine],
+        scale_factor: f32,
+    ) {
+        use glyphon::{Attrs, Weight, Style as GlyphonStyle};
+
+        let cell_h = self.cell_size.height;
+        let [rect_x, rect_y, rect_w, rect_h] = *pane_rect;
+
+        let clip = ClipRect {
+            x: rect_x as i32,
+            y: rect_y as i32,
+            width: rect_w as u32,
+            height: rect_h as u32,
+        };
+
+        for (line_idx, line) in lines.iter().enumerate() {
+            if line.text.is_empty() {
+                continue;
+            }
+
+            let slot_idx = self.pane_slots.len();
+            if slot_idx >= self.pane_buffer_pool.len() {
+                self.pane_buffer_pool.push(Vec::new());
+            }
+            let buf_vec = &mut self.pane_buffer_pool[slot_idx];
+            if buf_vec.is_empty() {
+                buf_vec.push(Buffer::new(
+                    &mut self.font_system,
+                    Metrics::new(self.font_size, self.line_height),
+                ));
+            }
+
+            let buf = &mut buf_vec[0];
+            buf.set_size(
+                &mut self.font_system,
+                Some(rect_w * scale_factor),
+                Some(cell_h * scale_factor),
+            );
+
+            // Build glyph attrs from the StyledLine attributes.
+            let fg_color = line
+                .fg
+                .map(|(r, g, b)| Color::rgb(r, g, b))
+                .unwrap_or(Color::rgb(200, 200, 200));
+
+            let mut attrs = Attrs::new()
+                .family(Family::Monospace)
+                .color(fg_color);
+
+            if line.bold {
+                attrs = attrs.weight(Weight::BOLD);
+            }
+            if line.italic {
+                attrs = attrs.style(GlyphonStyle::Italic);
+            }
+
+            buf.set_text(
+                &mut self.font_system,
+                line.text.as_str(),
+                &attrs,
+                Shaping::Basic,
+                None,
+            );
+            buf.shape_until_scroll(&mut self.font_system, false);
+
+            let line_y = rect_y + line_idx as f32 * cell_h;
+
+            self.pane_slots.push(PaneSlot {
+                offset_x: rect_x,
+                offset_y: line_y,
+                clip: Some(clip),
+                num_rows: 1,
+                scale_factor,
+                default_fg: fg_color,
             });
         }
     }

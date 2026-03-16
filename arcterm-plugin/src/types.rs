@@ -11,5 +11,5 @@ impl PluginId {
 // Re-export the bindgen-generated types as the canonical public API of this crate.
 // These are generated from arcterm-plugin/wit/arcterm.wit by the bindgen! macro.
 pub use crate::host::arcterm::plugin::types::{
-    Color, EventKind, PluginEvent, StyledLine, ToolSchema,
+    Color, EventKind, KeyInputPayload, KeyModifiers, PluginEvent, StyledLine, ToolSchema,
 };

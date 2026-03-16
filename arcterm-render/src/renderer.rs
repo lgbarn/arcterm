@@ -11,7 +11,7 @@ use crate::image_quad::{ImageQuadRenderer, ImageTexture};
 use crate::palette::RenderPalette;
 use crate::quad::{QuadInstance, QuadRenderer};
 use crate::structured::StructuredBlock;
-use crate::text::{ClipRect, TextRenderer, ansi_color_to_glyphon};
+use crate::text::{ClipRect, PluginStyledLine, TextRenderer, ansi_color_to_glyphon};
 
 // ---------------------------------------------------------------------------
 // Multi-pane types
@@ -29,6 +29,17 @@ pub struct PaneRenderInfo<'a> {
     /// text positioned at the block's row range within this pane.  Pass an empty
     /// slice when there are no structured blocks (renders identically to Phase 2).
     pub structured_blocks: &'a [StructuredBlock],
+}
+
+/// Describes a single plugin pane to render in a multi-pane frame.
+///
+/// Plugin panes have no terminal grid — they are rendered entirely from the
+/// `lines` produced by the WASM plugin's `render()` export.
+pub struct PluginPaneRenderInfo {
+    /// Bounding rectangle in physical pixels: [x, y, width, height].
+    pub rect: [f32; 4],
+    /// Styled lines from the plugin's draw buffer.
+    pub lines: Vec<PluginStyledLine>,
 }
 
 /// A solid-color overlay quad (used for borders, tab bar backgrounds, etc.).
@@ -121,7 +132,7 @@ impl Renderer {
             rect: [0.0, 0.0, w, h],
             structured_blocks: &[],
         };
-        self.render_multipane(&[pane], &[], &[], scale_factor);
+        self.render_multipane(&[pane], &[], &[], &[], scale_factor);
     }
 
     /// Render multiple panes and overlay quads in a single GPU pass.
@@ -129,6 +140,9 @@ impl Renderer {
     /// For each pane:
     /// - Cell background quads and cursor blocks are built with `build_quad_instances_at`.
     /// - Text is shaped via `prepare_grid_at` and submitted all at once.
+    ///
+    /// `plugin_panes` are WASM plugin panes whose draw buffers have already been
+    /// read.  They are rendered via `prepare_plugin_pane` after terminal panes.
     ///
     /// `overlay_quads` are drawn on top of all cell backgrounds but beneath
     /// text (e.g. borders, tab bar backgrounds).
@@ -138,6 +152,7 @@ impl Renderer {
     pub fn render_multipane(
         &mut self,
         panes: &[PaneRenderInfo<'_>],
+        plugin_panes: &[PluginPaneRenderInfo],
         overlay_quads: &[OverlayQuad],
         overlay_text: &[(String, f32, f32)],
         scale_factor: f64,
@@ -219,6 +234,24 @@ impl Renderer {
                     Some(clip),
                     sf,
                 );
+            }
+        }
+
+        // Render plugin panes: dark background quad + shaped styled lines.
+        for pp in plugin_panes {
+            let [px, py, pw, ph] = pp.rect;
+            if pw <= 0.0 || ph <= 0.0 {
+                continue;
+            }
+
+            // Dark background for the plugin pane area.
+            all_quads.push(QuadInstance {
+                rect: [px, py, pw, ph],
+                color: [0.07, 0.07, 0.10, 1.0],
+            });
+
+            if !pp.lines.is_empty() {
+                self.text.prepare_plugin_pane(&pp.rect, &pp.lines, sf);
             }
         }
 

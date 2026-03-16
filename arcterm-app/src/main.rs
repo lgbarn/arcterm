@@ -133,7 +133,10 @@ use winit::event_loop::ControlFlow;
 use std::time::Instant as TraceInstant;
 
 use arcterm_core::{Cell, CellAttrs, Color, CursorPos, GridSize};
-use arcterm_render::{HighlightEngine, OverlayQuad, PaneRenderInfo, RenderPalette, Renderer, StructuredBlock};
+use arcterm_render::{
+    HighlightEngine, OverlayQuad, PaneRenderInfo, PluginPaneRenderInfo, PluginStyledLine,
+    RenderPalette, Renderer, StructuredBlock,
+};
 use arcterm_vt::ContentType;
 use keymap::{KeyAction, KeymapHandler};
 use palette::{PaletteState, WorkspaceSwitcherState};
@@ -1806,7 +1809,22 @@ impl ApplicationHandler for App {
                     }
                 }
 
-                state.renderer.render_multipane(&pane_infos, &overlay_quads, &palette_text, scale);
+                // Collect plugin pane render infos from the active layout.
+                let plugin_pane_infos: Vec<PluginPaneRenderInfo> = {
+                    let mut out = Vec::new();
+                    if let Some(ref mgr) = state.plugin_manager {
+                        collect_plugin_panes(state.active_layout(), &rects, mgr, &mut out);
+                    }
+                    out
+                };
+
+                state.renderer.render_multipane(
+                    &pane_infos,
+                    &plugin_pane_infos,
+                    &overlay_quads,
+                    &palette_text,
+                    scale,
+                );
 
                 #[cfg(feature = "latency-trace")]
                 {
@@ -1945,6 +1963,28 @@ impl ApplicationHandler for App {
 
                     let action = state.keymap.handle_key(&event, self.modifiers, app_cursor);
 
+                    // Check if the focused pane is a plugin pane — if so, route
+                    // key events to the plugin rather than to a PTY.
+                    let focused_plugin_id: Option<String> = {
+                        fn find_plugin_id(node: &PaneNode, target: PaneId) -> Option<String> {
+                            match node {
+                                PaneNode::PluginPane { pane_id, plugin_id } => {
+                                    if *pane_id == target { Some(plugin_id.clone()) } else { None }
+                                }
+                                PaneNode::Leaf { .. } => None,
+                                PaneNode::HSplit { left, right, .. } => {
+                                    find_plugin_id(left, target)
+                                        .or_else(|| find_plugin_id(right, target))
+                                }
+                                PaneNode::VSplit { top, bottom, .. } => {
+                                    find_plugin_id(top, target)
+                                        .or_else(|| find_plugin_id(bottom, target))
+                                }
+                            }
+                        }
+                        find_plugin_id(state.active_layout(), focused_id)
+                    };
+
                     match action {
                         KeyAction::Forward(bytes) => {
                             #[cfg(feature = "latency-trace")]
@@ -1954,10 +1994,33 @@ impl ApplicationHandler for App {
                                 t0.elapsed()
                             );
 
-                            if let Some(terminal) = state.panes.get_mut(&focused_id) {
+                            // If the focused pane is a plugin pane, forward as key-input.
+                            if let Some(ref pid) = focused_plugin_id {
+                                if let Some(ref mgr) = state.plugin_manager {
+                                    use winit::keyboard::Key;
+                                    let key_char: Option<String> =
+                                        if let Key::Character(ref s) = event.logical_key {
+                                            Some(s.to_string())
+                                        } else {
+                                            None
+                                        };
+                                    let key_name = format!("{:?}", event.logical_key);
+                                    let consumed = mgr.send_key_input(
+                                        pid,
+                                        key_char,
+                                        key_name,
+                                        self.modifiers.control_key(),
+                                        self.modifiers.alt_key(),
+                                        self.modifiers.shift_key(),
+                                    );
+                                    if consumed {
+                                        state.window.request_redraw();
+                                    }
+                                }
+                            } else if let Some(terminal) = state.panes.get_mut(&focused_id) {
                                 terminal.write_input(&bytes);
+                                state.window.request_redraw();
                             }
-                            state.window.request_redraw();
                         }
 
                         KeyAction::NavigatePane(dir) => {
@@ -2425,6 +2488,53 @@ fn cursor_to_cell_in_rect(
     let rel_x = px - pane_rect.x as f64;
     let rel_y = py - pane_rect.y as f64;
     pixel_to_cell(rel_x, rel_y, cell_w, cell_h, scale)
+}
+
+// ---------------------------------------------------------------------------
+// Helper: collect PluginPaneRenderInfo for all PluginPane nodes in the layout.
+// ---------------------------------------------------------------------------
+
+/// Walk the pane tree and collect render infos for every `PluginPane` node
+/// that has a non-zero rect.  The draw buffer for each plugin is taken
+/// (replaced with empty) and translated to `PluginStyledLine` records.
+fn collect_plugin_panes(
+    node: &PaneNode,
+    rects: &HashMap<PaneId, PixelRect>,
+    mgr: &arcterm_plugin::manager::PluginManager,
+    out: &mut Vec<PluginPaneRenderInfo>,
+) {
+    match node {
+        PaneNode::PluginPane { pane_id, plugin_id } => {
+            let Some(&rect) = rects.get(pane_id) else { return };
+            if rect.width <= 0.0 || rect.height <= 0.0 {
+                return;
+            }
+            let raw_lines = mgr.take_draw_buffer(plugin_id);
+            let lines: Vec<PluginStyledLine> = raw_lines
+                .into_iter()
+                .map(|l| PluginStyledLine {
+                    text: l.text,
+                    fg: l.fg.map(|c| (c.r, c.g, c.b)),
+                    bg: l.bg.map(|c| (c.r, c.g, c.b)),
+                    bold: l.bold,
+                    italic: l.italic,
+                })
+                .collect();
+            out.push(PluginPaneRenderInfo {
+                rect: [rect.x, rect.y, rect.width, rect.height],
+                lines,
+            });
+        }
+        PaneNode::Leaf { .. } => {}
+        PaneNode::HSplit { left, right, .. } => {
+            collect_plugin_panes(left, rects, mgr, out);
+            collect_plugin_panes(right, rects, mgr, out);
+        }
+        PaneNode::VSplit { top, bottom, .. } => {
+            collect_plugin_panes(top, rects, mgr, out);
+            collect_plugin_panes(bottom, rects, mgr, out);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

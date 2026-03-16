@@ -92,13 +92,24 @@ pub struct BorderQuad {
 
 /// A node in the pane tree.
 ///
-/// * `Leaf`   — a single terminal pane.
-/// * `HSplit` — two panes side-by-side (left | right).
-/// * `VSplit` — two panes stacked (top / bottom).
+/// * `Leaf`       — a single terminal pane backed by a PTY.
+/// * `PluginPane` — a pane rendered by a WASM plugin.
+/// * `HSplit`     — two panes side-by-side (left | right).
+/// * `VSplit`     — two panes stacked (top / bottom).
 #[derive(Clone, Debug)]
 pub enum PaneNode {
     Leaf {
         pane_id: PaneId,
+    },
+    /// A pane rendered by a WASM plugin.
+    ///
+    /// `pane_id` participates in layout/navigation identically to a `Leaf`.
+    /// `plugin_id` is the string identifier of the loaded plugin in
+    /// `PluginManager` (equals the plugin's declared `name` in plugin.toml).
+    PluginPane {
+        pane_id: PaneId,
+        /// Plugin identifier — matches `arcterm_plugin::manager::PluginId`.
+        plugin_id: String,
     },
     HSplit {
         /// Fraction [0.0, 1.0] of available width given to the left child.
@@ -139,7 +150,7 @@ impl PaneNode {
         out: &mut HashMap<PaneId, PixelRect>,
     ) {
         match self {
-            PaneNode::Leaf { pane_id } => {
+            PaneNode::Leaf { pane_id } | PaneNode::PluginPane { pane_id, .. } => {
                 out.insert(*pane_id, rect);
             }
             PaneNode::HSplit { ratio, left, right } => {
@@ -191,10 +202,10 @@ impl PaneNode {
     // Query helpers
     // -----------------------------------------------------------------------
 
-    /// Returns `true` if this sub-tree contains a leaf with `id`.
+    /// Returns `true` if this sub-tree contains a leaf (or plugin pane) with `id`.
     pub fn find_leaf(&self, id: PaneId) -> bool {
         match self {
-            PaneNode::Leaf { pane_id } => *pane_id == id,
+            PaneNode::Leaf { pane_id } | PaneNode::PluginPane { pane_id, .. } => *pane_id == id,
             PaneNode::HSplit { left, right, .. } => left.find_leaf(id) || right.find_leaf(id),
             PaneNode::VSplit { top, bottom, .. } => top.find_leaf(id) || bottom.find_leaf(id),
         }
@@ -209,7 +220,9 @@ impl PaneNode {
 
     fn collect_ids(&self, out: &mut Vec<PaneId>) {
         match self {
-            PaneNode::Leaf { pane_id } => out.push(*pane_id),
+            PaneNode::Leaf { pane_id } | PaneNode::PluginPane { pane_id, .. } => {
+                out.push(*pane_id)
+            }
             PaneNode::HSplit { left, right, .. } => {
                 left.collect_ids(out);
                 right.collect_ids(out);
@@ -232,6 +245,10 @@ impl PaneNode {
         match self {
             PaneNode::Leaf { pane_id } => PaneNode::Leaf {
                 pane_id: id_map.get(pane_id).copied().unwrap_or(*pane_id),
+            },
+            PaneNode::PluginPane { pane_id, plugin_id } => PaneNode::PluginPane {
+                pane_id: id_map.get(pane_id).copied().unwrap_or(*pane_id),
+                plugin_id: plugin_id.clone(),
             },
             PaneNode::HSplit { ratio, left, right } => PaneNode::HSplit {
                 ratio: *ratio,
@@ -339,11 +356,11 @@ impl PaneNode {
     /// Returns `true` on success, `false` if `target` was not found.
     pub fn split(&mut self, target: PaneId, axis: Axis, new_id: PaneId) -> bool {
         match self {
-            PaneNode::Leaf { pane_id } => {
+            PaneNode::Leaf { pane_id } | PaneNode::PluginPane { pane_id, .. } => {
                 if *pane_id != target {
                     return false;
                 }
-                let original = PaneNode::Leaf { pane_id: *pane_id };
+                let original = self.clone();
                 let sibling = PaneNode::Leaf { pane_id: new_id };
                 *self = match axis {
                     Axis::Horizontal => PaneNode::HSplit {
@@ -379,17 +396,17 @@ impl PaneNode {
     /// before calling `close`, and refuse the close in that situation.
     pub fn close(&mut self, target: PaneId) -> Option<PaneNode> {
         match self {
-            PaneNode::Leaf { .. } => {
-                // The caller already handles the single-root-leaf case.
+            PaneNode::Leaf { .. } | PaneNode::PluginPane { .. } => {
+                // The caller already handles the single-root-leaf/plugin-pane case.
                 None
             }
             PaneNode::HSplit { left, right, .. } => {
-                // Is the left child a leaf matching target?
-                if matches!(left.as_ref(), PaneNode::Leaf { pane_id } if *pane_id == target) {
+                // Is the left child a leaf or plugin pane matching target?
+                if left.pane_id_if_terminal() == Some(target) {
                     return Some(*right.clone());
                 }
-                // Is the right child a leaf matching target?
-                if matches!(right.as_ref(), PaneNode::Leaf { pane_id } if *pane_id == target) {
+                // Is the right child a leaf or plugin pane matching target?
+                if right.pane_id_if_terminal() == Some(target) {
                     return Some(*left.clone());
                 }
                 // Recurse into left.
@@ -409,10 +426,10 @@ impl PaneNode {
                 None
             }
             PaneNode::VSplit { top, bottom, .. } => {
-                if matches!(top.as_ref(), PaneNode::Leaf { pane_id } if *pane_id == target) {
+                if top.pane_id_if_terminal() == Some(target) {
                     return Some(*bottom.clone());
                 }
-                if matches!(bottom.as_ref(), PaneNode::Leaf { pane_id } if *pane_id == target) {
+                if bottom.pane_id_if_terminal() == Some(target) {
                     return Some(*top.clone());
                 }
                 if top.find_leaf(target) {
@@ -432,13 +449,21 @@ impl PaneNode {
         }
     }
 
+    /// Return the `PaneId` if this node is a `Leaf` or `PluginPane` (i.e. a terminal node).
+    fn pane_id_if_terminal(&self) -> Option<PaneId> {
+        match self {
+            PaneNode::Leaf { pane_id } | PaneNode::PluginPane { pane_id, .. } => Some(*pane_id),
+            _ => None,
+        }
+    }
+
     /// Adjust the split ratio of the split node whose *direct child* is `target`.
     ///
     /// `delta` is added to the ratio; the result is clamped to `[0.05, 0.95]`.
     /// Returns `true` if a split containing `target` was found and adjusted.
     pub fn resize_split(&mut self, target: PaneId, delta: f32) -> bool {
         match self {
-            PaneNode::Leaf { .. } => false,
+            PaneNode::Leaf { .. } | PaneNode::PluginPane { .. } => false,
             PaneNode::HSplit { ratio, left, right, .. } => {
                 if left.find_leaf(target) || right.find_leaf(target) {
                     *ratio = (*ratio + delta).clamp(0.05, 0.95);
@@ -525,7 +550,7 @@ impl PaneNode {
         out: &mut Vec<BorderQuad>,
     ) {
         match self {
-            PaneNode::Leaf { .. } => {}
+            PaneNode::Leaf { .. } | PaneNode::PluginPane { .. } => {}
             PaneNode::HSplit { ratio, left, right } => {
                 let ratio = ratio.clamp(0.0, 1.0);
                 let left_w = ((rect.width - border_px) * ratio).max(0.0);

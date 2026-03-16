@@ -25,12 +25,30 @@ interface types {
         workspace-switched,
     }
 
+    /// Keyboard modifiers state for key-input events.
+    record key-modifiers {
+        ctrl: bool,
+        alt: bool,
+        shift: bool,
+    }
+
     /// A structured plugin event with an associated string payload.
     variant plugin-event {
         pane-opened(string),
         pane-closed(string),
         command-executed(string),
         workspace-switched(string),
+        /// A key press event forwarded to a focused plugin pane.
+        /// key-char: the Unicode character if the key produces one (else absent).
+        /// key-name: a named representation of the key (e.g. "Enter", "Escape", "a").
+        key-input(key-input-payload),
+    }
+
+    /// Payload for the key-input variant.
+    record key-input-payload {
+        key-char: option<string>,
+        key-name: string,
+        modifiers: key-modifiers,
     }
 
     /// Schema describing an MCP tool the plugin provides.
@@ -42,7 +60,7 @@ interface types {
 }
 
 world arcterm-plugin {
-    use types.{color, styled-line, event-kind, plugin-event, tool-schema};
+    use types.{color, styled-line, event-kind, plugin-event, key-input-payload, key-modifiers, tool-schema};
 
     /// Host-provided functions available to the plugin.
     import log: func(msg: string);

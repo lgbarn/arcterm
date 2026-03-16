@@ -13,7 +13,8 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 
 use crate::host::arcterm::plugin::types::{
-    EventKind as WitEventKind, PluginEvent as WitPluginEvent,
+    EventKind as WitEventKind, KeyInputPayload, KeyModifiers, PluginEvent as WitPluginEvent,
+    ToolSchema,
 };
 use crate::manifest::{build_wasi_ctx, PaneAccess, PluginManifest};
 use crate::runtime::{PluginInstance, PluginRuntime};
@@ -21,6 +22,14 @@ use crate::runtime::{PluginInstance, PluginRuntime};
 // ──────────────────────────────────────────────────────────────────
 // Event bus types
 // ──────────────────────────────────────────────────────────────────
+
+/// Keyboard modifiers for key-input events.
+#[derive(Debug, Clone, Default)]
+pub struct KeyInputModifiers {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+}
 
 /// Terminal lifecycle events broadcast to all plugin instances.
 ///
@@ -36,6 +45,14 @@ pub enum PluginEvent {
     CommandExecuted(String),
     /// The active workspace was switched. The string payload is the workspace name.
     WorkspaceSwitched(String),
+    /// A key press forwarded from a focused plugin pane.
+    KeyInput {
+        /// The Unicode character produced by the key, if any.
+        key_char: Option<String>,
+        /// Named representation of the key (e.g. "Enter", "Escape", "a").
+        key_name: String,
+        modifiers: KeyInputModifiers,
+    },
 }
 
 impl PluginEvent {
@@ -46,6 +63,17 @@ impl PluginEvent {
             PluginEvent::PaneClosed(s) => WitPluginEvent::PaneClosed(s.clone()),
             PluginEvent::CommandExecuted(s) => WitPluginEvent::CommandExecuted(s.clone()),
             PluginEvent::WorkspaceSwitched(s) => WitPluginEvent::WorkspaceSwitched(s.clone()),
+            PluginEvent::KeyInput { key_char, key_name, modifiers } => {
+                WitPluginEvent::KeyInput(KeyInputPayload {
+                    key_char: key_char.clone(),
+                    key_name: key_name.clone(),
+                    modifiers: KeyModifiers {
+                        ctrl: modifiers.ctrl,
+                        alt: modifiers.alt,
+                        shift: modifiers.shift,
+                    },
+                })
+            }
         }
     }
 
@@ -56,6 +84,9 @@ impl PluginEvent {
             PluginEvent::PaneClosed(_) => WitEventKind::PaneClosed,
             PluginEvent::CommandExecuted(_) => WitEventKind::CommandExecuted,
             PluginEvent::WorkspaceSwitched(_) => WitEventKind::WorkspaceSwitched,
+            // KeyInput does not map to a subscribable EventKind — it is delivered
+            // directly to the focused plugin pane, not via the broadcast bus.
+            PluginEvent::KeyInput { .. } => WitEventKind::PaneOpened,
         }
     }
 }
@@ -294,6 +325,102 @@ impl PluginManager {
             }
         }
         results
+    }
+
+    // ── Draw buffer access ────────────────────────────────────────────────
+
+    /// Take the current draw buffer for a plugin pane, replacing it with an
+    /// empty vec.  Returns an empty vec if the plugin is not loaded.
+    ///
+    /// Called by the renderer during `RedrawRequested` to obtain the latest
+    /// styled lines from a plugin's `render()` output.
+    pub fn take_draw_buffer(
+        &self,
+        id: &PluginId,
+    ) -> Vec<crate::host::arcterm::plugin::types::StyledLine> {
+        if let Some(lp) = self.plugins.get(id) {
+            if let Ok(mut buf) = lp.draw_buffer.lock() {
+                return std::mem::take(&mut *buf);
+            }
+        }
+        Vec::new()
+    }
+
+    /// Collect all MCP tool schemas from all loaded plugin instances.
+    ///
+    /// Returns a flat list of `ToolSchema` records suitable for serialising
+    /// into an MCP `tools/list` response (JSON-RPC serving deferred to Phase 7).
+    pub fn list_tools(&self) -> Vec<ToolSchema> {
+        let mut tools = Vec::new();
+        for lp in self.plugins.values() {
+            if let Ok(inst) = lp.instance.lock() {
+                let registered = &inst.host_data().registered_tools;
+                tools.extend_from_slice(registered);
+            }
+        }
+        tools
+    }
+
+    /// Send a key-input event directly to a specific plugin instance.
+    ///
+    /// Unlike lifecycle events (which go through the broadcast bus), key events
+    /// are targeted at the focused plugin pane only.  Returns `true` if the
+    /// plugin consumed the event and a re-render is needed.
+    pub fn send_key_input(
+        &self,
+        id: &PluginId,
+        key_char: Option<String>,
+        key_name: String,
+        ctrl: bool,
+        alt: bool,
+        shift: bool,
+    ) -> bool {
+        let Some(lp) = self.plugins.get(id) else { return false };
+
+        let event = WitPluginEvent::KeyInput(KeyInputPayload {
+            key_char,
+            key_name,
+            modifiers: KeyModifiers { ctrl, alt, shift },
+        });
+
+        let instance = Arc::clone(&lp.instance);
+        let draw_buffer = Arc::clone(&lp.draw_buffer);
+        let pane_access = lp.manifest.permissions.panes.clone();
+
+        // Key events are synchronous with the render loop — use block_in_place
+        // to run the WASM call on the current (non-async) thread.
+        let consumed = tokio::task::block_in_place(|| {
+            let mut inst = match instance.lock() {
+                Ok(g) => g,
+                Err(e) => {
+                    log::error!("plugin: key-input: instance lock poisoned: {e}");
+                    return false;
+                }
+            };
+            match inst.call_update(event) {
+                Ok(true) => {
+                    // Re-render if plugin has pane access.
+                    if pane_access != crate::manifest::PaneAccess::None {
+                        match inst.call_render() {
+                            Ok(lines) => {
+                                if let Ok(mut buf) = draw_buffer.lock() {
+                                    *buf = lines;
+                                }
+                            }
+                            Err(e) => log::warn!("plugin: key-input render() error: {e}"),
+                        }
+                    }
+                    true
+                }
+                Ok(false) => false,
+                Err(e) => {
+                    log::warn!("plugin: key-input update() error: {e}");
+                    false
+                }
+            }
+        });
+
+        consumed
     }
 
     // ── Event bus ────────────────────────────────────────────────────────

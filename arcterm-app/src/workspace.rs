@@ -257,6 +257,17 @@ impl WorkspacePaneNode {
                     env: meta.and_then(|m| m.env.clone()),
                 }
             }
+            // Plugin panes are serialised as plain leaves in workspace files.
+            // The plugin_id is not preserved across sessions (plugins are reloaded
+            // at startup independently of the workspace layout).
+            PaneNode::PluginPane { pane_id, .. } => {
+                let meta = pane_metadata.get(pane_id);
+                WorkspacePaneNode::Leaf {
+                    command: meta.and_then(|m| m.command.clone()),
+                    directory: meta.and_then(|m| m.directory.clone()),
+                    env: meta.and_then(|m| m.env.clone()),
+                }
+            }
             PaneNode::HSplit { ratio, left, right } => WorkspacePaneNode::HSplit {
                 ratio: *ratio,
                 left: Box::new(WorkspacePaneNode::from_pane_tree(left, pane_metadata)),
