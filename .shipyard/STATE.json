@@ -1,7 +1,7 @@
 {
-  "phase": 12,
+  "phase": 13,
   "status": "planned",
-  "position": "Phase 12 planned, ready for build",
-  "message": "5 plans across 4 waves. Engine swap: alacritty_terminal migration.",
-  "updated_at": "2026-03-16T21:00:00Z"
+  "position": "Phase 13 planned, ready for build",
+  "message": "2 plans across 2 waves. Dirty-row cache, frame pacing, latency measurement.",
+  "updated_at": "2026-03-16T23:45:00Z"
 }
