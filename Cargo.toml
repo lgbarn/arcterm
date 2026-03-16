@@ -13,6 +13,9 @@ resolver = "2"
 edition = "2024"
 version = "0.1.0"
 license = "MIT"
+description = "GPU-rendered AI terminal emulator"
+repository = "https://github.com/lgbarn/arcterm"
+homepage = "https://github.com/lgbarn/arcterm"
 
 [workspace.dependencies]
 vte = "0.15"
@@ -41,3 +44,8 @@ arcterm-core = { path = "arcterm-core" }
 arcterm-vt = { path = "arcterm-vt" }
 arcterm-pty = { path = "arcterm-pty" }
 arcterm-render = { path = "arcterm-render" }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
