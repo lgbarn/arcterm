@@ -3,6 +3,36 @@
 use winit::event::KeyEvent;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
+/// Map a character pressed with Ctrl held to the corresponding PTY byte sequence.
+///
+/// Handles the standard ASCII control-character encoding:
+/// - `a`–`z` → `0x01`–`0x1a`
+/// - `[` → `0x1b` (ESC)
+/// - `\` → `0x1c` (FS / SIGQUIT)
+/// - `]` → `0x1d` (GS / telnet escape)
+///
+/// Returns `None` for characters that do not have a Ctrl mapping.
+pub(crate) fn ctrl_char_byte(ch: char) -> Option<Vec<u8>> {
+    let lower = ch.to_ascii_lowercase();
+    if lower.is_ascii_alphabetic() {
+        let byte = lower as u8 - b'a' + 1;
+        return Some(vec![byte]);
+    }
+    // Ctrl+[ → ESC
+    if lower == '[' {
+        return Some(vec![0x1b]);
+    }
+    // Ctrl+\ → FS (0x1c, SIGQUIT in terminals)
+    if lower == '\\' {
+        return Some(vec![0x1c]);
+    }
+    // Ctrl+] → GS (0x1d, telnet escape)
+    if lower == ']' {
+        return Some(vec![0x1d]);
+    }
+    None
+}
+
 /// Translate a winit `KeyEvent` (assumed pressed) into a PTY byte sequence.
 ///
 /// `modifiers` — current keyboard modifier state.
@@ -18,27 +48,10 @@ pub fn translate_key_event(
     let ctrl = modifiers.control_key();
 
     match &event.logical_key {
-        // Ctrl+a..z → 0x01..0x1a (control codes).
+        // Ctrl+a..z and Ctrl+[, Ctrl+\, Ctrl+] → control byte sequences.
         Key::Character(s) if ctrl => {
             let ch = s.chars().next()?;
-            let lower = ch.to_ascii_lowercase();
-            if lower.is_ascii_alphabetic() {
-                let byte = lower as u8 - b'a' + 1;
-                return Some(vec![byte]);
-            }
-            // Ctrl+[ → ESC
-            if lower == '[' {
-                return Some(vec![0x1b]);
-            }
-            // Ctrl+\ → FS (0x1c, SIGQUIT in terminals)
-            if lower == '\\' {
-                return Some(vec![0x1c]);
-            }
-            // Ctrl+] → GS (0x1d, telnet escape)
-            if lower == ']' {
-                return Some(vec![0x1d]);
-            }
-            None
+            ctrl_char_byte(ch)
         }
 
         // Printable characters: prefer event.text (handles dead-key composition).
@@ -104,7 +117,7 @@ fn translate_named(key: &NamedKey, app_cursor_keys: bool) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::translate_named_key;
+    use super::{ctrl_char_byte, translate_named_key};
     use winit::keyboard::NamedKey;
 
     // ---- Normal (non-app) cursor key mode ----
@@ -207,5 +220,29 @@ mod tests {
         let app    = translate_named_key(&NamedKey::F1, true).unwrap();
         assert_eq!(normal, b"\x1bOP");
         assert_eq!(app, b"\x1bOP");
+    }
+
+    // ---- Ctrl character regression tests (ISSUE-003) ----
+
+    /// Ctrl+\ must produce FS (0x1c), used by terminal as SIGQUIT.
+    #[test]
+    fn ctrl_backslash_sends_0x1c() {
+        let bytes = ctrl_char_byte('\\').unwrap();
+        assert_eq!(bytes, vec![0x1c], "Ctrl+\\ must send 0x1c (FS / SIGQUIT)");
+    }
+
+    /// Ctrl+] must produce GS (0x1d), used by telnet as escape.
+    #[test]
+    fn ctrl_bracket_right_sends_0x1d() {
+        let bytes = ctrl_char_byte(']').unwrap();
+        assert_eq!(bytes, vec![0x1d], "Ctrl+] must send 0x1d (GS / telnet escape)");
+    }
+
+    /// Ctrl+a must produce SOH (0x01) — verifies the alphabetic path still
+    /// works correctly after the helper extraction refactor.
+    #[test]
+    fn ctrl_a_sends_0x01() {
+        let bytes = ctrl_char_byte('a').unwrap();
+        assert_eq!(bytes, vec![0x01], "Ctrl+a must send 0x01 (SOH)");
     }
 }
