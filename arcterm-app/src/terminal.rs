@@ -38,9 +38,6 @@ use alacritty_terminal::vte::ansi;
 
 use arcterm_render::ContentType;
 use tokio::sync::mpsc;
-// Temporary bridge: arcterm_core::Cell used by AutoDetector (removed in Wave 3)
-#[allow(unused_imports)]
-use arcterm_core;
 
 use crate::kitty_types::{KittyChunkAssembler, KittyCommand, parse_kitty_command};
 use crate::osc7770::StructuredContentAccumulator;
@@ -580,13 +577,13 @@ impl Terminal {
     /// all `Term` read/write access from the main thread.
     pub fn with_term<R>(&self, f: impl FnOnce(&Term<ArcTermEventListener>) -> R) -> R {
         let guard = self.term.lock();
-        f(&*guard)
+        f(&guard)
     }
 
     /// Run a closure with a mutable locked `Term` reference.
     pub fn with_term_mut<R>(&self, f: impl FnOnce(&mut Term<ArcTermEventListener>) -> R) -> R {
         let mut guard = self.term.lock();
-        f(&mut *guard)
+        f(&mut guard)
     }
 
     /// Acquire the `FairMutex` guard for direct `Term` access.
@@ -674,15 +671,8 @@ impl Terminal {
 
     /// Returns `true` if the child process has exited.
     pub fn has_exited(&self) -> bool {
-        self.exit_code.lock().ok().map_or(false, |g| g.is_some())
+        self.exit_code.lock().is_ok_and(|g| g.is_some())
     }
-
-    // ── Grid data extraction (compatibility bridge) ────────────────────────────
-    //
-    // These methods extract data from `Arc<FairMutex<Term>>` and return owned
-    // values so that callers do not need to hold the `Term` lock across complex
-    // logic. They bridge the gap between the old `arcterm_core::Grid` API and
-    // the new alacritty `Term` API until Wave 3 rewrites the renderer.
 
     /// Returns the current cursor row in the viewport (0-based).
     pub fn cursor_row(&self) -> usize {
@@ -722,81 +712,6 @@ impl Terminal {
         })
     }
 
-    /// Extract visible cells as `Vec<Vec<arcterm_core::Cell>>` for use by
-    /// the `AutoDetector` which currently expects the old Cell type.
-    ///
-    /// This is a bridge method that will be removed when `detect.rs` is updated
-    /// to work with text rows directly (Plan 3.1).
-    pub fn grid_cells_for_detect(&self) -> Vec<Vec<arcterm_core::Cell>> {
-        use alacritty_terminal::grid::Dimensions;
-        self.with_term(|t| {
-            let cols = t.columns();
-            let rows = t.screen_lines();
-            let mut result: Vec<Vec<arcterm_core::Cell>> =
-                vec![vec![arcterm_core::Cell::default(); cols]; rows];
-
-            let content = t.renderable_content();
-            for indexed in content.display_iter {
-                let row = indexed.point.line.0;
-                let col = indexed.point.column.0;
-                if row >= 0 && (row as usize) < rows && col < cols {
-                    result[row as usize][col].c = indexed.c;
-                }
-            }
-            result
-        })
-    }
-
-    /// Extract the visible grid as an `arcterm_core::Grid` for the Wave-2 renderer bridge.
-    ///
-    /// This converts the alacritty `Term` renderable content into the old `arcterm_core::Grid`
-    /// format so that `render_frame` / `PaneRenderInfo` can consume it without changes.
-    /// This bridge will be removed in Plan 3.1 when the renderer is rewritten.
-    pub fn to_arcterm_grid(&self) -> arcterm_core::Grid {
-        use alacritty_terminal::grid::Dimensions;
-        use arcterm_core::{CellAttrs, Color, CursorPos as CoreCursorPos, Grid, GridSize};
-        self.with_term(|t| {
-            let cols = t.columns();
-            let rows = t.screen_lines();
-            let mut grid = Grid::new(GridSize::new(rows, cols));
-
-            // Fill visible cells from renderable content.
-            let content = t.renderable_content();
-            for indexed in content.display_iter {
-                let row = indexed.point.line.0;
-                let col = indexed.point.column.0;
-                if row >= 0 && (row as usize) < rows && col < cols {
-                    let cell = &mut grid.cells[row as usize][col];
-                    cell.c = indexed.c;
-                    // Map alacritty fg/bg colors to arcterm_core::Color.
-                    use alacritty_terminal::vte::ansi::Color as VteColor;
-                    cell.attrs.fg = match indexed.fg {
-                        VteColor::Named(n) => Color::Indexed(n as u8),
-                        VteColor::Indexed(i) => Color::Indexed(i),
-                        VteColor::Spec(rgb) => Color::Rgb(rgb.r, rgb.g, rgb.b),
-                    };
-                    cell.attrs.bg = match indexed.bg {
-                        VteColor::Named(n) => Color::Indexed(n as u8),
-                        VteColor::Indexed(i) => Color::Indexed(i),
-                        VteColor::Spec(rgb) => Color::Rgb(rgb.r, rgb.g, rgb.b),
-                    };
-                    use alacritty_terminal::term::cell::Flags;
-                    cell.attrs.bold = indexed.flags.contains(Flags::BOLD);
-                    cell.attrs.italic = indexed.flags.contains(Flags::ITALIC);
-                    cell.attrs.underline = indexed.flags.contains(Flags::UNDERLINE);
-                }
-            }
-
-            // Set cursor position.
-            let cursor = content.cursor;
-            let cur_row = cursor.point.line.0.max(0) as usize;
-            let cur_col = cursor.point.column.0;
-            grid.cursor = CoreCursorPos { row: cur_row.min(rows.saturating_sub(1)), col: cur_col.min(cols.saturating_sub(1)) };
-
-            grid
-        })
-    }
-
     /// Returns the current scroll offset (0 = no scroll, positive = scrolled back).
     pub fn scroll_offset(&self) -> usize {
         self.with_term(|t| {
@@ -829,14 +744,6 @@ impl Terminal {
     pub fn app_cursor_keys(&self) -> bool {
         use alacritty_terminal::term::TermMode;
         self.with_term(|t| t.mode().contains(TermMode::APP_CURSOR))
-    }
-
-    /// No-op: pending replies are handled by `ArcTermEventListener::send_event(PtyWrite)`.
-    ///
-    /// This method exists only for source compatibility with code that calls
-    /// `take_pending_replies()` on the old `Terminal`. It always returns an empty `Vec`.
-    pub fn take_pending_replies(&mut self) -> Vec<Vec<u8>> {
-        Vec::new()
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
@@ -1037,15 +944,10 @@ fn cwd_for_pid(pid: u32) -> Option<PathBuf> {
         }
         // PROC_PIDVNODEPATHINFO = 9
         const PROC_PIDVNODEPATHINFO: i32 = 9;
-        // struct proc_vnodepathinfo has two vnode_info_path fields of 1024 bytes each.
-        // Total size is 2 * (sizeof(struct vnode_info) + MAXPATHLEN) = approx 2096 bytes.
-        // We use a conservative oversized buffer.
-        const MAXPATHLEN: usize = 1024;
-        // Minimum structure: two vinfo_path structs.
-        // We use a raw buffer and read the cwd path from offset sizeof(vnode_info_path).
-        // vnode_info_path = vnode_info (64 bytes) + char path[MAXPATHLEN] (1024 bytes) = 1088 bytes
+        // struct proc_vnodepathinfo has two vnode_info_path fields.
+        // vnode_info_path = vnode_info (64 bytes) + char path[1024] = 1088 bytes.
         // cwd path starts at offset 1088.
-        const VNODE_INFO_PATH_SIZE: usize = 1088;
+        const VNODE_INFO_PATH_SIZE: usize = 1088; // 64 (vnode_info) + 1024 (MAXPATHLEN)
         const BUF_SIZE: usize = VNODE_INFO_PATH_SIZE * 2;
 
         let mut buf = [0u8; BUF_SIZE];

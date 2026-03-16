@@ -257,9 +257,8 @@ impl TextRenderer {
         buf_vec.truncate(num_rows);
 
         // Shape each row.
-        for row_idx in 0..num_rows {
+        for (row_idx, buf) in buf_vec.iter_mut().enumerate() {
             let row = snapshot.row(row_idx);
-            let buf = &mut buf_vec[row_idx];
             let width_px = cell_w * row.len() as f32;
             buf.set_size(
                 &mut self.font_system,

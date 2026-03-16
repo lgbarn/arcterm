@@ -203,7 +203,6 @@ use winit::event_loop::ControlFlow;
 #[cfg(feature = "latency-trace")]
 use std::time::Instant as TraceInstant;
 
-use arcterm_core::GridSize;
 use arcterm_render::{
     ContentType, HighlightEngine, OverlayQuad, PaneRenderInfo, PluginPaneRenderInfo, PluginStyledLine,
     RenderPalette, Renderer, StructuredBlock,
@@ -816,17 +815,17 @@ impl AppState {
         (cell_w, cell_h)
     }
 
-    /// Given a rect, compute the grid size (rows × cols) for a pane.
-    fn grid_size_for_rect(&self, rect: PixelRect) -> GridSize {
+    /// Given a rect, compute the grid size (rows, cols) for a pane.
+    fn grid_size_for_rect(&self, rect: PixelRect) -> (usize, usize) {
         let sf = self.window.scale_factor() as f32;
         let cell_w = self.renderer.text.cell_size.width * sf;
         let cell_h = self.renderer.text.cell_size.height * sf;
         if cell_w <= 0.0 || cell_h <= 0.0 || rect.width <= 0.0 || rect.height <= 0.0 {
-            return GridSize::new(1, 1);
+            return (1, 1);
         }
         let cols = (rect.width / cell_w).floor() as usize;
         let rows = (rect.height / cell_h).floor() as usize;
-        GridSize::new(rows.max(1), cols.max(1))
+        (rows.max(1), cols.max(1))
     }
 
     // -----------------------------------------------------------------------
@@ -1454,7 +1453,7 @@ impl ApplicationHandler for App {
             };
 
             // Check if the terminal has exited.
-            let has_exited = state.panes.get(&id).map_or(false, |t| t.has_exited());
+            let has_exited = state.panes.get(&id).is_some_and(|t| t.has_exited());
             if has_exited {
                 log::info!("PTY child exited for pane {:?}", id);
                 closed_panes.push(id);
@@ -1682,11 +1681,11 @@ impl ApplicationHandler for App {
         if got_data {
             // Clear selection and scroll-to-live on the focused pane only.
             let focused = state.focused_pane();
-            if let Some(terminal) = state.panes.get_mut(&focused) {
-                if terminal.scroll_offset() > 0 {
-                    state.selection.clear();
-                    terminal.set_scroll_offset(0);
-                }
+            if let Some(terminal) = state.panes.get_mut(&focused)
+                && terminal.scroll_offset() > 0
+            {
+                state.selection.clear();
+                terminal.set_scroll_offset(0);
             }
             state.window.request_redraw();
             state.idle_cycles = 0;
@@ -1752,9 +1751,9 @@ impl ApplicationHandler for App {
                 let rects = state.compute_pane_rects();
                 let (cell_w, cell_h) = state.cell_dims();
                 for (id, rect) in &rects {
-                    let new_size = state.grid_size_for_rect(*rect);
+                    let (new_rows, new_cols) = state.grid_size_for_rect(*rect);
                     if let Some(terminal) = state.panes.get_mut(id) {
-                        terminal.resize(new_size.cols, new_size.rows, cell_w, cell_h);
+                        terminal.resize(new_cols, new_rows, cell_w, cell_h);
                     }
                 }
                 state.window.request_redraw();
@@ -2895,13 +2894,13 @@ impl ApplicationHandler for App {
                                 },
                             };
                             let new_size = state.grid_size_for_rect(new_rect);
-                            let new_id = state.spawn_pane((new_size.rows, new_size.cols));
+                            let new_id = state.spawn_pane(new_size);
 
                             // Also resize the original pane to its new half.
                             let orig_size = state.grid_size_for_rect(new_rect);
                             let (cell_w, cell_h) = state.cell_dims();
                             if let Some(terminal) = state.panes.get_mut(&focused) {
-                                terminal.resize(orig_size.cols, orig_size.rows, cell_w, cell_h);
+                                terminal.resize(orig_size.1, orig_size.0, cell_w, cell_h);
                             }
 
                             // Update the layout tree.
@@ -3210,11 +3209,11 @@ fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action
                 Axis::Vertical => PixelRect { height: focused_rect.height / 2.0, ..focused_rect },
             };
             let new_size = state.grid_size_for_rect(new_rect);
-            let new_id = state.spawn_pane((new_size.rows, new_size.cols));
+            let new_id = state.spawn_pane(new_size);
             let orig_size = state.grid_size_for_rect(new_rect);
             let (cell_w, cell_h) = state.cell_dims();
             if let Some(terminal) = state.panes.get_mut(&focused_id) {
-                terminal.resize(orig_size.cols, orig_size.rows, cell_w, cell_h);
+                terminal.resize(orig_size.1, orig_size.0, cell_w, cell_h);
             }
             let active = state.tab_manager.active;
             state.tab_layouts[active].split(focused_id, axis, new_id);

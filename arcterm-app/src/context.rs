@@ -57,6 +57,7 @@ pub struct PaneContext {
     /// Ring buffer of recent output lines.
     pub output_ring: VecDeque<String>,
     /// Maximum number of lines retained in `output_ring`.
+    #[allow(dead_code)]
     pub ring_capacity: usize,
 }
 
@@ -73,6 +74,7 @@ impl PaneContext {
     }
 
     /// Push a line into the output ring buffer, evicting the oldest when full.
+    #[allow(dead_code)]
     pub fn push_output_line(&mut self, line: String) {
         if self.output_ring.len() >= self.ring_capacity {
             self.output_ring.pop_front();

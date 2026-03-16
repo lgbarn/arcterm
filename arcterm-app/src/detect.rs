@@ -43,11 +43,13 @@ impl AutoDetector {
 
     /// Enable or disable detection. When disabled, `scan_rows` always returns
     /// an empty `Vec`.
+    #[allow(dead_code)]
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
     }
 
     /// Reset the scan cursor to row 0. Call on terminal clear or alt-screen toggle.
+    #[allow(dead_code)]
     pub fn reset(&mut self) {
         self.last_scanned_row = 0;
     }
