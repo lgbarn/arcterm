@@ -517,6 +517,11 @@ struct AppState {
     pane_contexts: HashMap<PaneId, context::PaneContext>,
     /// The pane that most recently received PTY data while running an AI agent.
     last_ai_pane: Option<PaneId>,
+    /// Pending error contexts from shell panes awaiting injection into the AI pane.
+    ///
+    /// Populated when a non-zero exit code is received and an AI pane exists.
+    /// Drained and injected into the AI pane's PTY input on Leader+a navigation.
+    pending_errors: Vec<context::ErrorContext>,
 
     // ---- plugin system ----
     /// Plugin manager: owns all loaded plugin instances.
@@ -1120,6 +1125,7 @@ impl ApplicationHandler for App {
             ai_states,
             pane_contexts,
             last_ai_pane: None,
+            pending_errors: Vec::new(),
             plugin_manager,
             plugin_event_tx,
             plan_strip,
@@ -1348,15 +1354,55 @@ impl ApplicationHandler for App {
                             }
                         }
 
+                        // Capture output lines into the ring buffer (best-effort, line-split).
+                        {
+                            let ctx = state.pane_contexts.entry(id).or_insert_with(|| {
+                                context::PaneContext::new(200)
+                            });
+                            for line in bytes.split(|&b| b == b'\n') {
+                                if !line.is_empty() {
+                                    // Strip trailing CR and non-printable VT sequences
+                                    // from the raw line before storing it.
+                                    let clean: String = line
+                                        .iter()
+                                        .filter(|&&b| b >= 0x20 && b < 0x80)
+                                        .map(|&b| b as char)
+                                        .collect();
+                                    if !clean.is_empty() {
+                                        ctx.push_output_line(clean);
+                                    }
+                                }
+                            }
+                        }
+
                         // Drain OSC 133 exit codes into PaneContext.
-                        if let Some(terminal) = state.panes.get_mut(&id) {
-                            let exit_codes = terminal.take_exit_codes();
+                        // When a non-zero exit code is received and an AI pane exists,
+                        // store an ErrorContext in pending_errors for injection on Leader+a.
+                        {
+                            let (exit_codes, cwd) =
+                                if let Some(terminal) = state.panes.get_mut(&id) {
+                                    (terminal.take_exit_codes(), terminal.cwd())
+                                } else {
+                                    (Vec::new(), None)
+                                };
                             if !exit_codes.is_empty() {
-                                let ctx = state.pane_contexts.entry(id).or_insert_with(|| {
-                                    context::PaneContext::new(200)
-                                });
-                                if let Some(&last_code) = exit_codes.last() {
+                                let last_code = *exit_codes.last().unwrap();
+                                {
+                                    let ctx = state.pane_contexts.entry(id).or_insert_with(|| {
+                                        context::PaneContext::new(200)
+                                    });
                                     ctx.set_exit_code(last_code);
+                                }
+                                // Queue error context for AI pane injection (privacy-safe:
+                                // only injected when user explicitly navigates via Leader+a).
+                                if last_code != 0 && state.last_ai_pane.is_some() {
+                                    let maybe_err = state
+                                        .pane_contexts
+                                        .get(&id)
+                                        .and_then(|ctx| ctx.error_context_for(id, cwd));
+                                    if let Some(err_ctx) = maybe_err {
+                                        state.pending_errors.push(err_ctx);
+                                    }
                                 }
                             }
                         }
@@ -2615,9 +2661,29 @@ impl ApplicationHandler for App {
 
                         KeyAction::JumpToAiPane => {
                             // Jump to the pane that most recently ran an AI agent.
-                            // Will be fully wired when plan.rs state is available (Task 3).
+                            // If pending_errors are queued, drain and inject them into the
+                            // AI pane's PTY input as OSC 7770 error blocks.
                             if let Some(ai_id) = state.last_ai_pane {
                                 if state.panes.contains_key(&ai_id) {
+                                    // Drain and inject any pending error contexts.
+                                    let errors =
+                                        std::mem::take(&mut state.pending_errors);
+                                    if !errors.is_empty() {
+                                        if let Some(ai_terminal) =
+                                            state.panes.get_mut(&ai_id)
+                                        {
+                                            for err_ctx in &errors {
+                                                let payload =
+                                                    context::format_error_osc7770(err_ctx);
+                                                ai_terminal.write_input(&payload);
+                                            }
+                                            log::info!(
+                                                "JumpToAiPane: injected {} error context(s) into pane {:?}",
+                                                errors.len(),
+                                                ai_id
+                                            );
+                                        }
+                                    }
                                     state.set_focused_pane(ai_id);
                                     state.selection.clear();
                                     state.window.request_redraw();
