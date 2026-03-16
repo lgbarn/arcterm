@@ -349,6 +349,14 @@ Non-blocking findings logged by the review agent. Resolve before the phase close
 - **Description:** `pub pane_row_hashes: HashMap<usize, Vec<u64>>` exposes the dirty-row cache as a fully public field. External callers can insert, remove, or modify entries without going through `resize()` or `set_palette()`, which are the only two code paths that guarantee cache invalidation on layout or color changes. Stale hashes after a palette swap would cause rows to render with wrong colors until cell content happens to change.
 - **Remediation:** Change `pub pane_row_hashes` to `pub(crate) pane_row_hashes`. If crates outside `arcterm-render` need to observe or clear the cache, expose a `clear_row_hashes()` method on `Renderer` instead of the raw field.
 
+### ISSUE-026 — Residual `unwrap_or` fallback on `dir_canonical` in `load_from_dir`
+
+- **Severity:** Important
+- **Source:** REVIEW-1.2
+- **File:** `arcterm-plugin/src/manager.rs:256`
+- **Description:** `let dir_canonical = dir.canonicalize().unwrap_or(dir.to_path_buf())` silently falls back to the raw path if the plugin directory cannot be canonicalized (e.g., a permission error). After ISSUE-018 fixed `wasm_canonical` to propagate errors explicitly, this line is the remaining `unwrap_or` in the same path. If `dir.canonicalize()` fails for a permission reason while `wasm_path.canonicalize()` succeeds, the subsequent `!wasm_canonical.starts_with(&dir_canonical)` comparison compares a canonical path against a raw path, producing a false positive "resolves outside the plugin directory" error that obscures the actual cause.
+- **Remediation:** Apply the same explicit error pattern: `let dir_canonical = dir.canonicalize().map_err(|e| anyhow::anyhow!("cannot canonicalize plugin directory '{}': {e}", dir.display()))?;`.
+
 ---
 
 ## Resolved

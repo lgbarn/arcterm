@@ -183,3 +183,8 @@
 - [2026-03-16] PLAN-2.1 complete: Terminal wrapper rewrite (alacritty_terminal direct parser), AppState rewire, OSC 7770 text capture — 322 tests pass
 - [2026-03-16T22:46:03Z] Session ended during build (may need /shipyard:resume)
 - [2026-03-16T22:46:21Z] Session ended during build (may need /shipyard:resume)
+- [2026-03-16T23:08:30Z] Session ended during build (may need /shipyard:resume)
+- [2026-03-16T23:10:04Z] Session ended during build (may need /shipyard:resume)
+- [2026-03-16T23:14:00Z] Session ended during build (may need /shipyard:resume)
+- [2026-03-16T23:15:08Z] Session ended during build (may need /shipyard:resume)
+- [2026-03-16T23:15:33Z] Session ended during build (may need /shipyard:resume)
