@@ -317,7 +317,7 @@ dependencies = [
 name = "arcterm-render"
 version = "0.1.0"
 dependencies = [
- "arcterm-core",
+ "alacritty_terminal",
  "bytemuck",
  "env_logger",
  "glyphon",
@@ -327,6 +327,7 @@ dependencies = [
  "pulldown-cmark",
  "serde_json",
  "syntect",
+ "vte",
  "wgpu",
  "winit",
 ]

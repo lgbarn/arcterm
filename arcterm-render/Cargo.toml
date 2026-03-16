@@ -15,7 +15,8 @@ glyphon.workspace = true
 pollster.workspace = true
 log.workspace = true
 env_logger.workspace = true
-arcterm-core = { path = "../arcterm-core" }
+alacritty_terminal.workspace = true
+vte.workspace = true
 bytemuck = { version = "1", features = ["derive"] }
 syntect.workspace = true
 pulldown-cmark.workspace = true

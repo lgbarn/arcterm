@@ -3,13 +3,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arcterm_core::{Color as TermColor, Grid, GridSize};
 use winit::window::Window;
 
 use crate::gpu::GpuState;
 use crate::image_quad::{ImageQuadRenderer, ImageTexture};
 use crate::palette::RenderPalette;
 use crate::quad::{QuadInstance, QuadRenderer};
+use crate::snapshot::{RenderSnapshot, SnapshotColor};
 use crate::structured::StructuredBlock;
 use crate::text::{ClipRect, PluginStyledLine, TextRenderer, ansi_color_to_glyphon};
 
@@ -19,8 +19,8 @@ use crate::text::{ClipRect, PluginStyledLine, TextRenderer, ansi_color_to_glypho
 
 /// Describes a single pane to render in a multi-pane frame.
 pub struct PaneRenderInfo<'a> {
-    /// The terminal grid to render.
-    pub grid: &'a Grid,
+    /// The terminal snapshot to render.
+    pub snapshot: &'a RenderSnapshot,
     /// Bounding rectangle in physical pixels: [x, y, width, height].
     pub rect: [f32; 4],
     /// Structured content blocks to overlay on top of the plain grid text.
@@ -119,16 +119,16 @@ impl Renderer {
         self.text.row_hashes.clear();
     }
 
-    /// Render a full terminal grid frame.
+    /// Render a full terminal snapshot frame.
     ///
     /// Delegates to [`render_multipane`] with a single pane that fills the
     /// entire surface.
-    pub fn render_frame(&mut self, grid: &Grid, scale_factor: f64) {
+    pub fn render_frame(&mut self, snapshot: &RenderSnapshot, scale_factor: f64) {
         let w = self.gpu.surface_config.width as f32;
         let h = self.gpu.surface_config.height as f32;
 
         let pane = PaneRenderInfo {
-            grid,
+            snapshot,
             rect: [0.0, 0.0, w, h],
             structured_blocks: &[],
         };
@@ -177,7 +177,7 @@ impl Renderer {
             };
 
             let pane_quads = build_quad_instances_at(
-                pane.grid,
+                pane.snapshot,
                 &self.text.cell_size,
                 sf,
                 &self.palette,
@@ -187,7 +187,7 @@ impl Renderer {
             all_quads.extend_from_slice(&pane_quads);
 
             self.text.prepare_grid_at(
-                pane.grid,
+                pane.snapshot,
                 px,
                 py,
                 Some(clip),
@@ -358,16 +358,18 @@ impl Renderer {
     }
 
     /// Calculate how many columns × rows fit the window at the given scale.
-    pub fn grid_size_for_window(&self, width: u32, height: u32, scale_factor: f64) -> GridSize {
+    ///
+    /// Returns `(rows, cols)`.
+    pub fn grid_size_for_window(&self, width: u32, height: u32, scale_factor: f64) -> (usize, usize) {
         let sf = scale_factor as f32;
         let cell_w = self.text.cell_size.width * sf;
         let cell_h = self.text.cell_size.height * sf;
         if cell_w <= 0.0 || cell_h <= 0.0 {
-            return GridSize::new(24, 80);
+            return (24, 80);
         }
         let cols = ((width as f32) / cell_w).floor() as usize;
         let rows = ((height as f32) / cell_h).floor() as usize;
-        GridSize::new(rows.max(1), cols.max(1))
+        (rows.max(1), cols.max(1))
     }
 }
 
@@ -375,40 +377,38 @@ impl Renderer {
 // Quad instance builders
 // ---------------------------------------------------------------------------
 
-/// Convert the grid into a list of QuadInstances for non-default backgrounds
-/// and the cursor block, offset to a specific pane origin.
+/// Convert a `RenderSnapshot` into a list of `QuadInstance`s for non-default
+/// backgrounds and the cursor block, offset to a specific pane origin.
 pub fn build_quad_instances_at(
-    grid: &Grid,
+    snapshot: &RenderSnapshot,
     cell_size: &crate::text::CellSize,
     scale_factor: f32,
     palette: &RenderPalette,
     offset_x: f32,
     offset_y: f32,
 ) -> Vec<QuadInstance> {
-    let rows = grid.rows_for_viewport();
-    let cursor = grid.cursor;
-    let cursor_visible = grid.modes.cursor_visible;
     let cell_w = cell_size.width * scale_factor;
     let cell_h = cell_size.height * scale_factor;
 
     let mut quads: Vec<QuadInstance> = Vec::new();
 
-    for (row_idx, row) in rows.iter().enumerate() {
+    for row_idx in 0..snapshot.rows {
         let y = offset_y + row_idx as f32 * cell_h;
-        for (col_idx, cell) in row.iter().enumerate() {
+        for col_idx in 0..snapshot.cols {
+            let cell = &snapshot.cells[row_idx * snapshot.cols + col_idx];
             let x = offset_x + col_idx as f32 * cell_w;
-            let is_cursor = cursor_visible && row_idx == cursor.row && col_idx == cursor.col;
+            let is_cursor =
+                snapshot.cursor_visible && row_idx == snapshot.cursor_row && col_idx == snapshot.cursor_col;
 
             // Determine effective fg/bg (swapped for reverse attribute).
-            let (eff_fg, eff_bg) = if cell.attrs.reverse {
-                (cell.attrs.bg, cell.attrs.fg)
+            let (eff_fg, eff_bg) = if cell.inverse {
+                (cell.bg, cell.fg)
             } else {
-                (cell.attrs.fg, cell.attrs.bg)
+                (cell.fg, cell.bg)
             };
 
             // Emit a background quad for non-default background colors.
-            let bg_is_default = matches!(eff_bg, TermColor::Default);
-            if !bg_is_default {
+            if !matches!(eff_bg, SnapshotColor::Default) {
                 quads.push(QuadInstance {
                     rect: [x, y, cell_w, cell_h],
                     color: term_color_to_f32(eff_bg, false, palette),
@@ -417,7 +417,7 @@ pub fn build_quad_instances_at(
 
             // Cursor block: draw on top of (possibly colored) background.
             if is_cursor {
-                let block_color = if matches!(eff_fg, TermColor::Default) {
+                let block_color = if matches!(eff_fg, SnapshotColor::Default) {
                     palette.cursor_f32()
                 } else {
                     term_color_to_f32(eff_fg, true, palette)
@@ -433,8 +433,8 @@ pub fn build_quad_instances_at(
     quads
 }
 
-/// Convert a terminal Color to an RGBA f32 array.
-fn term_color_to_f32(color: TermColor, is_fg: bool, palette: &RenderPalette) -> [f32; 4] {
+/// Convert a `SnapshotColor` to an RGBA f32 array for the GPU quad pipeline.
+fn term_color_to_f32(color: SnapshotColor, is_fg: bool, palette: &RenderPalette) -> [f32; 4] {
     let g = ansi_color_to_glyphon(color, is_fg, palette);
     // Convert sRGB u8 → linear f32 for the GPU quad pipeline.
     [
