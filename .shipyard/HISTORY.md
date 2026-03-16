@@ -123,3 +123,10 @@
 - **Phase:** 8
 - **Status:** planned
 - **Message:** 3 plans across 2 waves. Verdict: PASS WITH AMENDMENTS. Config overlays, cross-pane search, performance optimization, release packaging, documentation.
+
+## 2026-03-16 — Phase 8 Build Complete — ALL PHASES DONE
+- **Phase:** 8
+- **Status:** complete
+- **Tests:** 562 passing (298 app, 55 core, 12 plugin, 3 plugin-int, 10 pty, 38 render, 146 vt)
+- **Tag:** v0.1.0
+- **Key Features:** Config overlays + flatten, cross-pane regex search, lazy syntect init, deferred plugin loading, man page, cargo-dist release workflow, example configs
