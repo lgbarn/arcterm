@@ -3398,7 +3398,7 @@ fn palette_from_config(cfg: &config::ArctermConfig) -> RenderPalette {
     let app_palette = colors::ColorPalette::by_name(&cfg.color_scheme)
         .unwrap_or_else(|| {
             log::warn!(
-                "config: unknown color_scheme {:?}, falling back to catppuccin-mocha",
+                "config: unknown color_scheme {:?}, falling back to cool-night",
                 cfg.color_scheme
             );
             colors::ColorPalette::default()

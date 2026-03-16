@@ -29,7 +29,7 @@ pub struct ColorPalette {
 
 impl Default for ColorPalette {
     fn default() -> Self {
-        Self::catppuccin_mocha()
+        Self::cool_night()
     }
 }
 
@@ -41,10 +41,11 @@ impl ColorPalette {
     /// Return the named palette, or `None` if the name is unrecognised.
     ///
     /// Supported names (case-sensitive):
-    /// `catppuccin-mocha`, `dracula`, `solarized-dark`, `solarized-light`,
+    /// `cool-night` (default), `catppuccin-mocha`, `dracula`, `solarized-dark`, `solarized-light`,
     /// `nord`, `tokyo-night`, `gruvbox-dark`, `one-dark`.
     pub fn by_name(name: &str) -> Option<Self> {
         match name {
+            "cool-night"       => Some(Self::cool_night()),
             "catppuccin-mocha" => Some(Self::catppuccin_mocha()),
             "dracula"          => Some(Self::dracula()),
             "solarized-dark"   => Some(Self::solarized_dark()),
@@ -307,6 +308,33 @@ impl ColorPalette {
     }
 
     /// One Dark — Atom-inspired dark scheme.
+    /// Cool-Night — deep blue-black, vibrant accents (from Ghostty/WezTerm).
+    fn cool_night() -> Self {
+        Self {
+            foreground: (0xcb, 0xe0, 0xf0),
+            background: (0x01, 0x14, 0x23),
+            cursor:     (0x47, 0xff, 0x9c),
+            ansi: [
+                (0x0b, 0x25, 0x3a), // 0  black
+                (0xe8, 0x52, 0x52), // 1  red
+                (0x44, 0xff, 0xb1), // 2  green
+                (0xff, 0xd2, 0x7a), // 3  yellow
+                (0x1f, 0xa8, 0xff), // 4  blue
+                (0xa2, 0x77, 0xff), // 5  magenta
+                (0x24, 0xea, 0xf7), // 6  cyan
+                (0xbe, 0xe5, 0xff), // 7  white
+                (0x4b, 0x6a, 0x87), // 8  bright black
+                (0xff, 0x6b, 0x6b), // 9  bright red
+                (0x67, 0xff, 0xc3), // 10 bright green
+                (0xff, 0xe8, 0x9a), // 11 bright yellow
+                (0x4d, 0xb5, 0xff), // 12 bright blue
+                (0xc0, 0x9b, 0xff), // 13 bright magenta
+                (0x5a, 0xed, 0xff), // 14 bright cyan
+                (0xff, 0xff, 0xff), // 15 bright white
+            ],
+        }
+    }
+
     fn one_dark() -> Self {
         Self {
             foreground: (0xab, 0xb2, 0xbf),
@@ -347,6 +375,7 @@ mod tests {
     #[test]
     fn by_name_known_schemes_return_some() {
         let names = [
+            "cool-night",
             "catppuccin-mocha",
             "dracula",
             "solarized-dark",
@@ -374,17 +403,18 @@ mod tests {
     // ── default ──────────────────────────────────────────────────────────────
 
     #[test]
-    fn default_is_catppuccin_mocha() {
+    fn default_is_cool_night() {
         let def = ColorPalette::default();
-        let mocha = ColorPalette::by_name("catppuccin-mocha").unwrap();
-        assert_eq!(def, mocha, "Default must equal catppuccin-mocha");
+        let cool = ColorPalette::by_name("cool-night").unwrap();
+        assert_eq!(def, cool, "Default must equal cool-night");
     }
 
     // ── all 8 palettes are distinct ───────────────────────────────────────────
 
     #[test]
-    fn all_eight_palettes_are_distinct() {
+    fn all_nine_palettes_are_distinct() {
         let names = [
+            "cool-night",
             "catppuccin-mocha",
             "dracula",
             "solarized-dark",

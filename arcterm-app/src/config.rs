@@ -58,7 +58,7 @@ impl Default for ArctermConfig {
             line_height_ratio: 1.4,
             shell: None,
             scrollback_lines: 10_000,
-            color_scheme: "catppuccin-mocha".to_string(),
+            color_scheme: "cool-night".to_string(),
             cursor_style: "block".to_string(),
             cursor_blink: false,
             window_opacity: 1.0,
@@ -427,7 +427,7 @@ mod tests {
         assert_eq!(cfg.font_size, 14.0, "default font_size");
         assert_eq!(cfg.line_height_ratio, 1.4, "default line_height_ratio");
         assert_eq!(cfg.scrollback_lines, 10_000, "default scrollback_lines");
-        assert_eq!(cfg.color_scheme, "catppuccin-mocha", "default color_scheme");
+        assert_eq!(cfg.color_scheme, "cool-night", "default color_scheme");
         assert_eq!(cfg.cursor_style, "block", "default cursor_style");
         assert!(!cfg.cursor_blink, "default cursor_blink is false");
         assert_eq!(cfg.window_opacity, 1.0, "default window_opacity");
@@ -514,7 +514,7 @@ mod tests {
         let cfg: ArctermConfig = toml::from_str(toml).expect("valid TOML");
         assert_eq!(cfg.font_size, 16.0, "overridden field");
         assert_eq!(cfg.scrollback_lines, 10_000, "unset field keeps default");
-        assert_eq!(cfg.color_scheme, "catppuccin-mocha", "unset field keeps default");
+        assert_eq!(cfg.color_scheme, "cool-night", "unset field keeps default");
     }
 
     // -- config_path() returns a non-empty path --------------------------------
@@ -633,12 +633,12 @@ mod tests {
     fn merge_toml_preserves_base_keys_absent_in_overlay() {
         let mut base: toml::Value = toml::from_str(r#"
             font_size = 14.0
-            color_scheme = "catppuccin-mocha"
+            color_scheme = "cool-night"
         "#).unwrap();
         let overlay: toml::Value = toml::from_str(r#"font_size = 16.0"#).unwrap();
         super::merge_toml_values(&mut base, &overlay);
         assert_eq!(base["font_size"].as_float(), Some(16.0));
-        assert_eq!(base["color_scheme"].as_str(), Some("catppuccin-mocha"));
+        assert_eq!(base["color_scheme"].as_str(), Some("cool-night"));
     }
 
     // -- ArctermConfig serialize round-trip -----------------------------------
