@@ -11,6 +11,10 @@ homepage.workspace = true
 name = "arcterm-app"
 path = "src/main.rs"
 
+[lib]
+name = "arcterm_app"
+path = "src/lib.rs"
+
 [features]
 ## Enables fine-grained timestamp logging for latency measurement.
 latency-trace = []
