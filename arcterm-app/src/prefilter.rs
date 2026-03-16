@@ -37,7 +37,7 @@ pub enum Osc133Event {
 ///
 /// Multiple intercepted sequences may be emitted in one call when the input
 /// buffer contains more than one complete sequence.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PreFilterOutput {
     /// Bytes that should be forwarded to the terminal engine unchanged.
     pub passthrough: Vec<u8>,
@@ -51,12 +51,7 @@ pub struct PreFilterOutput {
 
 impl PreFilterOutput {
     fn new() -> Self {
-        Self {
-            passthrough: Vec::new(),
-            apc_payloads: Vec::new(),
-            osc7770_params: Vec::new(),
-            osc133_events: Vec::new(),
-        }
+        Self::default()
     }
 }
 
@@ -101,6 +96,12 @@ pub struct PreFilter {
     state: State,
     /// Accumulation buffer shared between APC and OSC collection states.
     buf: Vec<u8>,
+    /// The terminator byte seen at the end of the current OSC sequence.
+    ///
+    /// Set to `0x07` (BEL) or `b'\\'` (the `\` byte of ST `ESC \`) when an
+    /// OSC completes, so `reconstruct_osc_passthrough` can replay the original
+    /// terminator instead of always emitting BEL.
+    osc_terminator: u8,
 }
 
 impl PreFilter {
@@ -109,6 +110,7 @@ impl PreFilter {
         Self {
             state: State::Normal,
             buf: Vec::new(),
+            osc_terminator: 0x07,
         }
     }
 
@@ -182,6 +184,7 @@ impl PreFilter {
                     match byte {
                         0x07 => {
                             // BEL terminator
+                            self.osc_terminator = 0x07;
                             self.dispatch_osc(&mut out);
                             self.state = State::Normal;
                         }
@@ -197,7 +200,8 @@ impl PreFilter {
                 // -----------------------------------------------------------------
                 State::InOscPendingEsc => {
                     if byte == b'\\' {
-                        // ST terminator
+                        // ST terminator (ESC \)
+                        self.osc_terminator = b'\\';
                         self.dispatch_osc(&mut out);
                         self.state = State::Normal;
                     } else {
@@ -264,15 +268,23 @@ impl PreFilter {
 
     /// Reconstruct a non-intercepted OSC sequence and push it to passthrough.
     ///
-    /// We use BEL as the terminator when reconstructing because the original
-    /// terminator byte is already consumed. The terminal engine accepts both.
+    /// The original terminator is replayed: BEL (`0x07`) stays as BEL; ST
+    /// (`ESC \`) is re-emitted as the two-byte sequence `0x1b 0x5c`.  This
+    /// preserves the wire format so that tmux passthrough and other
+    /// terminator-sensitive consumers receive exactly what the application sent.
     fn reconstruct_osc_passthrough(&self, out: &mut PreFilterOutput) {
         // ESC ]
         out.passthrough.push(0x1b);
         out.passthrough.push(b']');
         out.passthrough.extend_from_slice(&self.buf);
-        // BEL as terminator
-        out.passthrough.push(0x07);
+        // Replay original terminator.
+        if self.osc_terminator == 0x07 {
+            out.passthrough.push(0x07);
+        } else {
+            // ST: ESC \
+            out.passthrough.push(0x1b);
+            out.passthrough.push(b'\\');
+        }
     }
 }
 
@@ -512,5 +524,60 @@ mod tests {
         assert!(out.apc_payloads.is_empty());
         assert!(out.osc7770_params.is_empty());
         assert!(out.osc133_events.is_empty());
+    }
+
+    // -------------------------------------------------------------------------
+    // 12. Empty input produces empty output (ISSUE-021)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_empty_input() {
+        let out = PreFilter::new().advance(&[]);
+        assert!(out.passthrough.is_empty());
+        assert!(out.apc_payloads.is_empty());
+        assert!(out.osc7770_params.is_empty());
+        assert!(out.osc133_events.is_empty());
+    }
+
+    // -------------------------------------------------------------------------
+    // 13. Non-intercepted OSC with ST terminator passes through with ST
+    //     (ISSUE-020: reconstruct_osc_passthrough must replay original terminator)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_non_intercepted_osc_st_passthrough() {
+        // OSC 0 ; My Title ESC \ — window title with ST terminator
+        let input = b"\x1b]0;My Title\x1b\\";
+        let out = run(input);
+        // Must be reconstructed with ST, not BEL.
+        assert_eq!(out.passthrough, b"\x1b]0;My Title\x1b\\");
+        assert!(out.osc7770_params.is_empty());
+        assert!(out.osc133_events.is_empty());
+        assert!(out.apc_payloads.is_empty());
+    }
+
+    // -------------------------------------------------------------------------
+    // 14. ESC as final byte (PendingEsc split boundary) (ISSUE-023)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_pending_esc_split_boundary() {
+        let mut pf = PreFilter::new();
+
+        // First call: plain text followed by a bare ESC (no second byte yet).
+        let first = pf.advance(b"hello\x1b");
+        // The ESC is held in PendingEsc state — only the plain text passes through.
+        assert_eq!(first.passthrough, b"hello");
+        assert!(first.apc_payloads.is_empty());
+        assert!(first.osc7770_params.is_empty());
+        assert!(first.osc133_events.is_empty());
+
+        // Second call: complete the CSI sequence ESC [ 3 1 m.
+        let second = pf.advance(b"[31m");
+        // The buffered ESC plus the CSI suffix must all pass through.
+        assert_eq!(second.passthrough, b"\x1b[31m");
+        assert!(second.apc_payloads.is_empty());
+        assert!(second.osc7770_params.is_empty());
+        assert!(second.osc133_events.is_empty());
     }
 }
