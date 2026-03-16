@@ -118,3 +118,8 @@
 - **Status:** complete
 - **Tests:** 517 passing (257 app, 51 core, 12 plugin, 3 plugin-int, 10 pty, 38 render, 146 vt)
 - **Key Features:** AI detection, PaneContext, OSC 133, MCP tool discovery/invocation, plan status layer, Leader+a/+p, error bridging, context query/response
+
+## 2026-03-15 — Phase 8 Planned
+- **Phase:** 8
+- **Status:** planned
+- **Message:** 3 plans across 2 waves. Verdict: PASS WITH AMENDMENTS. Config overlays, cross-pane search, performance optimization, release packaging, documentation.
