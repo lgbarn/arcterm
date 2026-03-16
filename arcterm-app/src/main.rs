@@ -182,9 +182,11 @@ mod input;
 mod keymap;
 mod layout;
 mod neovim;
+mod overlay;
 mod palette;
 mod plan;
 mod proc;
+mod search;
 mod selection;
 mod tab;
 mod terminal;
@@ -590,6 +592,10 @@ struct AppState {
     plugin_manager: Option<arcterm_plugin::manager::PluginManager>,
     /// Sender for broadcasting terminal lifecycle events to plugins.
     plugin_event_tx: Option<tokio::sync::broadcast::Sender<arcterm_plugin::manager::PluginEvent>>,
+
+    // ---- cross-pane search ----
+    /// Search overlay state; `None` when the search overlay is closed.
+    search_overlay: Option<search::SearchOverlayState>,
 
     // ---- plan status layer ----
     /// Ambient plan status bar; `None` until the first workspace scan.
@@ -1185,6 +1191,7 @@ impl ApplicationHandler for App {
             fps_frame_count: 0,
             palette_mode: None,
             workspace_switcher: None,
+            search_overlay: None,
             nvim_states: HashMap::new(),
             ai_states,
             pane_contexts,
@@ -2818,6 +2825,16 @@ impl ApplicationHandler for App {
                             // Key consumed by state machine (leader chord entered).
                             // No PTY write needed.
                         }
+
+                        KeyAction::CrossPaneSearch => {
+                            // Open the cross-pane search overlay.
+                            state.search_overlay = Some(search::SearchOverlayState::new());
+                            state.window.request_redraw();
+                        }
+
+                        KeyAction::ReviewOverlay => {
+                            // Reserved for future review overlay; no-op for now.
+                        }
                     }
                 }
             }
@@ -2957,6 +2974,8 @@ fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action
         | KeyAction::SaveWorkspace
         | KeyAction::JumpToAiPane
         | KeyAction::TogglePlanView
+        | KeyAction::ReviewOverlay
+        | KeyAction::CrossPaneSearch
         | KeyAction::Consumed => {}
     }
 }

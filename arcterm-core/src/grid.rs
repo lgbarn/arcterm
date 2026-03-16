@@ -557,6 +557,30 @@ impl Grid {
         &self.cells
     }
 
+    /// Build a `String` from a row of `Cell`s by collecting each cell's character.
+    pub fn row_to_string(row: &[Cell]) -> String {
+        row.iter().map(|c| c.c).collect()
+    }
+
+    /// Return text for every row: scrollback rows (oldest first) followed by
+    /// all visible rows.
+    ///
+    /// Scrollback is stored with index 0 = most recent (just scrolled off).
+    /// We reverse that so the oldest row is first in the output, giving a
+    /// contiguous top-to-bottom text representation.
+    pub fn all_text_rows(&self) -> Vec<String> {
+        let mut out = Vec::with_capacity(self.scrollback.len() + self.size.rows);
+        // Scrollback: iterate oldest-first (back of deque to front).
+        for row in self.scrollback.iter().rev() {
+            out.push(Self::row_to_string(row));
+        }
+        // Visible rows.
+        for row in &self.cells {
+            out.push(Self::row_to_string(row));
+        }
+        out
+    }
+
     /// Allocate a blank row of `self.size.cols` default cells.
     fn blank_row(&self) -> Vec<Cell> {
         vec![Cell::default(); self.size.cols]
@@ -1021,5 +1045,68 @@ mod tests {
         // row 0 = scrollback[0] ('A'), row 1 = screen[0] ('B'), row 2 = screen[1]
         assert_eq!(vp[0][0].c, 'A', "viewport row 0 should come from scrollback");
         assert_eq!(vp[1][0].c, 'B', "viewport row 1 should be screen row 0");
+    }
+
+    // -------------------------------------------------------------------------
+    // Plan 8.2 Task 1: row_to_string and all_text_rows
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn row_to_string_produces_correct_string() {
+        let mut row: Vec<Cell> = vec![Cell::default(); 5];
+        row[0].set_char('H');
+        row[1].set_char('e');
+        row[2].set_char('l');
+        row[3].set_char('l');
+        row[4].set_char('o');
+        let s = Grid::row_to_string(&row);
+        assert_eq!(s, "Hello", "row_to_string must collect chars in order");
+    }
+
+    #[test]
+    fn row_to_string_includes_spaces_for_blank_cells() {
+        let mut row: Vec<Cell> = vec![Cell::default(); 4];
+        row[0].set_char('A');
+        // row[1] is default ' '
+        row[2].set_char('B');
+        // row[3] is default ' '
+        let s = Grid::row_to_string(&row);
+        assert_eq!(s, "A B ", "blank cells must produce spaces");
+    }
+
+    #[test]
+    fn all_text_rows_returns_scrollback_before_visible() {
+        let mut g = Grid::new(GridSize::new(3, 5));
+        // Write 'A' on row 0 then scroll it into scrollback
+        g.cell_mut(0, 0).set_char('S');
+        g.scroll_up(1); // 'S...' → scrollback[0] (most recent)
+        // Now write 'V' on the new row 0 (visible)
+        g.cell_mut(0, 0).set_char('V');
+        // all_text_rows: scrollback oldest-first, then visible rows
+        let rows = g.all_text_rows();
+        // scrollback has 1 row (the 'S' row), visible has 3 rows
+        assert_eq!(rows.len(), 4, "should have 1 scrollback + 3 visible rows");
+        // First row is the scrollback row (oldest = the 'S' row)
+        assert!(rows[0].starts_with('S'), "first row must be the scrollback row");
+        // The visible row 0 starts with 'V'
+        assert!(rows[1].starts_with('V'), "second row must be the first visible row");
+    }
+
+    #[test]
+    fn all_text_rows_multiple_scrollback_rows_oldest_first() {
+        let mut g = Grid::new(GridSize::new(2, 3));
+        g.cell_mut(0, 0).set_char('A'); // will become oldest scrollback
+        g.scroll_up(1);
+        g.cell_mut(0, 0).set_char('B'); // will become second scrollback
+        g.scroll_up(1);
+        g.cell_mut(0, 0).set_char('C'); // now on visible row 0
+        // scrollback (index 0 = most recent = 'B', index 1 = oldest = 'A')
+        let rows = g.all_text_rows();
+        // 2 scrollback + 2 visible = 4
+        assert_eq!(rows.len(), 4);
+        // Oldest scrollback first
+        assert!(rows[0].starts_with('A'), "oldest scrollback row must come first");
+        assert!(rows[1].starts_with('B'), "second scrollback row must come second");
+        assert!(rows[2].starts_with('C'), "visible row 0 must follow");
     }
 }
