@@ -121,6 +121,7 @@ mod keymap;
 mod layout;
 mod neovim;
 mod palette;
+mod plan;
 mod proc;
 mod selection;
 mod tab;
@@ -522,6 +523,18 @@ struct AppState {
     plugin_manager: Option<arcterm_plugin::manager::PluginManager>,
     /// Sender for broadcasting terminal lifecycle events to plugins.
     plugin_event_tx: Option<tokio::sync::broadcast::Sender<arcterm_plugin::manager::PluginEvent>>,
+
+    // ---- plan status layer ----
+    /// Ambient plan status bar; `None` until the first workspace scan.
+    plan_strip: Option<plan::PlanStripState>,
+    /// Expanded plan view overlay; `None` when closed.
+    plan_view: Option<plan::PlanViewState>,
+    /// File-system watcher for `.shipyard/`, `PLAN.md`, `TODO.md`.
+    plan_watcher: Option<notify::RecommendedWatcher>,
+    /// Channel from plan_watcher for receiving change notifications.
+    plan_watcher_rx: Option<std::sync::mpsc::Receiver<notify::Result<notify::Event>>>,
+    /// Cached workspace root (current working directory at launch).
+    workspace_root: std::path::PathBuf,
 }
 
 impl AppState {
@@ -635,7 +648,7 @@ impl AppState {
     // Geometry helpers
     // -----------------------------------------------------------------------
 
-    /// Compute the pixel rect available for pane content (below tab bar when shown).
+    /// Compute the pixel rect available for pane content (below tab bar, above plan strip).
     fn pane_area(&self) -> PixelRect {
         let w = self.renderer.gpu.surface_config.width as f32;
         let h = self.renderer.gpu.surface_config.height as f32;
@@ -647,7 +660,14 @@ impl AppState {
             0.0
         };
 
-        PixelRect { x: 0.0, y: tab_h, width: w, height: h - tab_h }
+        // Reserve one cell row at the bottom for the plan strip when active.
+        let strip_h = if self.plan_strip.is_some() {
+            self.renderer.text.cell_size.height * sf
+        } else {
+            0.0
+        };
+
+        PixelRect { x: 0.0, y: tab_h, width: w, height: h - tab_h - strip_h }
     }
 
     /// Compute pixel rects for all panes in the active tab.
@@ -1025,6 +1045,50 @@ impl ApplicationHandler for App {
             pane_contexts.insert(*id, context::PaneContext::new(200));
         }
 
+        // ---------------------------------------------------------------
+        // Plan status layer initialization.
+        //
+        // Scan the workspace root for plan files and start a file-system
+        // watcher for `.shipyard/`, `PLAN.md`, and `TODO.md`.
+        // ---------------------------------------------------------------
+        let workspace_root = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+        let plan_strip = {
+            let strip = plan::PlanStripState::discover(&workspace_root);
+            if strip.summaries.is_empty() { None } else { Some(strip) }
+        };
+
+        let (plan_watcher, plan_watcher_rx) = {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let watcher_result = notify::recommended_watcher(move |res| {
+                // Forward all events; the main loop filters by relevance.
+                let _ = tx.send(res);
+            });
+            match watcher_result {
+                Ok(mut w) => {
+                    use notify::{RecursiveMode, Watcher};
+                    let shipyard = workspace_root.join(".shipyard");
+                    if shipyard.exists() {
+                        let _ = w.watch(&shipyard, RecursiveMode::Recursive);
+                    }
+                    let plan_md = workspace_root.join("PLAN.md");
+                    if plan_md.exists() {
+                        let _ = w.watch(&plan_md, RecursiveMode::NonRecursive);
+                    }
+                    let todo_md = workspace_root.join("TODO.md");
+                    if todo_md.exists() {
+                        let _ = w.watch(&todo_md, RecursiveMode::NonRecursive);
+                    }
+                    (Some(w), Some(rx))
+                }
+                Err(e) => {
+                    log::warn!("plan watcher: failed to initialize: {e}");
+                    (None, None)
+                }
+            }
+        };
+
         self.state = Some(AppState {
             window,
             renderer,
@@ -1058,6 +1122,11 @@ impl ApplicationHandler for App {
             last_ai_pane: None,
             plugin_manager,
             plugin_event_tx,
+            plan_strip,
+            plan_view: None,
+            plan_watcher,
+            plan_watcher_rx,
+            workspace_root,
         });
     }
 
@@ -1136,6 +1205,43 @@ impl ApplicationHandler for App {
                         break;
                     }
                 }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Plan watcher hot-reload — refresh summaries on file changes.
+        // ------------------------------------------------------------------
+        {
+            let mut plan_changed = false;
+            if let Some(rx) = &state.plan_watcher_rx {
+                loop {
+                    match rx.try_recv() {
+                        Ok(Ok(_event)) => {
+                            plan_changed = true;
+                        }
+                        Ok(Err(e)) => {
+                            log::warn!("plan watcher: error: {e}");
+                            break;
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            log::warn!("plan watcher: channel disconnected");
+                            break;
+                        }
+                    }
+                }
+            }
+            if plan_changed {
+                let root = state.workspace_root.clone();
+                if let Some(ref mut strip) = state.plan_strip {
+                    strip.refresh(&root);
+                } else {
+                    let strip = plan::PlanStripState::discover(&root);
+                    if !strip.summaries.is_empty() {
+                        state.plan_strip = Some(strip);
+                    }
+                }
+                state.window.request_redraw();
             }
         }
 
@@ -1923,6 +2029,45 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                // Plan strip — ambient status bar at the bottom of the window.
+                if let Some(ref strip) = state.plan_strip {
+                    let win_w = state.renderer.gpu.surface_config.width as f32;
+                    let win_h = state.renderer.gpu.surface_config.height as f32;
+                    let cell_h = state.renderer.text.cell_size.height * sf;
+                    // One-row bar at the very bottom.
+                    let strip_y = win_h - cell_h;
+                    overlay_quads.push(OverlayQuad {
+                        rect: [0.0, strip_y, win_w, cell_h],
+                        color: [0.10, 0.11, 0.15, 0.92],
+                    });
+                    // Text label.
+                    let text = strip.strip_text();
+                    if !text.is_empty() {
+                        palette_text.push((text, 8.0 * sf, strip_y + (cell_h - state.renderer.text.cell_size.height * sf) / 2.0));
+                    }
+                }
+
+                // Plan view — expanded modal overlay (like command palette).
+                if let Some(ref view) = state.plan_view {
+                    let win_w = state.renderer.gpu.surface_config.width as f32;
+                    let win_h = state.renderer.gpu.surface_config.height as f32;
+                    let cell_h = state.renderer.text.cell_size.height * sf;
+
+                    let view_quads = view.render_quads(win_w, win_h, cell_h);
+                    for pq in view_quads {
+                        overlay_quads.push(OverlayQuad {
+                            rect: pq.rect,
+                            color: pq.color,
+                        });
+                    }
+
+                    let cell_w = state.renderer.text.cell_size.width * sf;
+                    let view_texts = view.render_text(win_w, win_h, cell_w, cell_h);
+                    for pt in view_texts {
+                        palette_text.push((pt.text, pt.x, pt.y));
+                    }
+                }
+
                 // Collect plugin pane render infos from the active layout.
                 let plugin_pane_infos: Vec<PluginPaneRenderInfo> = {
                     let mut out = Vec::new();
@@ -2481,8 +2626,26 @@ impl ApplicationHandler for App {
                         }
 
                         KeyAction::TogglePlanView => {
-                            // Toggle plan status overlay. Full plan.rs integration in Task 3.
-                            // Stub: will be replaced in Task 3 with proper PlanViewState toggle.
+                            if state.plan_view.is_some() {
+                                // Close the expanded overlay.
+                                state.plan_view = None;
+                            } else {
+                                // Ensure the strip is populated before opening the view.
+                                if state.plan_strip.is_none() {
+                                    let root = state.workspace_root.clone();
+                                    let strip = plan::PlanStripState::discover(&root);
+                                    if !strip.summaries.is_empty() {
+                                        state.plan_strip = Some(strip);
+                                    }
+                                }
+                                // Open the expanded overlay with current summaries.
+                                let summaries = state
+                                    .plan_strip
+                                    .as_ref()
+                                    .map(|s| s.summaries.clone())
+                                    .unwrap_or_default();
+                                state.plan_view = Some(plan::PlanViewState::new(summaries));
+                            }
                             state.window.request_redraw();
                         }
 
