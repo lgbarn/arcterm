@@ -2,7 +2,10 @@
 
 use arcterm_core::{Grid, GridSize};
 use arcterm_pty::{PtyError, PtySession};
-use arcterm_vt::{ApcScanner, GridState, KittyChunkAssembler, KittyCommand, StructuredContentAccumulator, parse_kitty_command};
+use arcterm_render::ContentType;
+use arcterm_vt::{ApcScanner, GridState};
+use crate::kitty_types::{KittyChunkAssembler, KittyCommand, parse_kitty_command};
+use crate::osc7770::StructuredContentAccumulator;
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 
@@ -143,8 +146,23 @@ impl Terminal {
     }
 
     /// Drain and return all completed OSC 7770 structured content blocks.
+    ///
+    /// Converts from `arcterm_vt::StructuredContentAccumulator` (which carries
+    /// `arcterm_vt::ContentType`) to the local `StructuredContentAccumulator`
+    /// (which carries `arcterm_render::ContentType`).  This bridge will be
+    /// removed when `GridState` is replaced in Wave 2.
     pub fn take_completed_blocks(&mut self) -> Vec<StructuredContentAccumulator> {
         std::mem::take(&mut self.grid_state.completed_blocks)
+            .into_iter()
+            .map(|acc| {
+                let ct = vt_content_type_to_render(acc.content_type);
+                StructuredContentAccumulator {
+                    content_type: ct,
+                    attrs: acc.attrs,
+                    buffer: acc.buffer,
+                }
+            })
+            .collect()
     }
 
     /// Drain and return all shell exit codes received via OSC 133 D since the
@@ -249,13 +267,36 @@ impl Terminal {
 }
 
 // ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/// Convert `arcterm_vt::ContentType` to `arcterm_render::ContentType`.
+///
+/// Both enums carry identical variants.  This bridge exists because
+/// `arcterm_vt::GridState::completed_blocks` stores the arcterm-vt variant;
+/// `take_completed_blocks` converts at the boundary so callers only ever
+/// see the canonical `arcterm_render::ContentType`.
+fn vt_content_type_to_render(ct: arcterm_vt::ContentType) -> ContentType {
+    match ct {
+        arcterm_vt::ContentType::CodeBlock => ContentType::CodeBlock,
+        arcterm_vt::ContentType::Diff      => ContentType::Diff,
+        arcterm_vt::ContentType::Plan      => ContentType::Plan,
+        arcterm_vt::ContentType::Markdown  => ContentType::Markdown,
+        arcterm_vt::ContentType::Json      => ContentType::Json,
+        arcterm_vt::ContentType::Error     => ContentType::Error,
+        arcterm_vt::ContentType::Progress  => ContentType::Progress,
+        arcterm_vt::ContentType::Image     => ContentType::Image,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::PendingImage;
-    use arcterm_vt::{KittyAction, KittyCommand, KittyFormat};
+    use crate::kitty_types::{KittyAction, KittyCommand, KittyFormat};
     use std::io::Cursor;
     use tokio::sync::mpsc;
 

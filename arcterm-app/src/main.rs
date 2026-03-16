@@ -180,8 +180,10 @@ mod context;
 mod detect;
 mod input;
 mod keymap;
+mod kitty_types;
 mod layout;
 mod neovim;
+mod osc7770;
 mod overlay;
 mod palette;
 mod plan;
@@ -1455,19 +1457,14 @@ impl ApplicationHandler for App {
                                 for acc in completed {
                                     let attrs: Vec<(String, String)> =
                                         acc.attrs.into_iter().collect();
-                                    // Convert arcterm_vt::ContentType to arcterm_render::ContentType.
-                                    // Both enums have identical variants; this bridge will be
-                                    // removed in Task 3 when StructuredContentAccumulator moves
-                                    // to arcterm-app/src/osc7770.rs and uses ContentType directly.
-                                    let render_ct = vt_ct_to_render_ct(acc.content_type.clone());
                                     let rendered = state.highlight_engine.render_block(
-                                        render_ct.clone(),
+                                        acc.content_type.clone(),
                                         &acc.buffer,
                                         &attrs,
                                     );
                                     let line_count = rendered.len();
                                     pane_blocks.push(StructuredBlock {
-                                        block_type: render_ct,
+                                        block_type: acc.content_type,
                                         start_row: cursor_row.saturating_sub(line_count),
                                         line_count,
                                         rendered_lines: rendered,
@@ -3434,24 +3431,6 @@ fn collect_plugin_panes(
 // ---------------------------------------------------------------------------
 
 /// Build a [`RenderPalette`] from an [`ArctermConfig`].
-/// Convert `arcterm_vt::ContentType` to `arcterm_render::ContentType`.
-///
-/// Both enums carry identical variants.  This bridge exists only until
-/// `StructuredContentAccumulator` moves to `arcterm-app/src/osc7770.rs` in
-/// Task 3, at which point it will import `arcterm_render::ContentType` directly.
-fn vt_ct_to_render_ct(ct: arcterm_vt::ContentType) -> ContentType {
-    match ct {
-        arcterm_vt::ContentType::CodeBlock => ContentType::CodeBlock,
-        arcterm_vt::ContentType::Diff      => ContentType::Diff,
-        arcterm_vt::ContentType::Plan      => ContentType::Plan,
-        arcterm_vt::ContentType::Markdown  => ContentType::Markdown,
-        arcterm_vt::ContentType::Json      => ContentType::Json,
-        arcterm_vt::ContentType::Error     => ContentType::Error,
-        arcterm_vt::ContentType::Progress  => ContentType::Progress,
-        arcterm_vt::ContentType::Image     => ContentType::Image,
-    }
-}
-
 fn palette_from_config(cfg: &config::ArctermConfig) -> RenderPalette {
     let app_palette = colors::ColorPalette::by_name(&cfg.color_scheme)
         .unwrap_or_else(|| {
