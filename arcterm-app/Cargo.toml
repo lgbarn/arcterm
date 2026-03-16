@@ -16,6 +16,7 @@ path = "src/main.rs"
 latency-trace = []
 
 [dependencies]
+alacritty_terminal.workspace = true
 arcterm-core = { path = "../arcterm-core" }
 arcterm-vt = { path = "../arcterm-vt" }
 arcterm-pty = { path = "../arcterm-pty" }

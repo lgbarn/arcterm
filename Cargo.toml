@@ -18,6 +18,7 @@ repository = "https://github.com/lgbarn/arcterm"
 homepage = "https://github.com/lgbarn/arcterm"
 
 [workspace.dependencies]
+alacritty_terminal = "0.25"
 vte = "0.15"
 portable-pty = "0.9"
 wgpu = "28"
