@@ -179,9 +179,11 @@ impl Grid {
             let n = n.min(region_height);
             if n == 0 { return; }
             let cols = self.size.cols;
-            for row in top..=(bottom - n) {
-                for col in 0..cols {
-                    self.cells[row][col] = self.cells[row + n][col].clone();
+            if let Some(last_copy_row) = bottom.checked_sub(n) {
+                for row in top..=last_copy_row {
+                    for col in 0..cols {
+                        self.cells[row][col] = self.cells[row + n][col].clone();
+                    }
                 }
             }
             for row in (bottom + 1 - n)..=bottom {
@@ -442,9 +444,11 @@ impl Grid {
         let n = n.min(region_rows);
 
         let cols = self.size.cols;
-        for row in cur_row..=(bottom - n) {
-            for col in 0..cols {
-                self.cells[row][col] = self.cells[row + n][col].clone();
+        if let Some(last_copy_row) = bottom.checked_sub(n) {
+            for row in cur_row..=last_copy_row {
+                for col in 0..cols {
+                    self.cells[row][col] = self.cells[row + n][col].clone();
+                }
             }
         }
         for row in (bottom + 1 - n)..=bottom {
@@ -1245,5 +1249,38 @@ mod tests {
         assert_eq!(g.cell(2, 0).c, 'D', "D shifted up to row 2");
         assert_eq!(g.cell(3, 0).c, ' ', "blank inserted at bottom of region");
         assert_eq!(g.cell(4, 0).c, 'E', "row 4 outside region must not change");
+    }
+
+    #[test]
+    fn scroll_up_full_region_with_top_at_zero() {
+        // Exercises the n == region_height, top == 0 case (usize underflow if unchecked).
+        let rows = 5;
+        let mut g = Grid::new(GridSize::new(rows, 3));
+        for r in 0..rows {
+            g.cell_mut(r, 0).set_char((b'A' + r as u8) as char);
+        }
+        g.set_scroll_region(0, rows - 1);
+        // Scroll by full region height — must not panic
+        g.scroll_up(rows);
+        for r in 0..rows {
+            assert_eq!(g.cell(r, 0).c, ' ', "all cells must be blank after full scroll_up");
+        }
+    }
+
+    #[test]
+    fn delete_lines_full_region_with_cursor_at_zero() {
+        // Exercises the n == region_height, cur_row == 0 case (usize underflow if unchecked).
+        let rows = 5;
+        let mut g = Grid::new(GridSize::new(rows, 3));
+        for r in 0..rows {
+            g.cell_mut(r, 0).set_char((b'A' + r as u8) as char);
+        }
+        g.set_scroll_region(0, rows - 1);
+        g.cursor = CursorPos { row: 0, col: 0 };
+        // Delete all lines — must not panic
+        g.delete_lines(rows);
+        for r in 0..rows {
+            assert_eq!(g.cell(r, 0).c, ' ', "all cells must be blank after full delete_lines");
+        }
     }
 }
