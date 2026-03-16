@@ -200,8 +200,17 @@ pub fn snapshot_from_term<E: EventListener>(term: &Term<E>) -> RenderSnapshot {
 // ---------------------------------------------------------------------------
 
 /// Map a `vte::ansi::Color` to a `SnapshotColor`.
+///
+/// `NamedColor::Foreground` (256) and `NamedColor::Background` (257) map to
+/// `SnapshotColor::Default` — these are the terminal's default fg/bg and must
+/// use the palette's configured colors, not an indexed lookup.  Standard ANSI
+/// named colors (0–15) and dim variants map to `Indexed`.
 fn vte_color_to_snapshot(color: VteColor) -> SnapshotColor {
+    use alacritty_terminal::vte::ansi::NamedColor;
     match color {
+        VteColor::Named(NamedColor::Foreground)
+        | VteColor::Named(NamedColor::Background)
+        | VteColor::Named(NamedColor::Cursor) => SnapshotColor::Default,
         VteColor::Named(n) => SnapshotColor::Indexed(n as u8),
         VteColor::Indexed(i) => SnapshotColor::Indexed(i),
         VteColor::Spec(rgb) => SnapshotColor::Rgb(rgb.r, rgb.g, rgb.b),
