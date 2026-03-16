@@ -407,3 +407,141 @@ All of the following must be true before tagging v0.1.1:
 - `cargo clippy --workspace -- -D warnings` clean
 - No new `.expect()` or `.unwrap()` on fallible operations in runtime code
 - No new `#[allow(dead_code)]` suppressions added
+
+---
+
+# v0.2.0 — Terminal Engine Migration
+
+> Replace custom terminal internals with `alacritty_terminal`. Eliminate 17+ open bugs,
+> gain proven VT220/xterm compliance and a ring-buffer grid, while preserving the wgpu
+> renderer and OSC 7770 structured content protocol.
+>
+> Supersedes v0.1.1 Phases 9-11. Grid/VT/PTY bugs (ISSUE-007 through ISSUE-014, ISSUE-001)
+> are eliminated by crate removal rather than individual fixes. Surviving app, plugin, and
+> renderer issues are resolved in Phase 14.
+>
+> Design: `.shipyard/designs/2026-03-16-engine-migration-design.md`
+
+---
+
+## Phase 12: Engine Swap — alacritty_terminal Migration
+
+**Goal:** Replace `arcterm-core`, `arcterm-vt`, and `arcterm-pty` with `alacritty_terminal` while maintaining functional parity. After this phase, arcterm runs on alacritty's terminal engine with zero regression in user-visible behavior.
+
+**Success Criteria:**
+- `ls`, `vim`, `top`, `htop`, `tmux` render correctly
+- OSC 7770 structured content still renders (code blocks, diffs, markdown)
+- Kitty inline images still display
+- Multi-pane splits work with independent PTY sessions
+- AI agent detection still works
+- All existing `arcterm-app` and `arcterm-render` tests pass (or are updated for new types)
+- `arcterm-core`, `arcterm-vt`, `arcterm-pty` directories no longer exist
+- No panics from grid operations (ISSUE-007 through ISSUE-014 class eliminated)
+
+**Scope:**
+- Add `alacritty_terminal` dependency to workspace
+- Build OSC 7770 pre-filter (byte stream scanner between PTY and alacritty input, also handles Kitty APC)
+- Wire `alacritty_terminal::Term<T>` into `arcterm-app` per pane (replaces `Terminal` wrapper)
+- Rewire `arcterm-render` to read from alacritty's grid (cell iteration, cursor, selection, scrollback)
+- Reconnect AI features (agent detection, context sharing, structured content accumulation)
+- Delete `arcterm-core`, `arcterm-vt`, `arcterm-pty` crates from workspace
+
+**Risk:** Alacritty's `Term` API surface needs audit before wiring begins. Pre-filter must handle partial OSC 7770 sequences across read boundaries (stateful scanner). Alacritty's event model may differ from current `mpsc` PTY channel — task includes mapping the event flow.
+
+**Estimated Scope:** ~60% of v0.2.0 effort. This is the core migration.
+
+---
+
+## Phase 13: Renderer Optimization (parallel with Phase 14)
+
+**Goal:** Fix the two known renderer performance issues now that the engine swap is stable.
+
+**Success Criteria:**
+- Multi-pane rendering only re-shapes rows that actually changed (verified via counter/log)
+- `cat /dev/urandom | head -c 10M` in one pane does not cause visible lag in adjacent pane
+- No tearing or double-buffering artifacts
+- Frame rate capped to display refresh rate during idle (not spinning at max GPU)
+- Latency measurement exists for key-to-screen
+
+**Scope:**
+- Per-pane dirty-row cache: extend `TextRenderer` row hashes to `HashMap<PaneId, Vec<u64>>`, evict on pane close, invalidate on resize
+- Frame pacing: wgpu `PresentMode::Fifo`/`Mailbox`, coalesce PTY-triggered redraws, immediate redraw on keyboard input, `ControlFlow::WaitUntil` for idle cap
+- Performance measurement baseline (key-to-screen latency, frame rate under flood, memory per pane)
+
+**Risk:** Frame pacing must not add latency to interactive typing — always redraw immediately on keyboard input, only coalesce PTY-triggered redraws.
+
+**Estimated Scope:** ~15% of v0.2.0 effort.
+
+---
+
+## Phase 14: Remaining Stabilization (parallel with Phase 13)
+
+**Goal:** Fix surviving issues from v0.1.1 review that affect `arcterm-app`, `arcterm-render`, and `arcterm-plugin`. These were not eliminated by the engine swap.
+
+**Success Criteria:**
+- ISSUE-002: Keyboard input triggers immediate `request_redraw()`
+- ISSUE-003: `Ctrl+\` sends 0x1c, `Ctrl+]` sends 0x1d
+- ISSUE-004: Terminal creation failure exits gracefully (no panic)
+- ISSUE-005: Shell exit displays visible "Shell exited" indicator
+- ISSUE-006: Cursor renders as visible block on blank cells
+- H-1: WASM epoch-increment runs on background task with per-store deadlines
+- H-2: `call_tool()` dispatches to actual WASM function
+- M-1: `KeyInput` event kind returns dedicated variant
+- M-2: Plugin manifest `wasm` field validates against path traversal
+- M-3: Kitty image decode runs async (`spawn_blocking`)
+- M-5: GPU init returns `Result` instead of panicking
+- M-6: Plugin file copy rejects symlinks
+- ISSUE-015 through ISSUE-019: Plugin correctness and safety fixes
+- Each fix includes regression tests
+- `cargo test --workspace` passes, `cargo clippy --workspace -- -D warnings` clean
+
+**Scope:**
+- App/input fixes (ISSUE-002 through ISSUE-006) — small, localized changes in `arcterm-app`
+- Plugin fixes (H-1, H-2, M-1, M-2, M-6, ISSUE-015 through ISSUE-018) — `arcterm-plugin` untouched by migration
+- Runtime hardening (M-3, M-5, ISSUE-019) — async image decode, GPU init safety, window creation safety
+
+**Risk:** H-2 (real WASM tool dispatch) remains the highest-effort item. Scope to dispatch-only (call function, return result) without retry or timeout.
+
+**Estimated Scope:** ~25% of v0.2.0 effort.
+
+---
+
+## v0.2.0 Phase Dependency Graph
+
+```
+Phases 1-8 (v0.1.0, complete) ──> Phase 9-11 (v0.1.1, superseded)
+          │
+          v
+     Phase 12: Engine Swap
+          │
+          ├──> Phase 13: Renderer Optimization  ─┐
+          │                                       ├──> v0.2.0 ships
+          └──> Phase 14: Remaining Stabilization ─┘
+```
+
+Phase 12 must complete first. Phases 13 and 14 are independent and can execute in parallel.
+
+## v0.2.0 Cumulative Milestones
+
+| After Phase | Arcterm Is... |
+|---|---|
+| 12 | Running on alacritty's proven terminal engine — 17+ bugs eliminated, ring-buffer grid, full VT compliance |
+| 13 | Rendering efficiently in multi-pane mode with proper frame pacing |
+| 14 | All surviving app, plugin, and runtime issues resolved — v0.2.0 ships |
+
+## v0.2.0 Release Criteria
+
+All of the following must be true before tagging v0.2.0:
+
+- `arcterm-core`, `arcterm-vt`, `arcterm-pty` crates removed from workspace
+- `alacritty_terminal` is the sole terminal emulation engine
+- OSC 7770 pre-filter intercepts structured content without loss
+- Multi-pane dirty-row cache active (no unnecessary text re-shaping)
+- Frame pacing active (no idle GPU spinning, no tearing)
+- All surviving ISSUES.md items resolved
+- Both High concerns (H-1, H-2) resolved
+- All Medium concerns (M-1 through M-6) resolved
+- `cargo test --workspace` passes
+- `cargo clippy --workspace -- -D warnings` clean
+- `ls`, `vim`, `top`, `htop`, `tmux` render correctly
+- Key-to-screen latency measured and documented
