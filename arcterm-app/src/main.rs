@@ -110,6 +110,68 @@
 //! 4. Verify: restore completes and all 4 panes are interactive in under 500ms.
 //!
 //! Pass criteria: 4-pane workspace is fully interactive within 500ms of launch.
+//!
+//! # Phase 7 Integration Test Checklist (PLAN-7.3 Task 3)
+//!
+//! These six scenarios map to the six Phase 7 success criteria (SC-1 through SC-6).
+//! Run with `RUST_LOG=info cargo run --package arcterm-app`.
+//!
+//! ## SC-1: AI agent detection
+//!
+//! 1. Split the window into two panes (Leader+n).
+//! 2. In the second pane, run `claude` or `codex` (or any known AI binary).
+//! 3. In the first pane, press Ctrl+Shift+h (or the configured NavigatePane key)
+//!    to move focus to the AI pane.
+//! 4. Observe the log output: expect `INFO AI agent detected in pane PaneId(N): ClaudeCode`.
+//!
+//! Pass criteria: detection log appears at most 5 seconds after focusing the pane.
+//!
+//! ## SC-2: Cross-pane context query
+//!
+//! 1. In an AI pane session, send the OSC sequence:
+//!    `printf '\033]7770;context/query\007'`
+//! 2. Observe the PTY input to the AI pane; an OSC 7770 JSON response should
+//!    arrive containing `[{"pane_id":...,"cwd":...,"last_command":...}]`.
+//!
+//! Pass criteria: the response JSON lists all sibling panes, excluding the querying pane.
+//!
+//! ## SC-3: MCP tool discovery
+//!
+//! 1. Install a test plugin (`arcterm plugin install <path>`).
+//! 2. From an AI pane, send: `printf '\033]7770;tools/list\007'`
+//! 3. Verify a base64-encoded JSON array of tool descriptors is written back to
+//!    the pane's PTY input as `ESC ] 7770 ; tools/response ; <b64> BEL`.
+//!
+//! Pass criteria: tool descriptors include `name`, `description`, `inputSchema`.
+//!
+//! ## SC-4: Leader+p plan strip
+//!
+//! 1. Ensure `.shipyard/` files exist in the working directory.
+//! 2. Press Leader+p.
+//! 3. Verify the plan strip appears at the bottom of the window showing plan summaries.
+//! 4. Press Leader+p again; the expanded overlay opens showing task detail.
+//! 5. Press Leader+p a third time; the overlay closes (strip remains).
+//!
+//! Pass criteria: strip renders without crash; overlay toggles correctly.
+//!
+//! ## SC-5: Leader+a jump and no-op safety
+//!
+//! 1. Open a session with no AI pane. Press Leader+a.
+//!    Verify: nothing happens (no crash, no focus change).
+//! 2. Start an AI agent in one pane. Press Leader+a from a shell pane.
+//!    Verify: focus jumps to the AI pane.
+//!
+//! Pass criteria: no crash when no AI pane exists; correct pane focused when one does.
+//!
+//! ## SC-6: Error bridging
+//!
+//! 1. Open a session with an AI pane (Leader+n, start claude in new pane).
+//! 2. In a shell pane, run a failing command: `false` or `ls /nonexistent`.
+//! 3. Press Leader+a to jump to the AI pane.
+//! 4. Observe the AI pane's PTY: an OSC 7770 error block should be injected
+//!    with `type=error`, `exit_code=1`, and the last output lines.
+//!
+//! Pass criteria: structured error block appears in the AI pane PTY input on Leader+a.
 
 mod ai_detect;
 mod colors;
@@ -2441,9 +2503,25 @@ impl ApplicationHandler for App {
 
                                 if needs_ai_refresh {
                                     let fresh = ai_detect::AiAgentState::check(child_pid);
-                                    // Update last_ai_pane if this pane has an AI agent.
-                                    if fresh.kind.is_some() {
+                                    // SC-1: log when a new AI agent is first detected.
+                                    if let Some(ref kind) = fresh.kind {
+                                        let was_known = state
+                                            .ai_states
+                                            .get(&focused_id)
+                                            .and_then(|s| s.kind.as_ref())
+                                            .is_some();
+                                        if !was_known {
+                                            log::info!(
+                                                "AI agent detected in pane {:?}: {:?}",
+                                                focused_id,
+                                                kind
+                                            );
+                                        }
+                                        // Update last_ai_pane and sync ai_type into PaneContext.
                                         state.last_ai_pane = Some(focused_id);
+                                        if let Some(ctx) = state.pane_contexts.get_mut(&focused_id) {
+                                            ctx.ai_type = Some(kind.clone());
+                                        }
                                     }
                                     state.ai_states.insert(focused_id, fresh);
                                 }
