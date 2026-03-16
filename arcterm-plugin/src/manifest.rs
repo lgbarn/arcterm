@@ -398,7 +398,12 @@ mod tests {
 
     #[test]
     fn validate_wasm_rejects_backslash() {
-        let err = make_manifest_wasm("..\\evil.wasm").validate().expect_err("should reject backslash");
-        assert!(err.contains("..") || err.contains("backslash"), "{err}");
+        let err = make_manifest_wasm("sub\\file.wasm")
+            .validate()
+            .expect_err("should reject backslash");
+        assert!(
+            err.contains("backslash"),
+            "error should mention backslash, got: {err}"
+        );
     }
 }
