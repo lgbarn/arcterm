@@ -2076,6 +2076,10 @@ impl ApplicationHandler for App {
                 // Build pane render infos.
                 let mut pane_infos: Vec<PaneRenderInfo<'_>> = Vec::new();
 
+                // ISSUE-005: Shell-exit indicator — when the shell process has exited,
+                // we render a banner in the last row of the snapshot cells before
+                // displaying the frame. Any refactor of this block must preserve the
+                // banner so users are informed when a shell session ends.
                 if state.shell_exited {
                     // Show exit banner on the focused pane (or first available).
                     let target_id = focused;
@@ -2743,6 +2747,9 @@ impl ApplicationHandler for App {
                                 }
                             } else if let Some(terminal) = state.panes.get_mut(&focused_id) {
                                 terminal.write_input(&bytes);
+                                // ISSUE-002: request_redraw() must follow write_input so the
+                                // terminal display refreshes immediately after keyboard input.
+                                // This is a winit integration concern — do not remove this call.
                                 state.window.request_redraw();
                             }
                         }
