@@ -21,7 +21,9 @@ jobs:
       - name: Build
         run: cargo build --workspace
       - name: Test (non-GPU crates)
-        run: cargo test --package arcterm-core --package arcterm-vt --package arcterm-pty
+        run: cargo test --package arcterm-core --package arcterm-vt --package arcterm-pty --package arcterm-app
+      - name: Clippy (full workspace)
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
   gpu-test:
     runs-on: ubuntu-latest

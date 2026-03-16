@@ -1,0 +1,81 @@
+# arcterm base configuration
+#
+# This file documents every available configuration field with its type,
+# default value, and allowed values.  Copy it to ~/.config/arcterm/config.toml
+# and edit to taste.
+#
+# Config overlays allow you to maintain a base file and layer overrides on
+# top of it (see examples/config/overlay-font.toml and overlay-colors.toml).
+
+# ---------------------------------------------------------------------------
+# Appearance
+# ---------------------------------------------------------------------------
+
+# Font family name.  Must be installed on your system.
+# Default: "monospace"
+font_family = "monospace"
+
+# Font size in points.
+# Default: 14.0
+font_size = 14.0
+
+# Built-in color scheme.  One of: "dark", "light", "solarized", "dracula".
+# Overridden by any [colors] values below.
+# Default: "dark"
+color_scheme = "dark"
+
+# ---------------------------------------------------------------------------
+# Terminal behavior
+# ---------------------------------------------------------------------------
+
+# Number of lines kept in the scrollback buffer per pane.
+# Default: 10000
+scrollback_lines = 10000
+
+# Shell to launch in each new pane.
+# Default: $SHELL (falls back to "/bin/bash")
+# shell = "/bin/zsh"
+
+# ---------------------------------------------------------------------------
+# Multiplexer
+# ---------------------------------------------------------------------------
+
+[multiplexer]
+# Show the tab bar when more than one tab is open.
+# Default: true
+show_tab_bar = true
+
+# Leader key timeout in milliseconds.  After pressing the leader key, arcterm
+# waits this long for the next key in the sequence before treating the leader
+# press as a literal key.
+# Default: 500
+leader_timeout_ms = 500
+
+# ---------------------------------------------------------------------------
+# Custom colors (all fields are optional; any omitted field uses the scheme)
+# ---------------------------------------------------------------------------
+
+# [colors]
+# foreground = "#cdd6f4"   # default text color
+# background = "#1e1e2e"   # terminal background
+# cursor     = "#f5e0dc"   # cursor color
+#
+# ANSI palette — standard 8 colors
+# black   = "#45475a"
+# red     = "#f38ba8"
+# green   = "#a6e3a1"
+# yellow  = "#f9e2af"
+# blue    = "#89b4fa"
+# magenta = "#f5c2e7"
+# cyan    = "#94e2d5"
+# white   = "#bac2de"
+#
+# Bright variants
+# bright_black   = "#585b70"
+# bright_red     = "#f38ba8"
+# bright_green   = "#a6e3a1"
+# bright_yellow  = "#f9e2af"
+# bright_blue    = "#89b4fa"
+# bright_magenta = "#f5c2e7"
+# bright_cyan    = "#94e2d5"
+# bright_white   = "#a6adc8"

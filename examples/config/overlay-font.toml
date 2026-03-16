@@ -1,0 +1,17 @@
+# arcterm config overlay — font customization
+#
+# This overlay increases the font size and switches to a programming-focused
+# font.  Apply it with:
+#
+#   arcterm config accept overlay-font
+#
+# or place it in ~/.config/arcterm/overlays/overlay-font.toml.
+#
+# Only the fields listed here are overridden; all other settings come from
+# your base config.toml.
+
+# Switch to a Nerd Font for icon support in tools like starship, lsd, etc.
+font_family = "JetBrainsMono Nerd Font"
+
+# Increase size for high-DPI displays.
+font_size = 16.0
