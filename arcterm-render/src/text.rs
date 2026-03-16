@@ -224,6 +224,7 @@ impl TextRenderer {
     ///
     /// `offset_x` / `offset_y` are in physical pixels (scale_factor already
     /// applied by the caller).
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare_grid_at(
         &mut self,
         snapshot: &RenderSnapshot,
