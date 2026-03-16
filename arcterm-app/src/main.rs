@@ -1689,9 +1689,9 @@ impl ApplicationHandler for App {
             let focused = state.focused_pane();
             if let Some(terminal) = state.panes.get_mut(&focused) {
                 let grid = terminal.grid_mut();
-                if grid.scroll_offset > 0 {
+                if grid.scroll_offset() > 0 {
                     state.selection.clear();
-                    grid.scroll_offset = 0;
+                    grid.set_scroll_offset(0);
                 }
             }
             state.window.request_redraw();
@@ -1977,11 +1977,10 @@ impl ApplicationHandler for App {
                     let focused = state.focused_pane();
                     if let Some(terminal) = state.panes.get_mut(&focused) {
                         let grid = terminal.grid_mut();
-                        let max_offset = grid.scrollback.len();
-                        let current = grid.scroll_offset as i32;
+                        let current = grid.scroll_offset() as i32;
                         let new_offset = (current - lines * SCROLL_LINES_PER_TICK as i32)
-                            .clamp(0, max_offset as i32) as usize;
-                        grid.scroll_offset = new_offset;
+                            .max(0) as usize;
+                        grid.set_scroll_offset(new_offset);
                         state.window.request_redraw();
                     }
                 }
@@ -2340,7 +2339,7 @@ impl ApplicationHandler for App {
                             let grid = terminal.grid();
                             let total_rows = grid.all_text_rows().len();
                             let visible_rows = grid.size.rows;
-                            let scroll_offset = grid.scroll_offset;
+                            let scroll_offset = grid.scroll_offset();
                             let quads = so.match_quads_for_pane(
                                 pane_id,
                                 [rect.x, rect.y, rect.width, rect.height],
@@ -2648,12 +2647,13 @@ impl ApplicationHandler for App {
                                     {
                                         let total = terminal.grid().all_text_rows().len();
                                         let visible = terminal.grid().size.rows;
-                                        terminal.grid_mut().scroll_offset =
+                                        terminal.grid_mut().set_scroll_offset(
                                             search::SearchOverlayState::scroll_offset_for_match(
                                                 m.row_index,
                                                 total,
                                                 visible,
-                                            );
+                                            ),
+                                        );
                                     }
                                 }
                                 state.search_overlay = Some(overlay);
@@ -2668,12 +2668,13 @@ impl ApplicationHandler for App {
                                     {
                                         let total = terminal.grid().all_text_rows().len();
                                         let visible = terminal.grid().size.rows;
-                                        terminal.grid_mut().scroll_offset =
+                                        terminal.grid_mut().set_scroll_offset(
                                             search::SearchOverlayState::scroll_offset_for_match(
                                                 m.row_index,
                                                 total,
                                                 visible,
-                                            );
+                                            ),
+                                        );
                                     }
                                 }
                                 state.search_overlay = Some(overlay);
