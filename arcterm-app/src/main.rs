@@ -508,6 +508,15 @@ struct AppState {
     /// `NavigatePane` events with a 2-second TTL to avoid syscall spam.
     nvim_states: HashMap<PaneId, neovim::NeovimState>,
 
+    // ---- AI agent detection ----
+    /// Cached AI agent detection state for each pane.  Updated lazily on
+    /// `NavigatePane` events with a 5-second TTL.
+    ai_states: HashMap<PaneId, ai_detect::AiAgentState>,
+    /// Per-pane context: last command, exit code, and recent output lines.
+    pane_contexts: HashMap<PaneId, context::PaneContext>,
+    /// The pane that most recently received PTY data while running an AI agent.
+    last_ai_pane: Option<PaneId>,
+
     // ---- plugin system ----
     /// Plugin manager: owns all loaded plugin instances.
     plugin_manager: Option<arcterm_plugin::manager::PluginManager>,
@@ -689,6 +698,8 @@ impl AppState {
                 self.pty_channels.insert(id, rx);
                 self.auto_detectors.insert(id, AutoDetector::new());
                 self.structured_blocks.insert(id, Vec::new());
+                self.ai_states.insert(id, ai_detect::AiAgentState::check(None));
+                self.pane_contexts.insert(id, context::PaneContext::new(200));
             }
             Err(e) => {
                 log::error!("Failed to create PTY for pane {:?}: {e}", id);
@@ -730,7 +741,10 @@ impl AppState {
             self.auto_detectors.remove(id);
             self.structured_blocks.remove(id);
             self.nvim_states.remove(id);
+            self.ai_states.remove(id);
+            self.pane_contexts.remove(id);
         }
+        self.last_ai_pane = None;
 
         // Restore the layout from the workspace file.
         let leaf_count = count_leaves(&ws.layout);
@@ -783,6 +797,8 @@ impl AppState {
             }
             self.auto_detectors.insert(*id, AutoDetector::new());
             self.structured_blocks.insert(*id, Vec::new());
+            self.ai_states.insert(*id, ai_detect::AiAgentState::check(None));
+            self.pane_contexts.insert(*id, context::PaneContext::new(200));
         }
 
         let focus_id = leaf_ids.first().copied().unwrap_or_else(PaneId::next);
@@ -1001,6 +1017,14 @@ impl ApplicationHandler for App {
             (Some(mgr), Some(event_tx))
         };
 
+        // Pre-populate ai_states and pane_contexts for all initial panes.
+        let mut ai_states: HashMap<PaneId, ai_detect::AiAgentState> = HashMap::new();
+        let mut pane_contexts: HashMap<PaneId, context::PaneContext> = HashMap::new();
+        for id in panes.keys() {
+            ai_states.insert(*id, ai_detect::AiAgentState::check(None));
+            pane_contexts.insert(*id, context::PaneContext::new(200));
+        }
+
         self.state = Some(AppState {
             window,
             renderer,
@@ -1029,6 +1053,9 @@ impl ApplicationHandler for App {
             palette_mode: None,
             workspace_switcher: None,
             nvim_states: HashMap::new(),
+            ai_states,
+            pane_contexts,
+            last_ai_pane: None,
             plugin_manager,
             plugin_event_tx,
         });
@@ -1214,6 +1241,30 @@ impl ApplicationHandler for App {
                                 }
                             }
                         }
+
+                        // Drain OSC 133 exit codes into PaneContext.
+                        if let Some(terminal) = state.panes.get_mut(&id) {
+                            let exit_codes = terminal.take_exit_codes();
+                            if !exit_codes.is_empty() {
+                                let ctx = state.pane_contexts.entry(id).or_insert_with(|| {
+                                    context::PaneContext::new(200)
+                                });
+                                if let Some(&last_code) = exit_codes.last() {
+                                    ctx.set_exit_code(last_code);
+                                }
+                            }
+                        }
+
+                        // Update last_ai_pane when an AI-detected pane receives data.
+                        let is_ai_pane = state
+                            .ai_states
+                            .get(&id)
+                            .map(|s| s.kind.is_some())
+                            .unwrap_or(false);
+                        if is_ai_pane {
+                            state.last_ai_pane = Some(id);
+                        }
+
                         got_data = true;
 
                         #[cfg(feature = "latency-trace")]
@@ -1238,6 +1289,11 @@ impl ApplicationHandler for App {
             state.pty_channels.remove(&id);
             state.auto_detectors.remove(&id);
             state.structured_blocks.remove(&id);
+            state.ai_states.remove(&id);
+            state.pane_contexts.remove(&id);
+            if state.last_ai_pane == Some(id) {
+                state.last_ai_pane = None;
+            }
 
             // Notify plugins that a pane was closed.
             if let Some(ref tx) = state.plugin_event_tx {
@@ -2109,6 +2165,25 @@ impl ApplicationHandler for App {
                                 false // not nvim → fall through
                             };
 
+                            // Lazily refresh AI detection for the focused pane
+                            // (5-second TTL, same pattern as Neovim detection).
+                            {
+                                let needs_ai_refresh = state
+                                    .ai_states
+                                    .get(&focused_id)
+                                    .map(|s| !s.is_fresh())
+                                    .unwrap_or(true);
+
+                                if needs_ai_refresh {
+                                    let fresh = ai_detect::AiAgentState::check(child_pid);
+                                    // Update last_ai_pane if this pane has an AI agent.
+                                    if fresh.kind.is_some() {
+                                        state.last_ai_pane = Some(focused_id);
+                                    }
+                                    state.ai_states.insert(focused_id, fresh);
+                                }
+                            }
+
                             // 3. If Neovim did not consume the key, use
                             //    arcterm's layout-based navigation.
                             if !nvim_consumed {
@@ -2180,6 +2255,11 @@ impl ApplicationHandler for App {
                                     state.panes.remove(&lid);
                                     state.pty_channels.remove(&lid);
                                     state.nvim_states.remove(&lid);
+                                    state.ai_states.remove(&lid);
+                                    state.pane_contexts.remove(&lid);
+                                    if state.last_ai_pane == Some(lid) {
+                                        state.last_ai_pane = None;
+                                    }
                                 }
                                 // If no tabs left, exit.
                                 if state.tab_manager.tab_count() == 0 {
@@ -2200,6 +2280,11 @@ impl ApplicationHandler for App {
                                 state.panes.remove(&focused);
                                 state.pty_channels.remove(&focused);
                                 state.nvim_states.remove(&focused);
+                                state.ai_states.remove(&focused);
+                                state.pane_contexts.remove(&focused);
+                                if state.last_ai_pane == Some(focused) {
+                                    state.last_ai_pane = None;
+                                }
 
                                 // Focus the first remaining pane.
                                 let remaining = state.tab_layouts[active].all_pane_ids();

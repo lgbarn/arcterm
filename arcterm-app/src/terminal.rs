@@ -130,6 +130,12 @@ impl Terminal {
         std::mem::take(&mut self.grid_state.completed_blocks)
     }
 
+    /// Drain and return all shell exit codes received via OSC 133 D since the
+    /// last call.  The app layer stores the last value in the per-pane `PaneContext`.
+    pub fn take_exit_codes(&mut self) -> Vec<i32> {
+        self.grid_state.take_exit_codes()
+    }
+
     /// Return a reference to the underlying GridState.
     pub fn grid_state(&self) -> &GridState {
         &self.grid_state
