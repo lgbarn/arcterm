@@ -178,3 +178,6 @@
 - [2026-03-16T18:54:30Z] Session ended during build (may need /shipyard:resume)
 - [2026-03-16T18:54:39Z] Session ended during build (may need /shipyard:resume)
 - [2026-03-16T18:54:44Z] Session ended during build (may need /shipyard:resume)
+- [2026-03-16T20:16:10Z] Session ended during build (may need /shipyard:resume)
+- [2026-03-16T20:18:07Z] Session ended during build (may need /shipyard:resume)
+- [2026-03-16] PLAN-2.1 complete: Terminal wrapper rewrite (alacritty_terminal direct parser), AppState rewire, OSC 7770 text capture — 322 tests pass
