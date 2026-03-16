@@ -257,6 +257,8 @@ impl PlanViewState {
     }
 
     /// Move selection up (wraps to last entry).
+    // Keyboard navigation wired up in Phase 8 plan-view interactions.
+    #[allow(dead_code)]
     pub fn select_up(&mut self) {
         if self.selected > 0 {
             self.selected -= 1;
@@ -264,6 +266,8 @@ impl PlanViewState {
     }
 
     /// Move selection down (clamps at last entry).
+    // Keyboard navigation wired up in Phase 8 plan-view interactions.
+    #[allow(dead_code)]
     pub fn select_down(&mut self) {
         if !self.entries.is_empty() && self.selected + 1 < self.entries.len() {
             self.selected += 1;

@@ -597,6 +597,8 @@ struct AppState {
     /// Expanded plan view overlay; `None` when closed.
     plan_view: Option<plan::PlanViewState>,
     /// File-system watcher for `.shipyard/`, `PLAN.md`, `TODO.md`.
+    // Held to keep the watcher alive; events are received via plan_watcher_rx.
+    #[allow(dead_code)]
     plan_watcher: Option<notify::RecommendedWatcher>,
     /// Channel from plan_watcher for receiving change notifications.
     plan_watcher_rx: Option<std::sync::mpsc::Receiver<notify::Result<notify::Event>>>,
@@ -1427,7 +1429,7 @@ impl ApplicationHandler for App {
                                     // from the raw line before storing it.
                                     let clean: String = line
                                         .iter()
-                                        .filter(|&&b| b >= 0x20 && b < 0x80)
+                                        .filter(|&&b| (0x20..0x80).contains(&b))
                                         .map(|&b| b as char)
                                         .collect();
                                     if !clean.is_empty() {
@@ -1475,28 +1477,28 @@ impl ApplicationHandler for App {
                                 .map(|t| t.take_tool_queries())
                                 .unwrap_or_default();
 
-                            if !tool_queries.is_empty() {
-                                if let Some(ref mgr) = state.plugin_manager {
-                                    let tools = mgr.list_tools();
-                                    // Serialize tool schemas as JSON manually
-                                    // (ToolSchema is WIT-generated without Serialize).
-                                    let entries: Vec<String> = tools.iter().map(|t| {
-                                        format!(
-                                            "{{\"name\":{},\"description\":{},\"inputSchema\":{}}}",
-                                            serde_json::Value::String(t.name.clone()),
-                                            serde_json::Value::String(t.description.clone()),
-                                            t.input_schema.as_str(),
-                                        )
-                                    }).collect();
-                                    let json = format!("[{}]", entries.join(","));
-                                    // Base64-encode the JSON for safe OSC transport.
-                                    use base64::Engine as _;
-                                    let b64 = base64::engine::general_purpose::STANDARD.encode(json.as_bytes());
-                                    // Write the OSC 7770 tools/response sequence.
-                                    let response = format!("\x1b]7770;tools/response;{}\x07", b64);
-                                    if let Some(terminal) = state.panes.get_mut(&id) {
-                                        terminal.write_input(response.as_bytes());
-                                    }
+                            if !tool_queries.is_empty()
+                                && let Some(ref mgr) = state.plugin_manager
+                            {
+                                let tools = mgr.list_tools();
+                                // Serialize tool schemas as JSON manually
+                                // (ToolSchema is WIT-generated without Serialize).
+                                let entries: Vec<String> = tools.iter().map(|t| {
+                                    format!(
+                                        "{{\"name\":{},\"description\":{},\"inputSchema\":{}}}",
+                                        serde_json::Value::String(t.name.clone()),
+                                        serde_json::Value::String(t.description.clone()),
+                                        t.input_schema.as_str(),
+                                    )
+                                }).collect();
+                                let json = format!("[{}]", entries.join(","));
+                                // Base64-encode the JSON for safe OSC transport.
+                                use base64::Engine as _;
+                                let b64 = base64::engine::general_purpose::STANDARD.encode(json.as_bytes());
+                                // Write the OSC 7770 tools/response sequence.
+                                let response = format!("\x1b]7770;tools/response;{}\x07", b64);
+                                if let Some(terminal) = state.panes.get_mut(&id) {
+                                    terminal.write_input(response.as_bytes());
                                 }
                             }
                         }
@@ -2761,31 +2763,30 @@ impl ApplicationHandler for App {
                             // Jump to the pane that most recently ran an AI agent.
                             // If pending_errors are queued, drain and inject them into the
                             // AI pane's PTY input as OSC 7770 error blocks.
-                            if let Some(ai_id) = state.last_ai_pane {
-                                if state.panes.contains_key(&ai_id) {
-                                    // Drain and inject any pending error contexts.
-                                    let errors =
-                                        std::mem::take(&mut state.pending_errors);
-                                    if !errors.is_empty() {
-                                        if let Some(ai_terminal) =
-                                            state.panes.get_mut(&ai_id)
-                                        {
-                                            for err_ctx in &errors {
-                                                let payload =
-                                                    context::format_error_osc7770(err_ctx);
-                                                ai_terminal.write_input(&payload);
-                                            }
-                                            log::info!(
-                                                "JumpToAiPane: injected {} error context(s) into pane {:?}",
-                                                errors.len(),
-                                                ai_id
-                                            );
-                                        }
+                            if let Some(ai_id) = state.last_ai_pane
+                                && state.panes.contains_key(&ai_id)
+                            {
+                                // Drain and inject any pending error contexts.
+                                let errors =
+                                    std::mem::take(&mut state.pending_errors);
+                                if !errors.is_empty()
+                                    && let Some(ai_terminal) =
+                                        state.panes.get_mut(&ai_id)
+                                {
+                                    for err_ctx in &errors {
+                                        let payload =
+                                            context::format_error_osc7770(err_ctx);
+                                        ai_terminal.write_input(&payload);
                                     }
-                                    state.set_focused_pane(ai_id);
-                                    state.selection.clear();
-                                    state.window.request_redraw();
+                                    log::info!(
+                                        "JumpToAiPane: injected {} error context(s) into pane {:?}",
+                                        errors.len(),
+                                        ai_id
+                                    );
                                 }
+                                state.set_focused_pane(ai_id);
+                                state.selection.clear();
+                                state.window.request_redraw();
                             }
                         }
 

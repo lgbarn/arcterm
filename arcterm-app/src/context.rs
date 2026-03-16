@@ -17,12 +17,16 @@ use std::path::PathBuf;
 #[derive(Debug, Clone)]
 pub struct ErrorContext {
     /// The command that produced the error.
+    // Carried in the struct for future OSC 7770 payload formatting and display.
+    #[allow(dead_code)]
     pub command: String,
     /// The exit code returned by the command.
     pub exit_code: i32,
     /// Up to 20 lines of output immediately preceding the exit.
     pub output_tail: Vec<String>,
     /// Working directory of the pane at the time of the error, if known.
+    // Carried in the struct for future OSC 7770 payload formatting and display.
+    #[allow(dead_code)]
     pub cwd: Option<PathBuf>,
     /// The pane that produced this error.
     pub source_pane: PaneId,
@@ -77,6 +81,8 @@ impl PaneContext {
     }
 
     /// Record the command entered at the shell prompt.
+    // Called by the OSC 133 B handler wired up in a future Phase 8 shell-integration pass.
+    #[allow(dead_code)]
     pub fn set_command(&mut self, cmd: String) {
         self.last_command = Some(cmd);
     }
@@ -91,6 +97,8 @@ impl PaneContext {
     /// Returns `None` when no exit code has been recorded or when the code
     /// is zero (success).  The `pane_id` and `cwd` are embedded in the result
     /// so the caller does not need to pass them separately at injection time.
+    // Convenience wrapper used by tests and future UI layer.
+    #[allow(dead_code)]
     pub fn error_context(&self) -> Option<ErrorContext> {
         self.error_context_for(PaneId(0), None)
     }

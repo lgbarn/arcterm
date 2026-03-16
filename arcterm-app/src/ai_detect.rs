@@ -64,14 +64,12 @@ pub fn detect_ai_agent(pid: u32) -> Option<AiAgentKind> {
 
     // Python-based fallback: aider runs as `python3 -m aider` or via a
     // script whose path ends with `aider`.
-    if comm.starts_with("python") {
-        if let Some(args) = process_args(pid) {
-            if let Some(first) = args.first() {
-                if first.ends_with("aider") {
-                    return Some(AiAgentKind::Aider);
-                }
-            }
-        }
+    if comm.starts_with("python")
+        && let Some(args) = process_args(pid)
+        && let Some(first) = args.first()
+        && first.ends_with("aider")
+    {
+        return Some(AiAgentKind::Aider);
     }
 
     None
