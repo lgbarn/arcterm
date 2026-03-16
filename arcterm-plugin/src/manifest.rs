@@ -86,12 +86,47 @@ impl PluginManifest {
     ///
     /// Checks:
     /// - `name` is non-empty.
+    /// - `name` does not contain path traversal characters (`/`, `\`, `..`)
+    ///   and does not start with `.` or represent an absolute path.
     /// - `wasm` path is non-empty.
     /// - `api_version` equals `"0.1"`.
     pub fn validate(&self) -> Result<(), String> {
         if self.name.trim().is_empty() {
             return Err("plugin name must not be empty".to_string());
         }
+
+        // Reject plugin names that could escape the install directory.
+        // Names must be simple identifiers: no path separators, no parent
+        // directory components, no leading dots, and not absolute paths.
+        if self.name.contains('/') || self.name.contains('\\') {
+            return Err(format!(
+                "plugin name '{}' must not contain path separators ('/' or '\\')",
+                self.name
+            ));
+        }
+        if self.name.contains("..") {
+            return Err(format!(
+                "plugin name '{}' must not contain '..'",
+                self.name
+            ));
+        }
+        if self.name.starts_with('.') {
+            return Err(format!(
+                "plugin name '{}' must not start with '.'",
+                self.name
+            ));
+        }
+        // Reject absolute paths (Unix '/' prefix or Windows drive letters like "C:").
+        {
+            let p = std::path::Path::new(&self.name);
+            if p.is_absolute() {
+                return Err(format!(
+                    "plugin name '{}' must not be an absolute path",
+                    self.name
+                ));
+            }
+        }
+
         if self.wasm.trim().is_empty() {
             return Err("plugin wasm path must not be empty".to_string());
         }
@@ -122,7 +157,10 @@ pub fn build_wasi_ctx(permissions: &Permissions) -> WasiCtx {
     use wasmtime_wasi::{DirPerms, FilePerms};
 
     let mut builder = WasiCtxBuilder::new();
-    builder.inherit_stdio();
+    // Do NOT call builder.inherit_stdio() — plugins communicate exclusively
+    // via the WIT interface (render-text, log, etc.).  Exposing raw host
+    // stdin/stdout/stderr to every plugin, regardless of permissions, would
+    // be a sandbox escape.
 
     for path_str in &permissions.filesystem {
         let path = std::path::Path::new(path_str);
@@ -281,5 +319,48 @@ mod tests {
 
         // Should not panic even with invalid paths.
         let _ctx = build_wasi_ctx(&permissions);
+    }
+
+    // ── Security: C1 — path traversal via plugin name ─────────────────────
+
+    fn make_manifest(name: &str) -> PluginManifest {
+        PluginManifest {
+            name: name.to_string(),
+            version: "0.1.0".to_string(),
+            api_version: "0.1".to_string(),
+            description: String::new(),
+            wasm: "plugin.wasm".to_string(),
+            permissions: Permissions::default(),
+        }
+    }
+
+    #[test]
+    fn validate_rejects_name_with_forward_slash() {
+        let err = make_manifest("../../.config").validate().expect_err("should reject");
+        assert!(err.contains("path separator") || err.contains(".."), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_name_with_double_dot() {
+        let err = make_manifest("foo..bar").validate().expect_err("should reject ..");
+        assert!(err.contains(".."), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_name_starting_with_dot() {
+        let err = make_manifest(".hidden").validate().expect_err("should reject leading dot");
+        assert!(err.contains("'.'"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_name_with_backslash() {
+        let err = make_manifest("foo\\bar").validate().expect_err("should reject backslash");
+        assert!(err.contains("path separator"), "{err}");
+    }
+
+    #[test]
+    fn validate_accepts_safe_name() {
+        // A plain alphanumeric name with hyphens is always valid.
+        make_manifest("my-plugin-v2").validate().expect("safe name must pass");
     }
 }

@@ -307,7 +307,7 @@ fn dispatch_osc7770<H: Handler>(handler: &mut H, params: &[&[u8]]) {
                 {
                     match key {
                         "name" => tool_name = Some(val.to_string()),
-                        "args" => args_b64 = Some(&raw[5..]), // skip "args="
+                        "args" => args_b64 = raw.get(5..).or(Some(b"")), // skip "args=", bounds-safe
                         _ => {}
                     }
                 }
@@ -894,6 +894,19 @@ mod osc7770_tools_tests {
         // Extra params after tools/list should not cause a panic; query still recorded.
         feed(&mut gs, b"\x1b]7770;tools/list;extra=val\x07");
         assert_eq!(gs.tool_queries.len(), 1);
+    }
+
+    /// Security I1: tools/call with a malformed args= param shorter than 5 bytes
+    /// must not panic (previously did `raw[5..]` unconditionally).
+    #[test]
+    fn tools_call_short_args_does_not_panic() {
+        let mut gs = make_gs();
+        // "args" is exactly 4 bytes — raw[5..] would panic before the fix.
+        feed(&mut gs, b"\x1b]7770;tools/call;name=foo;args\x07");
+        // Either silently ignored or recorded — what matters is no panic.
+        // With args= missing a value, the split_once('=') finds nothing and
+        // the call is dropped (missing args param).
+        assert!(gs.tool_calls.is_empty(), "malformed args must be ignored");
     }
 }
 

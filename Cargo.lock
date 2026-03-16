@@ -312,6 +312,7 @@ version = "0.1.0"
 dependencies = [
  "arcterm-core",
  "base64",
+ "log",
  "vte",
 ]
 

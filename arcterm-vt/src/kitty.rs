@@ -173,12 +173,25 @@ impl KittyChunkAssembler {
 
         let id = cmd.image_id;
 
+        /// Maximum number of raw base64 bytes buffered per image before the
+        /// transfer is abandoned.  64 MiB of base64 decodes to ~48 MiB of
+        /// image data, which is already generous for a terminal image protocol.
+        const MAX_CHUNK_BUFFER_BYTES: usize = 64 * 1024 * 1024;
+
         if cmd.more_chunks {
             // Append this chunk's base64 bytes to the pending buffer.
-            self.pending
-                .entry(id)
-                .or_default()
-                .extend_from_slice(&cmd.payload_base64);
+            let buf = self.pending.entry(id).or_default();
+            let new_len = buf.len().saturating_add(cmd.payload_base64.len());
+            if new_len > MAX_CHUNK_BUFFER_BYTES {
+                // Discard this image's accumulated data and log a warning to
+                // prevent OOM via crafted escape sequences.
+                self.pending.remove(&id);
+                log::warn!(
+                    "kitty: image id={id} exceeded {MAX_CHUNK_BUFFER_BYTES}-byte cap; discarding"
+                );
+                return None;
+            }
+            buf.extend_from_slice(&cmd.payload_base64);
             return None;
         }
 
@@ -450,5 +463,72 @@ mod tests {
         asm.receive_chunk(&cmd2);
         // After completion, pending for image 5 must be gone.
         assert!(!asm.pending.contains_key(&5));
+    }
+
+    // ── Security I2: 64 MB cap on accumulated chunk buffer ────────────────
+
+    /// Sending a chunk that alone exceeds the 64 MB cap is discarded and
+    /// returns None (not OOM).
+    #[test]
+    fn chunk_exceeding_cap_is_discarded() {
+        let mut asm = KittyChunkAssembler::new();
+        // Construct a payload that is just over 64 MiB of base64 bytes.
+        // 64 MiB + 1 byte of raw base64 text (the cap is on the byte count
+        // of the base64 buffer, not the decoded output).
+        let oversized_payload = vec![b'A'; 64 * 1024 * 1024 + 1];
+        let cmd = KittyCommand {
+            action: KittyAction::TransmitAndDisplay,
+            format: KittyFormat::Png,
+            image_id: 99,
+            more_chunks: true,
+            quiet: 0,
+            cols: None,
+            rows: None,
+            payload_base64: oversized_payload,
+        };
+        let result = asm.receive_chunk(&cmd);
+        assert!(result.is_none(), "oversized chunk must return None");
+        // The pending buffer for this image must have been purged.
+        assert!(
+            !asm.pending.contains_key(&99),
+            "oversized image must be removed from pending"
+        );
+    }
+
+    /// Accumulating chunks that together exceed the cap discards the image.
+    #[test]
+    fn accumulated_chunks_exceeding_cap_are_discarded() {
+        let mut asm = KittyChunkAssembler::new();
+        // Each chunk is 32 MiB + 1 byte; two together exceed 64 MiB.
+        let large_payload = vec![b'B'; 32 * 1024 * 1024 + 1];
+
+        let cmd1 = KittyCommand {
+            action: KittyAction::TransmitAndDisplay,
+            format: KittyFormat::Png,
+            image_id: 77,
+            more_chunks: true,
+            quiet: 0,
+            cols: None,
+            rows: None,
+            payload_base64: large_payload.clone(),
+        };
+        let cmd2 = KittyCommand {
+            image_id: 77,
+            more_chunks: true,
+            payload_base64: large_payload,
+            ..cmd1.clone()
+        };
+
+        // First chunk is below the cap — buffered.
+        let r1 = asm.receive_chunk(&cmd1);
+        assert!(r1.is_none());
+
+        // Second chunk pushes the total over the cap — image is discarded.
+        let r2 = asm.receive_chunk(&cmd2);
+        assert!(r2.is_none());
+        assert!(
+            !asm.pending.contains_key(&77),
+            "image must be purged after cap exceeded"
+        );
     }
 }

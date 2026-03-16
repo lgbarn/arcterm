@@ -8,3 +8,4 @@ license.workspace = true
 vte.workspace = true
 arcterm-core = { path = "../arcterm-core" }
 base64.workspace = true
+log.workspace = true
