@@ -40,7 +40,7 @@ impl PluginRuntime {
         wasm_bytes: &[u8],
         config: HashMap<String, String>,
     ) -> anyhow::Result<PluginInstance> {
-        let component = Component::from_binary(&self.engine, wasm_bytes)?;
+        let component = Component::new(&self.engine, wasm_bytes)?;
 
         let host_data = PluginHostData::new(config);
         let mut store = Store::new(&self.engine, host_data);
@@ -51,6 +51,32 @@ impl PluginRuntime {
         let instance = ArctermPlugin::instantiate(&mut store, &component, &self.linker)?;
 
         // Call the guest `load` export to initialise the plugin.
+        instance.call_load(&mut store)?;
+
+        Ok(PluginInstance { store, instance })
+    }
+
+    /// Compile a WASM component from raw bytes with a caller-supplied [`WasiCtx`] and permissions.
+    ///
+    /// This is the manifest-aware variant called by `PluginManager::load_from_dir`.
+    /// The `wasi_ctx` is produced by `build_wasi_ctx(&manifest.permissions)` and
+    /// enforces the filesystem/network sandbox declared in `plugin.toml`.
+    /// The `permissions` are stored in `PluginHostData` to gate host function calls.
+    pub fn load_plugin_with_wasi(
+        &self,
+        wasm_bytes: &[u8],
+        config: HashMap<String, String>,
+        wasi_ctx: wasmtime_wasi::WasiCtx,
+        permissions: crate::manifest::Permissions,
+    ) -> anyhow::Result<PluginInstance> {
+        let component = Component::new(&self.engine, wasm_bytes)?;
+
+        let host_data = PluginHostData::new_with_wasi(config, wasi_ctx, permissions);
+        let mut store = Store::new(&self.engine, host_data);
+
+        store.limiter(|data| &mut data.limits);
+
+        let instance = ArctermPlugin::instantiate(&mut store, &component, &self.linker)?;
         instance.call_load(&mut store)?;
 
         Ok(PluginInstance { store, instance })
