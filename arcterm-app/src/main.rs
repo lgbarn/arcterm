@@ -1355,6 +1355,27 @@ impl ApplicationHandler for App {
         }
 
         // ------------------------------------------------------------------
+        // Debounced auto-search: trigger execute_search if query has been
+        // stable for 200ms and a compiled regex is ready.
+        // ------------------------------------------------------------------
+        if state
+            .search_overlay
+            .as_ref()
+            .map(|so| so.should_auto_search())
+            .unwrap_or(false)
+        {
+            if let Some(ref mut overlay) = state.search_overlay {
+                let pane_rows: Vec<(PaneId, Vec<String>)> = state
+                    .panes
+                    .iter()
+                    .map(|(&id, t)| (id, t.grid().all_text_rows()))
+                    .collect();
+                overlay.execute_search(&pane_rows);
+            }
+            state.window.request_redraw();
+        }
+
+        // ------------------------------------------------------------------
         // Poll ALL PTY channels (all tabs, all panes).
         // ------------------------------------------------------------------
         let mut got_data = false;
@@ -2454,6 +2475,104 @@ impl ApplicationHandler for App {
                             }
                             PaletteEvent::Consumed => {
                                 state.window.request_redraw();
+                            }
+                        }
+                        return;
+                    }
+
+                    // Overlay review is modal — route ALL key input through it when open.
+                    if state.overlay_review.is_some() {
+                        use overlay::OverlayAction;
+                        let mut review = state.overlay_review.take().unwrap();
+                        let action = review.handle_key(&event.logical_key);
+                        match action {
+                            OverlayAction::Accept => {
+                                let src = review.current_path().to_path_buf();
+                                let dst = config::accepted_dir().join(
+                                    src.file_name().unwrap_or_default(),
+                                );
+                                if let Err(e) = std::fs::create_dir_all(config::accepted_dir()) {
+                                    log::warn!("overlay: cannot create accepted dir: {e}");
+                                }
+                                if let Err(e) = std::fs::rename(&src, &dst) {
+                                    log::warn!("overlay: failed to move overlay to accepted: {e}");
+                                }
+                                // Advance to next file or close.
+                                let mut files = review.pending_files;
+                                files.remove(review.current_index);
+                                if files.is_empty() {
+                                    // No more pending — close overlay.
+                                } else {
+                                    let idx = review.current_index.min(files.len() - 1);
+                                    let (new_cfg, _) = config::ArctermConfig::load_with_overlays();
+                                    state.config = new_cfg.clone();
+                                    let diff = overlay::compute_diff(&new_cfg, &files[idx]);
+                                    state.overlay_review = Some(overlay::OverlayReviewState {
+                                        pending_files: files,
+                                        current_index: idx,
+                                        diff_text: diff,
+                                        scroll_offset: 0,
+                                    });
+                                }
+                                // Reload config with newly accepted overlays.
+                                let (new_cfg, _) = config::ArctermConfig::load_with_overlays();
+                                state.config = new_cfg;
+                                state.window.request_redraw();
+                            }
+                            OverlayAction::Reject => {
+                                let src = review.current_path().to_path_buf();
+                                if let Err(e) = std::fs::remove_file(&src) {
+                                    log::warn!("overlay: failed to delete pending overlay: {e}");
+                                }
+                                let mut files = review.pending_files;
+                                files.remove(review.current_index);
+                                if !files.is_empty() {
+                                    let idx = review.current_index.min(files.len() - 1);
+                                    let base_cfg = state.config.clone();
+                                    let diff = overlay::compute_diff(&base_cfg, &files[idx]);
+                                    state.overlay_review = Some(overlay::OverlayReviewState {
+                                        pending_files: files,
+                                        current_index: idx,
+                                        diff_text: diff,
+                                        scroll_offset: 0,
+                                    });
+                                }
+                                state.window.request_redraw();
+                            }
+                            OverlayAction::Edit(path) => {
+                                // Close overlay review and spawn .
+                                let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".into());
+                                let _ = std::process::Command::new(&editor).arg(&path).spawn();
+                                // overlay_review stays None (taken above)
+                                state.window.request_redraw();
+                            }
+                            OverlayAction::Close => {
+                                // overlay_review stays None (already taken)
+                                state.window.request_redraw();
+                            }
+                            OverlayAction::NextFile => {
+                                let total = review.pending_files.len();
+                                let next_idx = (review.current_index + 1).min(total - 1);
+                                let base_cfg = state.config.clone();
+                                let diff = overlay::compute_diff(&base_cfg, &review.pending_files[next_idx]);
+                                review.current_index = next_idx;
+                                review.diff_text = diff;
+                                review.scroll_offset = 0;
+                                state.overlay_review = Some(review);
+                                state.window.request_redraw();
+                            }
+                            OverlayAction::PrevFile => {
+                                let prev_idx = review.current_index.saturating_sub(1);
+                                let base_cfg = state.config.clone();
+                                let diff = overlay::compute_diff(&base_cfg, &review.pending_files[prev_idx]);
+                                review.current_index = prev_idx;
+                                review.diff_text = diff;
+                                review.scroll_offset = 0;
+                                state.overlay_review = Some(review);
+                                state.window.request_redraw();
+                            }
+                            OverlayAction::Noop => {
+                                state.overlay_review = Some(review);
                             }
                         }
                         return;
