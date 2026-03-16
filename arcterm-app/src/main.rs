@@ -1014,11 +1014,14 @@ impl ApplicationHandler for App {
             cfg.color_scheme,
         );
 
-        let window = Arc::new(
-            event_loop
-                .create_window(window_attrs)
-                .expect("failed to create window"),
-        );
+        let window = match event_loop.create_window(window_attrs) {
+            Ok(w) => Arc::new(w),
+            Err(e) => {
+                log::error!("Window creation failed: {e}");
+                event_loop.exit();
+                return;
+            }
+        };
 
         let mut renderer = match Renderer::new(window.clone(), cfg.font_size) {
             Ok(r) => r,
