@@ -14,11 +14,11 @@ pub struct GpuState {
 
 impl GpuState {
     /// Initialize wgpu: instance → surface → adapter → device/queue → configure surface.
-    pub fn new(window: Arc<Window>) -> Self {
+    pub fn new(window: Arc<Window>) -> Result<Self, String> {
         pollster::block_on(Self::new_async(window))
     }
 
-    async fn new_async(window: Arc<Window>) -> Self {
+    async fn new_async(window: Arc<Window>) -> Result<Self, String> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..Default::default()
@@ -26,7 +26,7 @@ impl GpuState {
 
         let surface = instance
             .create_surface(window.clone())
-            .expect("failed to create wgpu surface");
+            .map_err(|e| format!("failed to create wgpu surface: {e}"))?;
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -35,7 +35,7 @@ impl GpuState {
                 force_fallback_adapter: false,
             })
             .await
-            .expect("failed to find a suitable GPU adapter");
+            .map_err(|e| format!("failed to find a suitable GPU adapter: {e}"))?;
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -47,7 +47,7 @@ impl GpuState {
                 ..Default::default()
             })
             .await
-            .expect("failed to create wgpu device");
+            .map_err(|e| format!("failed to create wgpu device: {e}"))?;
 
         let size = window.inner_size();
         let caps = surface.get_capabilities(&adapter);
@@ -73,13 +73,13 @@ impl GpuState {
         };
         surface.configure(&device, &surface_config);
 
-        Self {
+        Ok(Self {
             device,
             queue,
             surface,
             surface_config,
             surface_format,
-        }
+        })
     }
 
     /// Reconfigure the surface after a window resize. Guards against zero dimensions.
