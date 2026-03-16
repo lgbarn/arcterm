@@ -51,7 +51,14 @@ impl ApplicationHandler for App {
                 .expect("failed to create window"),
         );
 
-        let renderer = Renderer::new(window.clone(), 14.0);
+        let renderer = match Renderer::new(window.clone(), 14.0) {
+            Ok(r) => r,
+            Err(e) => {
+                log::error!("GPU initialization failed: {e}");
+                event_loop.exit();
+                return;
+            }
+        };
 
         // Build a test grid with "Hello, Arcterm!" and colored rows.
         let size = renderer.grid_size_for_window(
