@@ -84,32 +84,38 @@ impl RenderPalette {
     }
 
     /// Convert background to a `wgpu::Color` for use as the clear load op.
+    ///
+    /// Values are converted from sRGB to linear because the surface format
+    /// is `Bgra8UnormSrgb` — wgpu applies sRGB encoding on output, so inputs
+    /// must be in linear space.
     pub fn bg_wgpu(&self) -> wgpu::Color {
         let (r, g, b) = self.background;
         wgpu::Color {
-            r: r as f64 / 255.0,
-            g: g as f64 / 255.0,
-            b: b as f64 / 255.0,
+            r: srgb_to_linear_f64(r),
+            g: srgb_to_linear_f64(g),
+            b: srgb_to_linear_f64(b),
             a: 1.0,
         }
     }
 
-    /// Convert background to an RGBA f32 array.
+    /// Convert background to a linear RGBA f32 array (for quad pipeline).
     pub fn bg_f32(&self) -> [f32; 4] {
         let (r, g, b) = self.background;
-        [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
+        [srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b), 1.0]
     }
 
     /// Convert foreground to a `glyphon::Color`.
+    ///
+    /// glyphon handles sRGB conversion internally, so we pass raw u8 values.
     pub fn fg_glyphon(&self) -> glyphon::Color {
         let (r, g, b) = self.foreground;
         glyphon::Color::rgb(r, g, b)
     }
 
-    /// Convert cursor to an RGBA f32 array.
+    /// Convert cursor to a linear RGBA f32 array (for quad pipeline).
     pub fn cursor_f32(&self) -> [f32; 4] {
         let (r, g, b) = self.cursor;
-        [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
+        [srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b), 1.0]
     }
 
     /// Convert ANSI index `n` (0–15) to a `glyphon::Color`.
@@ -128,6 +134,30 @@ impl RenderPalette {
             return self.ansi[n as usize];
         }
         XTERM_256[n as usize]
+    }
+}
+
+/// Convert an sRGB u8 component (0–255) to linear f32 (0.0–1.0).
+///
+/// Uses the standard sRGB transfer function.  Required because wgpu's
+/// `Bgra8UnormSrgb` surface format expects linear input — the hardware
+/// applies the sRGB gamma curve on output.
+pub fn srgb_to_linear(c: u8) -> f32 {
+    let s = c as f32 / 255.0;
+    if s <= 0.04045 {
+        s / 12.92
+    } else {
+        ((s + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Same as [`srgb_to_linear`] but returns f64 (for `wgpu::Color`).
+fn srgb_to_linear_f64(c: u8) -> f64 {
+    let s = c as f64 / 255.0;
+    if s <= 0.04045 {
+        s / 12.92
+    } else {
+        ((s + 0.055) / 1.055).powf(2.4)
     }
 }
 

@@ -436,11 +436,11 @@ pub fn build_quad_instances_at(
 /// Convert a terminal Color to an RGBA f32 array.
 fn term_color_to_f32(color: TermColor, is_fg: bool, palette: &RenderPalette) -> [f32; 4] {
     let g = ansi_color_to_glyphon(color, is_fg, palette);
-    // glyphon::Color stores components as u8.
+    // Convert sRGB u8 → linear f32 for the GPU quad pipeline.
     [
-        g.r() as f32 / 255.0,
-        g.g() as f32 / 255.0,
-        g.b() as f32 / 255.0,
+        crate::palette::srgb_to_linear(g.r()),
+        crate::palette::srgb_to_linear(g.g()),
+        crate::palette::srgb_to_linear(g.b()),
         1.0,
     ]
 }
