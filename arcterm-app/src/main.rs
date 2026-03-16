@@ -2216,6 +2216,33 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                // Config overlay review — diff view for pending overlays.
+                if let Some(ref review) = state.overlay_review {
+                    let win_w = state.renderer.gpu.surface_config.width as f32;
+                    let win_h = state.renderer.gpu.surface_config.height as f32;
+
+                    let (review_quads, review_texts) = review.render_quads(win_w, win_h);
+                    for pq in review_quads {
+                        overlay_quads.push(OverlayQuad {
+                            rect: pq.rect,
+                            color: pq.color,
+                        });
+                    }
+
+                    // Render text lines: header at top of panel, then diff lines.
+                    let cell_h = state.renderer.text.cell_size.height * sf;
+                    let cell_w = state.renderer.text.cell_size.width * sf;
+                    let panel_x = (win_w - (win_w * 0.80).max(400.0)) / 2.0 + cell_w;
+                    let panel_y = (win_h - (win_h * 0.80).max(300.0)) / 2.0;
+                    for (i, line) in review_texts.iter().enumerate() {
+                        palette_text.push((
+                            line.clone(),
+                            panel_x,
+                            panel_y + cell_h * i as f32,
+                        ));
+                    }
+                }
+
                 // Plan view — expanded modal overlay (like command palette).
                 if let Some(ref view) = state.plan_view {
                     let win_w = state.renderer.gpu.surface_config.width as f32;
@@ -2234,6 +2261,57 @@ impl ApplicationHandler for App {
                     let view_texts = view.render_text(win_w, win_h, cell_w, cell_h);
                     for pt in view_texts {
                         palette_text.push((pt.text, pt.x, pt.y));
+                    }
+                }
+
+                // Search overlay — input bar and match highlight quads.
+                if let Some(ref so) = state.search_overlay {
+                    let win_w = state.renderer.gpu.surface_config.width as f32;
+                    let win_h = state.renderer.gpu.surface_config.height as f32;
+                    let cell_h = state.renderer.text.cell_size.height * sf;
+                    let cell_w = state.renderer.text.cell_size.width * sf;
+                    let bar_h = cell_h * 1.5;
+
+                    // Search input bar at the top of the window.
+                    overlay_quads.push(OverlayQuad {
+                        rect: [0.0, 0.0, win_w, bar_h],
+                        color: [0.10, 0.11, 0.18, 0.92],
+                    });
+                    // Query text.
+                    let match_info = if so.matches.is_empty() {
+                        if so.error_msg.is_some() {
+                            format!("/{} [invalid regex]", so.query)
+                        } else {
+                            format!("/{}", so.query)
+                        }
+                    } else {
+                        format!("/{} — {}/{} matches", so.query, so.current_match + 1, so.matches.len())
+                    };
+                    palette_text.push((match_info, 8.0 * sf, (bar_h - cell_h) / 2.0));
+
+                    // Match highlight quads on each pane's grid.
+                    for (&pane_id, rect) in &rects {
+                        if let Some(terminal) = state.panes.get(&pane_id) {
+                            let grid = terminal.grid();
+                            let total_rows = grid.all_text_rows().len();
+                            let visible_rows = grid.size.rows;
+                            let scroll_offset = grid.scroll_offset;
+                            let quads = so.match_quads_for_pane(
+                                pane_id,
+                                [rect.x, rect.y, rect.width, rect.height],
+                                cell_w,
+                                cell_h,
+                                scroll_offset,
+                                visible_rows,
+                                total_rows,
+                            );
+                            for (q, _is_current) in quads {
+                                overlay_quads.push(OverlayQuad {
+                                    rect: q.rect,
+                                    color: q.color,
+                                });
+                            }
+                        }
                     }
                 }
 
