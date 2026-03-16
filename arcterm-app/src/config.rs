@@ -10,14 +10,14 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 
 use notify::{EventKind, RecursiveMode, Watcher};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
 /// Full Arcterm configuration, sourced from `config.toml`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ArctermConfig {
     /// Font family name (empty string means system default monospace).
@@ -71,7 +71,7 @@ impl Default for ArctermConfig {
 }
 
 /// Optional per-slot colour overrides (hex strings, e.g. `"#ff5555"`).
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ColorOverrides {
     // ANSI 0-7 (normal)
@@ -99,7 +99,7 @@ pub struct ColorOverrides {
 }
 
 /// Multiplexer configuration (leader key, tab bar, pane borders, navigation).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct MultiplexerConfig {
     /// Leader key chord used to prefix all multiplexer commands (default: "Ctrl+a").
@@ -127,7 +127,7 @@ impl Default for MultiplexerConfig {
 }
 
 /// Keybinding configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct KeybindingConfig {
     /// Key combination string for copy (default: "Super+C").
@@ -198,6 +198,115 @@ impl ArctermConfig {
                 Self::default()
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Overlay directory helpers
+// ---------------------------------------------------------------------------
+
+/// Return the directory where overlay files live:
+/// `<config_dir>/arcterm/overlays`.
+pub fn overlay_dir() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("arcterm")
+        .join("overlays")
+}
+
+/// Return the directory for pending (not yet accepted) overlays:
+/// `<overlay_dir>/pending`.
+pub fn pending_dir() -> PathBuf {
+    overlay_dir().join("pending")
+}
+
+/// Return the directory for accepted overlays that are merged at startup:
+/// `<overlay_dir>/accepted`.
+pub fn accepted_dir() -> PathBuf {
+    overlay_dir().join("accepted")
+}
+
+// ---------------------------------------------------------------------------
+// Overlay merge
+// ---------------------------------------------------------------------------
+
+/// Recursively merge `overlay` into `base`.
+///
+/// - If both values are TOML tables, merge key-by-key (overlay wins on conflict).
+/// - Otherwise, overlay replaces base entirely.
+pub fn merge_toml_values(base: &mut toml::Value, overlay: &toml::Value) {
+    match (base, overlay) {
+        (toml::Value::Table(base_tbl), toml::Value::Table(overlay_tbl)) => {
+            for (key, ov_val) in overlay_tbl {
+                match base_tbl.get_mut(key) {
+                    Some(base_val) => merge_toml_values(base_val, ov_val),
+                    None => {
+                        base_tbl.insert(key.clone(), ov_val.clone());
+                    }
+                }
+            }
+        }
+        (base_val, overlay_val) => {
+            *base_val = overlay_val.clone();
+        }
+    }
+}
+
+impl ArctermConfig {
+    /// Load the base config, apply all accepted overlays in filename order, and
+    /// return both the deserialized `ArctermConfig` and the merged `toml::Value`.
+    pub fn load_with_overlays() -> (Self, toml::Value) {
+        // Read base config as a toml::Value.
+        let mut merged: toml::Value = {
+            let path = Self::config_path();
+            match std::fs::read_to_string(&path) {
+                Ok(text) if !text.trim().is_empty() => {
+                    toml::from_str(&text).unwrap_or_else(|_| toml::Value::Table(toml::map::Map::new()))
+                }
+                _ => toml::Value::Table(toml::map::Map::new()),
+            }
+        };
+
+        // Collect and sort accepted overlay files by filename.
+        let acc_dir = accepted_dir();
+        if acc_dir.is_dir() {
+            let mut paths: Vec<PathBuf> = std::fs::read_dir(&acc_dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("toml"))
+                .collect();
+            paths.sort();
+
+            for path in paths {
+                match std::fs::read_to_string(&path) {
+                    Ok(text) => {
+                        if let Ok(overlay_val) = toml::from_str::<toml::Value>(&text) {
+                            merge_toml_values(&mut merged, &overlay_val);
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("config: cannot read overlay {}: {e}", path.display());
+                    }
+                }
+            }
+        }
+
+        // Deserialize the merged value into ArctermConfig.
+        let cfg = merged
+            .clone()
+            .try_into::<Self>()
+            .unwrap_or_default();
+
+        (cfg, merged)
+    }
+
+    /// Resolve config + all accepted overlays and return the result as a
+    /// pretty-printed TOML string.
+    pub fn flatten_to_string() -> Result<String, String> {
+        let (cfg, _) = Self::load_with_overlays();
+        toml::to_string_pretty(&cfg).map_err(|e| e.to_string())
     }
 }
 
@@ -490,5 +599,108 @@ mod tests {
         assert!(cfg.multiplexer.show_tab_bar);
         assert!((cfg.multiplexer.border_width - 1.0).abs() < 1e-5);
         assert!(cfg.multiplexer.pane_navigation);
+    }
+
+    // -- merge_toml_values ----------------------------------------------------
+
+    #[test]
+    fn merge_toml_overwrites_scalar() {
+        let mut base: toml::Value = toml::from_str(r#"font_size = 14.0"#).unwrap();
+        let overlay: toml::Value = toml::from_str(r#"font_size = 18.0"#).unwrap();
+        super::merge_toml_values(&mut base, &overlay);
+        assert_eq!(base["font_size"].as_float(), Some(18.0));
+    }
+
+    #[test]
+    fn merge_toml_merges_nested_tables() {
+        let mut base: toml::Value = toml::from_str(r#"
+            [multiplexer]
+            leader_key = "Ctrl+a"
+            leader_timeout_ms = 500
+        "#).unwrap();
+        let overlay: toml::Value = toml::from_str(r#"
+            [multiplexer]
+            leader_key = "Ctrl+b"
+        "#).unwrap();
+        super::merge_toml_values(&mut base, &overlay);
+        // overlay wins on the changed key
+        assert_eq!(base["multiplexer"]["leader_key"].as_str(), Some("Ctrl+b"));
+        // base key absent in overlay is preserved
+        assert_eq!(base["multiplexer"]["leader_timeout_ms"].as_integer(), Some(500));
+    }
+
+    #[test]
+    fn merge_toml_preserves_base_keys_absent_in_overlay() {
+        let mut base: toml::Value = toml::from_str(r#"
+            font_size = 14.0
+            color_scheme = "catppuccin-mocha"
+        "#).unwrap();
+        let overlay: toml::Value = toml::from_str(r#"font_size = 16.0"#).unwrap();
+        super::merge_toml_values(&mut base, &overlay);
+        assert_eq!(base["font_size"].as_float(), Some(16.0));
+        assert_eq!(base["color_scheme"].as_str(), Some("catppuccin-mocha"));
+    }
+
+    // -- ArctermConfig serialize round-trip -----------------------------------
+
+    #[test]
+    fn arcterm_config_serialize_round_trip() {
+        let cfg = ArctermConfig::default();
+        let toml_str = toml::to_string_pretty(&cfg).expect("serialize must succeed");
+        assert!(!toml_str.is_empty(), "serialized TOML must not be empty");
+        let cfg2: ArctermConfig = toml::from_str(&toml_str).expect("round-trip must parse");
+        assert!((cfg2.font_size - cfg.font_size).abs() < 1e-5);
+        assert_eq!(cfg2.color_scheme, cfg.color_scheme);
+        assert_eq!(cfg2.scrollback_lines, cfg.scrollback_lines);
+        assert_eq!(cfg2.multiplexer.leader_key, cfg.multiplexer.leader_key);
+    }
+
+    // -- flatten_to_string ----------------------------------------------------
+
+    #[test]
+    fn flatten_to_string_returns_valid_toml_with_defaults() {
+        let result = ArctermConfig::flatten_to_string();
+        assert!(result.is_ok(), "flatten_to_string must succeed: {:?}", result);
+        let toml_str = result.unwrap();
+        // Must contain default values
+        assert!(toml_str.contains("font_size"), "must contain font_size key");
+        // Must be parseable back into ArctermConfig
+        let cfg: ArctermConfig = toml::from_str(&toml_str).expect("flattened TOML must be valid");
+        assert!((cfg.font_size - 14.0).abs() < 1e-5);
+    }
+
+    // -- overlay dir helpers --------------------------------------------------
+
+    #[test]
+    fn overlay_dir_contains_arcterm_overlays() {
+        let p = super::overlay_dir();
+        let s = p.to_string_lossy();
+        assert!(s.contains("arcterm"), "overlay_dir must contain 'arcterm': {s}");
+        assert!(s.contains("overlays"), "overlay_dir must contain 'overlays': {s}");
+    }
+
+    #[test]
+    fn pending_dir_is_child_of_overlay_dir() {
+        let base = super::overlay_dir();
+        let pending = super::pending_dir();
+        assert_eq!(pending, base.join("pending"));
+    }
+
+    #[test]
+    fn accepted_dir_is_child_of_overlay_dir() {
+        let base = super::overlay_dir();
+        let accepted = super::accepted_dir();
+        assert_eq!(accepted, base.join("accepted"));
+    }
+
+    // -- load_with_overlays missing dir ---------------------------------------
+
+    #[test]
+    fn load_with_overlays_missing_accepted_dir_returns_defaults() {
+        // Accepted dir almost certainly doesn't exist in CI; should not panic.
+        let (cfg, _merged) = ArctermConfig::load_with_overlays();
+        // Config should be sane (defaults or whatever is in the real config file).
+        assert!(cfg.font_size > 0.0, "font_size must be positive");
+        assert!(cfg.scrollback_lines > 0, "scrollback_lines must be positive");
     }
 }
