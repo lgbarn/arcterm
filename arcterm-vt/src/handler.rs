@@ -247,6 +247,17 @@ pub trait Handler {
     /// The app layer drains the call, invokes the tool, and writes back
     /// `ESC ] 7770 ; tools/result ; result=<base64_json> ST`.
     fn tool_call(&mut self, _name: String, _args_json: String) {}
+
+    // -------------------------------------------------------------------------
+    // OSC 7770 — cross-pane context query (Phase 7.3)
+    // -------------------------------------------------------------------------
+
+    /// Called when the VT processor receives `ESC ] 7770 ; context/query ST`.
+    ///
+    /// Signals that the AI agent is requesting sibling pane context. The app
+    /// layer drains the sentinel, collects sibling metadata, and writes back
+    /// `ESC ] 7770 ; start ; type=context ST … ESC ] 7770 ; end ST`.
+    fn context_query(&mut self) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +305,12 @@ pub struct GridState {
     ///
     /// Each entry is `(tool_name, decoded_args_json)`.
     pub tool_calls: Vec<(String, String)>,
+    /// Drain buffer for `context/query` requests (OSC 7770 ; context/query).
+    ///
+    /// Each `()` entry represents one pending context query from an AI agent.
+    /// The app layer drains these, collects sibling pane metadata, and writes
+    /// back an `ESC ] 7770 ; start ; type=context ST … end ST` response.
+    pub context_queries: Vec<()>,
 }
 
 impl GridState {
@@ -313,6 +330,7 @@ impl GridState {
             pending_command_start: false,
             tool_queries: Vec::new(),
             tool_calls: Vec::new(),
+            context_queries: Vec::new(),
         }
     }
 
@@ -335,6 +353,11 @@ impl GridState {
     /// Drain and return all pending tool calls as `(name, args_json)` pairs.
     pub fn take_tool_calls(&mut self) -> Vec<(String, String)> {
         std::mem::take(&mut self.tool_calls)
+    }
+
+    /// Drain and return all pending context queries (one `()` per query).
+    pub fn take_context_queries(&mut self) -> Vec<()> {
+        std::mem::take(&mut self.context_queries)
     }
 
     /// Effective scroll bottom, clamped to grid dimensions.
@@ -913,6 +936,10 @@ impl Handler for GridState {
 
     fn tool_call(&mut self, name: String, args_json: String) {
         self.tool_calls.push((name, args_json));
+    }
+
+    fn context_query(&mut self) {
+        self.context_queries.push(());
     }
 
     fn shell_command_end(&mut self, exit_code: i32) {

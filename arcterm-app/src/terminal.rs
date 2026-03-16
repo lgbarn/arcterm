@@ -153,6 +153,15 @@ impl Terminal {
         self.grid_state.take_tool_calls()
     }
 
+    /// Drain and return all pending cross-pane context queries.
+    ///
+    /// One `()` per `ESC ] 7770 ; context/query ST` sequence received since the
+    /// last call.  The app layer responds with a sibling context JSON block written
+    /// back to the querying pane's PTY input.
+    pub fn take_context_queries(&mut self) -> Vec<()> {
+        self.grid_state.take_context_queries()
+    }
+
     /// Return a reference to the underlying GridState.
     pub fn grid_state(&self) -> &GridState {
         &self.grid_state

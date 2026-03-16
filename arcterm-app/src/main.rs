@@ -1461,6 +1461,26 @@ impl ApplicationHandler for App {
                             }
                         }
 
+                        // Drain cross-pane context queries and write responses back to PTY.
+                        {
+                            let queries = state.panes.get_mut(&id)
+                                .map(|t| t.take_context_queries())
+                                .unwrap_or_default();
+
+                            if !queries.is_empty() {
+                                let siblings = context::collect_sibling_contexts(
+                                    &state.pane_contexts,
+                                    &state.panes,
+                                    id,
+                                );
+                                let response_bytes =
+                                    context::format_context_osc7770(&siblings);
+                                if let Some(terminal) = state.panes.get_mut(&id) {
+                                    terminal.write_input(&response_bytes);
+                                }
+                            }
+                        }
+
                         // Update last_ai_pane when an AI-detected pane receives data.
                         let is_ai_pane = state
                             .ai_states

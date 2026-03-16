@@ -331,6 +331,12 @@ fn dispatch_osc7770<H: Handler>(handler: &mut H, params: &[&[u8]]) {
             handler.tool_call(name, args_json);
         }
 
+        // Cross-pane context query: AI agent requests sibling pane metadata.
+        // ESC ] 7770 ; context/query ST
+        b"context/query" => {
+            handler.context_query();
+        }
+
         _ => {} // unknown action — ignore
     }
 }
@@ -991,5 +997,60 @@ mod osc133_tests {
         feed(&mut gs, &osc133_with_code("D", "0")); // command end, success
         assert!(!gs.pending_command_start);
         assert_eq!(gs.shell_exit_codes, vec![0]);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Plan 7.3 Task 2: OSC 7770 context/query dispatch
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod osc7770_context_tests {
+    use arcterm_core::{Grid, GridSize};
+
+    use crate::{GridState, Processor};
+
+    fn make_gs() -> GridState {
+        GridState::new(Grid::new(GridSize::new(24, 80)))
+    }
+
+    fn feed(gs: &mut GridState, bytes: &[u8]) {
+        let mut proc = Processor::new();
+        proc.advance(gs, bytes);
+    }
+
+    /// ESC ] 7770 ; context/query BEL — should push one entry to context_queries.
+    #[test]
+    fn context_query_pushes_sentinel() {
+        let mut gs = make_gs();
+        feed(&mut gs, b"\x1b]7770;context/query\x07");
+        assert_eq!(gs.context_queries.len(), 1, "expected one context_query entry");
+    }
+
+    /// Two context/query sequences accumulate.
+    #[test]
+    fn context_query_accumulates() {
+        let mut gs = make_gs();
+        feed(&mut gs, b"\x1b]7770;context/query\x07");
+        feed(&mut gs, b"\x1b]7770;context/query\x07");
+        assert_eq!(gs.context_queries.len(), 2);
+    }
+
+    /// take_context_queries drains the buffer.
+    #[test]
+    fn take_context_queries_drains() {
+        let mut gs = make_gs();
+        feed(&mut gs, b"\x1b]7770;context/query\x07");
+        let drained = gs.take_context_queries();
+        assert_eq!(drained.len(), 1);
+        assert!(gs.context_queries.is_empty(), "buffer must be empty after drain");
+    }
+
+    /// context/query with extra params is still accepted (future-proof).
+    #[test]
+    fn context_query_extra_params_ignored() {
+        let mut gs = make_gs();
+        feed(&mut gs, b"\x1b]7770;context/query;scope=tab\x07");
+        assert_eq!(gs.context_queries.len(), 1);
     }
 }
