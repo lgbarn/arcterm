@@ -178,9 +178,16 @@ impl Grid {
             let region_height = (bottom + 1).saturating_sub(top);
             let n = n.min(region_height);
             if n == 0 { return; }
-            for _ in 0..n {
-                self.cells.remove(top);
-                self.cells.insert(bottom, self.blank_row());
+            let cols = self.size.cols;
+            for row in top..=(bottom - n) {
+                for col in 0..cols {
+                    self.cells[row][col] = self.cells[row + n][col].clone();
+                }
+            }
+            for row in (bottom + 1 - n)..=bottom {
+                for col in 0..cols {
+                    self.cells[row][col] = Cell::default();
+                }
             }
             self.dirty = true;
         } else {
@@ -212,10 +219,16 @@ impl Grid {
             let region_height = (bottom + 1).saturating_sub(top);
             let n = n.min(region_height);
             if n == 0 { return; }
-            for _ in 0..n {
-                // Remove the last row of the region, insert a blank at the top.
-                self.cells.remove(bottom);
-                self.cells.insert(top, self.blank_row());
+            let cols = self.size.cols;
+            for row in (top + n..=bottom).rev() {
+                for col in 0..cols {
+                    self.cells[row][col] = self.cells[row - n][col].clone();
+                }
+            }
+            for row in top..(top + n) {
+                for col in 0..cols {
+                    self.cells[row][col] = Cell::default();
+                }
             }
             self.dirty = true;
         } else {
@@ -397,10 +410,16 @@ impl Grid {
         let region_rows = bottom + 1 - cur_row;
         let n = n.min(region_rows);
 
-        for _ in 0..n {
-            // Remove last row of the affected region, insert blank at cur_row.
-            self.cells.remove(bottom);
-            self.cells.insert(cur_row, self.blank_row());
+        let cols = self.size.cols;
+        for row in (cur_row + n..=bottom).rev() {
+            for col in 0..cols {
+                self.cells[row][col] = self.cells[row - n][col].clone();
+            }
+        }
+        for row in cur_row..(cur_row + n).min(bottom + 1) {
+            for col in 0..cols {
+                self.cells[row][col] = Cell::default();
+            }
         }
         self.dirty = true;
     }
@@ -422,9 +441,16 @@ impl Grid {
         let region_rows = bottom + 1 - cur_row;
         let n = n.min(region_rows);
 
-        for _ in 0..n {
-            self.cells.remove(cur_row);
-            self.cells.insert(bottom, self.blank_row());
+        let cols = self.size.cols;
+        for row in cur_row..=(bottom - n) {
+            for col in 0..cols {
+                self.cells[row][col] = self.cells[row + n][col].clone();
+            }
+        }
+        for row in (bottom + 1 - n)..=bottom {
+            for col in 0..cols {
+                self.cells[row][col] = Cell::default();
+            }
         }
         self.dirty = true;
     }
@@ -1176,5 +1202,48 @@ mod tests {
         assert!(rows[0].starts_with('A'), "oldest scrollback row must come first");
         assert!(rows[1].starts_with('B'), "second scrollback row must come second");
         assert!(rows[2].starts_with('C'), "visible row 0 must follow");
+    }
+
+    #[test]
+    fn insert_lines_with_region_shifts_correctly() {
+        let mut g = Grid::new(GridSize::new(5, 3));
+        // Set up: rows 0-4 as A,B,C,D,E
+        g.cell_mut(0, 0).set_char('A');
+        g.cell_mut(1, 0).set_char('B');
+        g.cell_mut(2, 0).set_char('C');
+        g.cell_mut(3, 0).set_char('D');
+        g.cell_mut(4, 0).set_char('E');
+        // Set scroll region rows 1-3, cursor at row 1
+        g.set_scroll_region(1, 3);
+        g.cursor = CursorPos { row: 1, col: 0 };
+        // Insert 1 blank line at cursor row (row 1)
+        // Expected: row1=blank, row2=B, row3=C, D is dropped off bottom of region
+        g.insert_lines(1);
+        assert_eq!(g.cell(0, 0).c, 'A', "row 0 outside region must not change");
+        assert_eq!(g.cell(1, 0).c, ' ', "inserted blank line at row 1");
+        assert_eq!(g.cell(2, 0).c, 'B', "B shifted down to row 2");
+        assert_eq!(g.cell(3, 0).c, 'C', "C shifted down to row 3");
+        assert_eq!(g.cell(4, 0).c, 'E', "row 4 outside region must not change");
+    }
+
+    #[test]
+    fn delete_lines_with_region_shifts_correctly() {
+        let mut g = Grid::new(GridSize::new(5, 3));
+        g.cell_mut(0, 0).set_char('A');
+        g.cell_mut(1, 0).set_char('B');
+        g.cell_mut(2, 0).set_char('C');
+        g.cell_mut(3, 0).set_char('D');
+        g.cell_mut(4, 0).set_char('E');
+        // Set scroll region rows 1-3, cursor at row 1
+        g.set_scroll_region(1, 3);
+        g.cursor = CursorPos { row: 1, col: 0 };
+        // Delete 1 line at cursor row (row 1)
+        // Expected: row1=C, row2=D, row3=blank, row0 and row4 unchanged
+        g.delete_lines(1);
+        assert_eq!(g.cell(0, 0).c, 'A', "row 0 outside region must not change");
+        assert_eq!(g.cell(1, 0).c, 'C', "C shifted up to row 1");
+        assert_eq!(g.cell(2, 0).c, 'D', "D shifted up to row 2");
+        assert_eq!(g.cell(3, 0).c, ' ', "blank inserted at bottom of region");
+        assert_eq!(g.cell(4, 0).c, 'E', "row 4 outside region must not change");
     }
 }
