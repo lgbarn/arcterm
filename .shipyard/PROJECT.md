@@ -246,3 +246,83 @@ DevOps engineers and developers who:
 - Work across multiple projects simultaneously
 - Want AI to enhance their workflow without taking over
 - Value open source, transparency, and control
+
+---
+
+## v0.1.1 — Stabilization Release
+
+**Goal:** Resolve all known bugs, security issues, and functional gaps from the v0.1.0 review cycle. Make every existing feature robust, correct, and safe before adding new capabilities.
+
+**Motivation:** v0.1.0 shipped all 8 phases but accumulated 13 open review issues and 15 technical concerns (2 High, 6 Medium, 7 Low). Several are real bugs that can cause panics, silent data corruption, or security gaps. Fixing these before users encounter them prevents compounding.
+
+### Goals
+
+1. Fix all 13 open review issues from ISSUES.md
+2. Resolve both High-severity concerns (epoch interruption, plugin tool invocation stub)
+3. Resolve all 6 Medium-severity concerns (event routing bug, path traversal, image decode blocking, scrollback cap, GPU init panic, symlink guard)
+4. Fully implement WASM plugin tool dispatch (not just error cleanup)
+5. Ensure all existing tests pass and new tests cover each fix
+
+### Non-Goals
+
+- No new features or user-facing capabilities
+- No new dependencies or architectural changes
+- No performance optimization beyond fixing the scroll O(n*rows) issue (ISSUE-010)
+- No Low-severity concern fixes (deferred to v0.2.0)
+
+### Requirements
+
+**Group 1: Grid fixes** (`arcterm-core/src/grid.rs`)
+- ISSUE-007: Add bounds validation to `set_scroll_region()`
+- ISSUE-008: Resize `alt_grid` when present during `resize()`
+- ISSUE-009: Encapsulate `scroll_offset` with validated setter
+- ISSUE-010: Replace O(n*rows) scroll loops with in-place copy
+
+**Group 2: VT/parser fixes** (`arcterm-vt/`)
+- ISSUE-011: Guard `esc_dispatch` on empty intermediates
+- ISSUE-012: Add modes 47, 1047, 1000, 1002, 1003, 1006 to set_mode/reset_mode
+- ISSUE-013: Remove unreachable newline clamp, add cursor-above-region test
+
+**Group 3: App/input fixes** (`arcterm-app/`)
+- ISSUE-002: Add `request_redraw()` after keyboard input
+- ISSUE-003: Handle Ctrl+\\ (0x1c) and Ctrl+] (0x1d) in input translator
+- ISSUE-004: Replace PTY `.expect()` with graceful error exit
+- ISSUE-005: Display "Shell exited" indicator when PTY disconnects
+- ISSUE-006: Render cursor as visible block on blank cells
+
+**Group 4: PTY fix** (`arcterm-pty/`)
+- ISSUE-001: Change writer to `Option<Box<dyn Write>>`, use `.take()` for shutdown
+
+**Group 5: Plugin fixes** (`arcterm-plugin/`)
+- H-1: Spawn epoch-increment background task, set per-store epoch deadlines
+- H-2: Implement real WASM function dispatch in `call_tool()`
+- M-1: Fix `KeyInput` event kind mapping (add dedicated WIT variant or unreachable)
+- M-2: Validate `wasm` field in plugin manifest for path traversal
+- M-6: Guard plugin file copy against symlink following
+
+**Group 6: Config/runtime fixes** (`arcterm-app/`, `arcterm-core/`)
+- M-3: Make Kitty image decode async to avoid blocking PTY thread
+- M-4: Add upper-bound cap on `scrollback_lines` config
+- M-5: Replace GPU adapter `.expect()` with graceful fallback/error
+
+### Non-Functional Requirements
+
+- All fixes must include regression tests
+- Zero new `#[allow(dead_code)]` suppressions
+- `cargo clippy -D warnings` must pass after each group
+- Existing 558+ tests must continue passing
+
+### Success Criteria
+
+- All 13 ISSUES.md items resolved and moved to "Resolved" section
+- Both High concerns resolved
+- All 6 Medium concerns resolved
+- `cargo test` passes with increased test count
+- `cargo clippy -D warnings` clean
+- No new panicking code paths (no `.unwrap()` or `.expect()` on fallible operations in app/runtime code)
+
+### Constraints
+
+- Fixes organized by code path dependency (6 groups) to enable parallel execution
+- Groups touching different crates can execute as parallel waves
+- Groups touching the same files must be serialized
