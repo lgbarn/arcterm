@@ -89,7 +89,7 @@ pub struct Grid {
     pub alt_grid: Option<Box<Grid>>,
     /// How many rows above the current screen bottom the viewport is scrolled.
     /// 0 = live view; >0 = scrolled back into scrollback history.
-    pub scroll_offset: usize,
+    scroll_offset: usize,
     /// Outbound replies queued by DSR/DA handlers. Drained by the application
     /// layer after each `process_pty_output` call and written back to the PTY.
     pub pending_replies: Vec<Vec<u8>>,
@@ -246,6 +246,16 @@ impl Grid {
     /// Return the number of rows currently in the scrollback buffer.
     pub fn scrollback_len(&self) -> usize {
         self.scrollback.len()
+    }
+
+    /// Set the scroll offset, clamping to the current scrollback length.
+    pub fn set_scroll_offset(&mut self, offset: usize) {
+        self.scroll_offset = offset.min(self.scrollback.len());
+    }
+
+    /// Current scroll offset (0 = live view).
+    pub fn scroll_offset(&self) -> usize {
+        self.scroll_offset
     }
 
     /// Perform a newline within the active scroll region.
@@ -1079,12 +1089,30 @@ mod tests {
         g.scroll_up(1); // 'A' row → scrollback[0]
         g.cell_mut(0, 0).set_char('B'); // new row 0
         // Now scrollback has 1 row ('A'), screen has ['B', blank, blank]
-        g.scroll_offset = 1; // scroll back 1 row
+        g.set_scroll_offset(1); // scroll back 1 row
         let vp = g.rows_for_viewport();
         // With offset=1, the viewport should start from the scrollback:
         // row 0 = scrollback[0] ('A'), row 1 = screen[0] ('B'), row 2 = screen[1]
         assert_eq!(vp[0][0].c, 'A', "viewport row 0 should come from scrollback");
         assert_eq!(vp[1][0].c, 'B', "viewport row 1 should be screen row 0");
+    }
+
+    #[test]
+    fn set_scroll_offset_clamps_to_scrollback_len() {
+        let mut g = Grid::new(GridSize::new(3, 3));
+        // Push 5 rows to scrollback
+        for _ in 0..5 {
+            g.scroll_up(1);
+        }
+        g.set_scroll_offset(100);
+        assert_eq!(g.scroll_offset(), 5, "offset must clamp to scrollback.len()");
+    }
+
+    #[test]
+    fn set_scroll_offset_zero_is_valid() {
+        let mut g = Grid::new(GridSize::new(3, 3));
+        g.set_scroll_offset(0);
+        assert_eq!(g.scroll_offset(), 0);
     }
 
     // -------------------------------------------------------------------------
