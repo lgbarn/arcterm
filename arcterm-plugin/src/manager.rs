@@ -338,10 +338,10 @@ impl PluginManager {
         &self,
         id: &PluginId,
     ) -> Vec<crate::host::arcterm::plugin::types::StyledLine> {
-        if let Some(lp) = self.plugins.get(id) {
-            if let Ok(mut buf) = lp.draw_buffer.lock() {
-                return std::mem::take(&mut *buf);
-            }
+        if let Some(lp) = self.plugins.get(id)
+            && let Ok(mut buf) = lp.draw_buffer.lock()
+        {
+            return std::mem::take(&mut *buf);
         }
         Vec::new()
     }
@@ -389,7 +389,7 @@ impl PluginManager {
 
         // Key events are synchronous with the render loop — use block_in_place
         // to run the WASM call on the current (non-async) thread.
-        let consumed = tokio::task::block_in_place(|| {
+        tokio::task::block_in_place(|| {
             let mut inst = match instance.lock() {
                 Ok(g) => g,
                 Err(e) => {
@@ -418,9 +418,7 @@ impl PluginManager {
                     false
                 }
             }
-        });
-
-        consumed
+        })
     }
 
     // ── Event bus ────────────────────────────────────────────────────────

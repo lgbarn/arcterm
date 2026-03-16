@@ -233,6 +233,7 @@ version = "0.1.0"
 dependencies = [
  "arboard",
  "arcterm-core",
+ "arcterm-plugin",
  "arcterm-pty",
  "arcterm-render",
  "arcterm-vt",
@@ -261,9 +262,11 @@ name = "arcterm-plugin"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dirs",
  "log",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "toml 1.0.6+spec-1.1.0",
  "wasmtime",

@@ -106,6 +106,7 @@ pub enum PaneNode {
     /// `pane_id` participates in layout/navigation identically to a `Leaf`.
     /// `plugin_id` is the string identifier of the loaded plugin in
     /// `PluginManager` (equals the plugin's declared `name` in plugin.toml).
+    #[allow(dead_code)] // Constructed at runtime via plugin CLI, not statically
     PluginPane {
         pane_id: PaneId,
         /// Plugin identifier — matches `arcterm_plugin::manager::PluginId`.

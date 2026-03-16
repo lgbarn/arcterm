@@ -354,7 +354,8 @@ fn main() {
                     if plugins.is_empty() {
                         println!("No plugins installed.");
                     } else {
-                        println!("{:<20} {:<10} {}", "NAME", "VERSION", "ID");
+                        let header = format!("{:<20} {:<10} ID", "NAME", "VERSION");
+                        println!("{header}");
                         for (id, name, version) in plugins {
                             println!("{name:<20} {version:<10} {id}");
                         }
