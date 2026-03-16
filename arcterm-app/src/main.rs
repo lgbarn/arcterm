@@ -253,6 +253,17 @@ enum CliCommand {
         #[command(subcommand)]
         subcommand: PluginSubcommand,
     },
+    /// Manage configuration
+    Config {
+        #[command(subcommand)]
+        subcommand: ConfigSubcommand,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum ConfigSubcommand {
+    /// Print the fully resolved configuration (base + accepted overlays) as TOML
+    Flatten,
 }
 
 #[derive(clap::Subcommand)]
@@ -456,6 +467,22 @@ fn main() {
                 }
             }
         }
+        Some(CliCommand::Config { subcommand }) => {
+            match subcommand {
+                ConfigSubcommand::Flatten => {
+                    match config::ArctermConfig::flatten_to_string() {
+                        Ok(s) => {
+                            print!("{s}");
+                        }
+                        Err(e) => {
+                            eprintln!("arcterm: config flatten failed: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                    return;
+                }
+            }
+        }
         None => {
             // Auto-restore from last session if it exists.
             let session_path = workspace::workspaces_dir().join("_last_session.toml");
@@ -610,6 +637,10 @@ struct AppState {
     plan_watcher_rx: Option<std::sync::mpsc::Receiver<notify::Result<notify::Event>>>,
     /// Cached workspace root (current working directory at launch).
     workspace_root: std::path::PathBuf,
+
+    // ---- config overlay review ----
+    /// Config overlay review state; `None` when the overlay is closed.
+    overlay_review: Option<overlay::OverlayReviewState>,
 }
 
 impl AppState {
@@ -1204,6 +1235,7 @@ impl ApplicationHandler for App {
             plan_watcher,
             plan_watcher_rx,
             workspace_root,
+            overlay_review: None,
         });
     }
 
@@ -2349,6 +2381,78 @@ impl ApplicationHandler for App {
                         return;
                     }
 
+                    // Search overlay is modal — route ALL key input through it when open.
+                    if state.search_overlay.is_some() {
+                        use search::SearchAction;
+                        // Take the overlay out of state to avoid borrow conflict.
+                        let mut overlay = state.search_overlay.take().unwrap();
+                        let search_action = overlay.handle_key(&event.logical_key);
+                        match search_action {
+                            SearchAction::Close => {
+                                // Overlay stays None (already taken).
+                                state.window.request_redraw();
+                            }
+                            SearchAction::Execute => {
+                                let pane_rows: Vec<(PaneId, Vec<String>)> = state
+                                    .panes
+                                    .iter()
+                                    .map(|(&id, t)| (id, t.grid().all_text_rows()))
+                                    .collect();
+                                overlay.execute_search(&pane_rows);
+                                state.search_overlay = Some(overlay);
+                                state.window.request_redraw();
+                            }
+                            SearchAction::UpdateQuery => {
+                                state.search_overlay = Some(overlay);
+                                state.window.request_redraw();
+                            }
+                            SearchAction::NextMatch => {
+                                overlay.next_match();
+                                if let Some(m) = overlay.current().cloned() {
+                                    let focused = state.focused_pane();
+                                    if m.pane_id == focused {
+                                        if let Some(terminal) = state.panes.get_mut(&focused) {
+                                            let total = terminal.grid().all_text_rows().len();
+                                            let visible = terminal.grid().size.rows;
+                                            terminal.grid_mut().scroll_offset =
+                                                search::SearchOverlayState::scroll_offset_for_match(
+                                                    m.row_index,
+                                                    total,
+                                                    visible,
+                                                );
+                                        }
+                                    }
+                                }
+                                state.search_overlay = Some(overlay);
+                                state.window.request_redraw();
+                            }
+                            SearchAction::PrevMatch => {
+                                overlay.prev_match();
+                                if let Some(m) = overlay.current().cloned() {
+                                    let focused = state.focused_pane();
+                                    if m.pane_id == focused {
+                                        if let Some(terminal) = state.panes.get_mut(&focused) {
+                                            let total = terminal.grid().all_text_rows().len();
+                                            let visible = terminal.grid().size.rows;
+                                            terminal.grid_mut().scroll_offset =
+                                                search::SearchOverlayState::scroll_offset_for_match(
+                                                    m.row_index,
+                                                    total,
+                                                    visible,
+                                                );
+                                        }
+                                    }
+                                }
+                                state.search_overlay = Some(overlay);
+                                state.window.request_redraw();
+                            }
+                            SearchAction::Noop => {
+                                state.search_overlay = Some(overlay);
+                            }
+                        }
+                        return;
+                    }
+
                     // Route through the keymap handler.
                     let focused_id = state.focused_pane();
                     let app_cursor = state
@@ -2833,7 +2937,12 @@ impl ApplicationHandler for App {
                         }
 
                         KeyAction::ReviewOverlay => {
-                            // Reserved for future review overlay; no-op for now.
+                            // Open the config overlay review if there are pending files.
+                            let cfg = state.config.clone();
+                            if let Some(review) = overlay::OverlayReviewState::new(&cfg) {
+                                state.overlay_review = Some(review);
+                                state.window.request_redraw();
+                            }
                         }
                     }
                 }

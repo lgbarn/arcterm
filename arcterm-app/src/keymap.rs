@@ -67,6 +67,10 @@ pub enum KeyAction {
     JumpToAiPane,
     /// Toggle the plan status strip / expanded plan view (Leader+p).
     TogglePlanView,
+    /// Open the config overlay review (Leader+o).
+    ReviewOverlay,
+    /// Open cross-pane search (Leader+/).
+    CrossPaneSearch,
     /// The key was consumed by the state machine (no PTY bytes).
     Consumed,
 }
@@ -227,6 +231,10 @@ impl KeymapHandler {
                         "a" => Some(KeyAction::JumpToAiPane),
                         // Leader+p toggles the plan status strip / expanded plan view.
                         "p" => Some(KeyAction::TogglePlanView),
+                        // Leader+o opens the config overlay review.
+                        "o" => Some(KeyAction::ReviewOverlay),
+                        // Leader+/ opens cross-pane search.
+                        "/" => Some(KeyAction::CrossPaneSearch),
                         // Leader+w opens the workspace switcher (CONTEXT-5: Leader+w).
                         "w" => Some(KeyAction::OpenWorkspaceSwitcher),
                         // Leader+s saves the current session to a timestamped workspace file.
@@ -704,5 +712,27 @@ mod tests {
         let action = press(&mut h, char_key("p"), no_mods());
         assert_eq!(action, KeyAction::TogglePlanView);
         assert!(!h.is_leader_pending(), "state must reset to Normal after TogglePlanView");
+    }
+
+    // -----------------------------------------------------------------------
+    // PLAN-8.1 Task 2: Leader+o → ReviewOverlay, Leader+/ → CrossPaneSearch
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn leader_then_o_opens_overlay_review() {
+        let mut h = KeymapHandler::new(500);
+        press(&mut h, char_key("a"), ctrl()); // enter leader
+        let action = press(&mut h, char_key("o"), no_mods());
+        assert_eq!(action, KeyAction::ReviewOverlay);
+        assert!(!h.is_leader_pending(), "state must reset to Normal after ReviewOverlay");
+    }
+
+    #[test]
+    fn leader_then_slash_opens_search() {
+        let mut h = KeymapHandler::new(500);
+        press(&mut h, char_key("a"), ctrl()); // enter leader
+        let action = press(&mut h, char_key("/"), no_mods());
+        assert_eq!(action, KeyAction::CrossPaneSearch);
+        assert!(!h.is_leader_pending(), "state must reset to Normal after CrossPaneSearch");
     }
 }
