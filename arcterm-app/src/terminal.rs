@@ -193,6 +193,7 @@ impl Terminal {
     /// Set the viewport scroll offset directly.
     ///
     /// Clamped to `[0, scrollback_len]` by the inner `Grid` accessor.
+    #[allow(dead_code)] // Used in Wave 3 integration
     pub fn set_scroll_offset(&mut self, offset: usize) {
         self.grid_state.grid.set_scroll_offset(offset);
     }
