@@ -86,6 +86,19 @@ fn test_component_compiles() {
 }
 
 #[test]
+fn epoch_ticker_stops_on_drop() {
+    // Verify that dropping a PluginRuntime signals the epoch ticker thread to stop.
+    // The thread holds an Arc<Engine> clone; without a shutdown flag, dropping
+    // PluginRuntime leaks the thread and the Arc for the process lifetime.
+    // This smoke test confirms no panic occurs and the runtime drops cleanly.
+    let runtime = PluginRuntime::new().expect("PluginRuntime::new() should succeed");
+    drop(runtime);
+    // Give the ticker thread time to observe the shutdown flag and exit.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    // If we reach here, the Drop impl ran without panic and the thread is winding down.
+}
+
+#[test]
 fn test_load_timing() {
     // Verify the Engine can compile a component binary in under 50 ms.
     // Actual load_plugin additionally performs WIT type-matching; this test

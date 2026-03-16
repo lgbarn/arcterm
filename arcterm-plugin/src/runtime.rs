@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store};
@@ -11,6 +13,8 @@ use crate::host::arcterm::plugin::types::{PluginEvent as WitPluginEvent, StyledL
 pub struct PluginRuntime {
     engine: Engine,
     linker: Linker<PluginHostData>,
+    /// Flag set on drop to signal the epoch ticker thread to exit.
+    shutdown: Arc<AtomicBool>,
 }
 
 impl PluginRuntime {
@@ -25,10 +29,14 @@ impl PluginRuntime {
         // Spawn the epoch ticker: increments the engine epoch every 10ms so that
         // epoch deadlines fire. Without ticking, epoch_interruption(true) has no effect.
         // Uses a plain OS thread so PluginRuntime::new() works in both sync and async contexts.
+        let shutdown = Arc::new(AtomicBool::new(false));
         let engine_clone = engine.clone();
-        std::thread::spawn(move || loop {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            engine_clone.increment_epoch();
+        let shutdown_clone = shutdown.clone();
+        std::thread::spawn(move || {
+            while !shutdown_clone.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                engine_clone.increment_epoch();
+            }
         });
 
         let mut linker: Linker<PluginHostData> = Linker::new(&engine);
@@ -39,7 +47,7 @@ impl PluginRuntime {
         // Add our custom host import functions to the linker.
         ArctermPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |data| data)?;
 
-        Ok(Self { engine, linker })
+        Ok(Self { engine, linker, shutdown })
     }
 
     /// Compile a WASM component from raw bytes and return a `PluginInstance`.
@@ -99,6 +107,14 @@ impl PluginRuntime {
     /// Expose the underlying engine (useful for tests that need to compile WAT).
     pub fn engine(&self) -> &Engine {
         &self.engine
+    }
+}
+
+impl Drop for PluginRuntime {
+    fn drop(&mut self) {
+        // Signal the epoch ticker thread to stop on the next iteration.
+        // The thread will exit within one tick interval (~10ms).
+        self.shutdown.store(true, Ordering::Relaxed);
     }
 }
 
