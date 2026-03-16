@@ -130,8 +130,6 @@ impl TextRenderer {
         // Move pane buffers back into the pool (swap out and drain slots).
         // pane_buffer_pool already holds them; just clear the metadata.
         self.pane_slots.clear();
-        // Truncate pool to match (it's grown cumulatively; clear overshoot).
-        self.pane_buffer_pool.truncate(0);
     }
 
     /// Convert a `RenderSnapshot` into glyphon TextAreas and upload to the atlas.
