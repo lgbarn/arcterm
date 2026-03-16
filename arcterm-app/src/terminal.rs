@@ -111,6 +111,8 @@ impl EventListener for ArcTermEventListener {
             Event::Wakeup => {
                 // Best-effort; ignore if the receiver has been dropped.
                 let _ = self.wakeup_tx.send(());
+                #[cfg(feature = "latency-trace")]
+                log::debug!("[latency] wakeup sent at {:?}", std::time::Instant::now());
             }
             Event::PtyWrite(s) => {
                 // Write the reply back to the PTY master fd via the writer thread.
@@ -123,6 +125,8 @@ impl EventListener for ArcTermEventListener {
                 }
                 // Also wake up the main thread so it can detect exit.
                 let _ = self.wakeup_tx.send(());
+                #[cfg(feature = "latency-trace")]
+                log::debug!("[latency] wakeup sent at {:?}", std::time::Instant::now());
             }
             Event::Title(s) => {
                 if let Ok(mut guard) = self.title.lock() {
