@@ -186,7 +186,8 @@ impl TextRenderer {
                 Some(cell_h * scale_factor),
             );
 
-            shape_row_into_buffer(buf, row, &mut self.font_system, palette);
+            let cursor_col = if row_idx == cursor.row { Some(cursor.col) } else { None };
+            shape_row_into_buffer(buf, row, &mut self.font_system, palette, cursor_col);
         }
 
         // Build TextArea slice from the now-stable row_buffers.
@@ -276,7 +277,8 @@ impl TextRenderer {
                 Some(width_px * scale_factor),
                 Some(cell_h * scale_factor),
             );
-            shape_row_into_buffer(buf, row, &mut self.font_system, palette);
+            let cursor_col = if row_idx == cursor.row { Some(cursor.col) } else { None };
+            shape_row_into_buffer(buf, row, &mut self.font_system, palette, cursor_col);
         }
 
         self.pane_slots.push(PaneSlot {
@@ -642,17 +644,50 @@ impl TextRenderer {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Return the effective character for each cell in a row, substituting
+/// U+2588 (FULL BLOCK) at the cursor column when the cell is blank.
+///
+/// This is a pure function used by [`shape_row_into_buffer`] and tested
+/// independently of the GPU font pipeline.
+///
+/// `cursor_col` — `Some(col)` when this is the cursor row, `None` otherwise.
+/// A blank cell is one whose character is `' '` (space) or `'\0'` (null).
+pub(crate) fn substitute_cursor_char(
+    row: &[arcterm_core::Cell],
+    cursor_col: Option<usize>,
+) -> Vec<char> {
+    row.iter()
+        .enumerate()
+        .map(|(i, cell)| {
+            if cursor_col == Some(i) && (cell.c == ' ' || cell.c == '\0') {
+                '\u{2588}' // U+2588 FULL BLOCK
+            } else {
+                cell.c
+            }
+        })
+        .collect()
+}
+
 /// Populate a single row `Buffer` with per-cell colored spans.
+///
+/// `cursor_col` — `Some(col)` when this row is the cursor row.  When the
+/// cursor sits on a blank/space cell, U+2588 (FULL BLOCK) is substituted so
+/// the text layer shows a visible glyph at the cursor position.  The
+/// substitution is render-only; the stored [`arcterm_core::Cell`] data is
+/// never modified.
 fn shape_row_into_buffer(
     buf: &mut Buffer,
     row: &[arcterm_core::Cell],
     font_system: &mut FontSystem,
     palette: &RenderPalette,
+    cursor_col: Option<usize>,
 ) {
+    let chars = substitute_cursor_char(row, cursor_col);
     let span_strings: Vec<(String, Color)> = row
         .iter()
-        .map(|cell| {
-            let s = cell.c.to_string();
+        .zip(chars.iter())
+        .map(|(cell, &ch)| {
+            let s = ch.to_string();
             let fg = if cell.attrs.reverse {
                 ansi_color_to_glyphon(cell.attrs.bg, false, palette)
             } else {
@@ -776,7 +811,7 @@ fn hash_color(c: TermColor, h: &mut impl std::hash::Hasher) {
 #[cfg(test)]
 mod tests {
     use arcterm_core::{Cell, Color as TermColor, CursorPos};
-    use super::hash_row;
+    use super::{hash_row, substitute_cursor_char};
 
     /// Two identical rows must produce the same hash.
     #[test]
@@ -844,5 +879,41 @@ mod tests {
         row[0].attrs.reverse = true;
         let h2 = hash_row(&row, 0, cursor);
         assert_ne!(h1, h2, "reverse attribute change must alter hash");
+    }
+
+    // ---- ISSUE-006 regression: cursor on blank cell uses block glyph ----
+
+    /// When the cursor is on a blank (space) cell, the rendered character must
+    /// be U+2588 (FULL BLOCK). All other cells must remain unchanged.
+    #[test]
+    fn cursor_on_blank_substitutes_block_glyph() {
+        let row: Vec<Cell> = (0..5).map(|_| Cell::default()).collect();
+        // cursor_col=Some(2) means the cursor sits on column 2 of this row.
+        let chars = substitute_cursor_char(&row, Some(2));
+        assert_eq!(chars[2], '\u{2588}', "cursor on blank cell must yield U+2588");
+        assert_eq!(chars[0], ' ', "non-cursor blank cells must remain space");
+        assert_eq!(chars[1], ' ', "non-cursor blank cells must remain space");
+        assert_eq!(chars[3], ' ', "non-cursor blank cells must remain space");
+        assert_eq!(chars[4], ' ', "non-cursor blank cells must remain space");
+    }
+
+    /// When cursor_col is None (not the cursor row), no substitution is made.
+    #[test]
+    fn no_cursor_no_substitution() {
+        let row: Vec<Cell> = (0..5).map(|_| Cell::default()).collect();
+        let chars = substitute_cursor_char(&row, None);
+        assert!(
+            chars.iter().all(|&c| c == ' '),
+            "without cursor, all cells must remain space"
+        );
+    }
+
+    /// A non-blank character at the cursor position must NOT be substituted.
+    #[test]
+    fn cursor_on_non_blank_no_substitution() {
+        let mut row: Vec<Cell> = (0..5).map(|_| Cell::default()).collect();
+        row[2].c = 'A';
+        let chars = substitute_cursor_char(&row, Some(2));
+        assert_eq!(chars[2], 'A', "cursor on non-blank cell must not substitute");
     }
 }
