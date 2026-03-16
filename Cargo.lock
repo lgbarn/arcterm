@@ -237,6 +237,7 @@ dependencies = [
  "arcterm-pty",
  "arcterm-render",
  "arcterm-vt",
+ "base64",
  "clap",
  "dirs",
  "env_logger",
