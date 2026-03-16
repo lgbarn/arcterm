@@ -247,3 +247,78 @@ impl Terminal {
         self.pty.cwd()
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::PendingImage;
+    use arcterm_vt::{KittyAction, KittyCommand, KittyFormat};
+    use std::io::Cursor;
+    use tokio::sync::mpsc;
+
+    /// Build a minimal `KittyCommand` suitable for test assertions.
+    fn dummy_kitty_command() -> KittyCommand {
+        KittyCommand {
+            action: KittyAction::TransmitAndDisplay,
+            format: KittyFormat::Png,
+            image_id: 1,
+            more_chunks: false,
+            quiet: 0,
+            cols: None,
+            rows: None,
+            payload_base64: Vec::new(),
+        }
+    }
+
+    /// Regression test: verify that `spawn_blocking` + `mpsc` channel deliver
+    /// a decoded `PendingImage` correctly without requiring a live PTY.
+    ///
+    /// Constructs a minimal 1×1 PNG in memory, decodes it on the tokio blocking
+    /// thread pool, sends it through a bounded channel, and asserts the received
+    /// image has the expected dimensions and pixel data length.
+    #[tokio::test]
+    async fn async_image_decode_via_channel() {
+        let (tx, mut rx) = mpsc::channel::<PendingImage>(32);
+
+        let meta = dummy_kitty_command();
+        let handle = tokio::task::spawn_blocking(move || {
+            // Build a minimal 1×1 RGBA image and encode it to PNG bytes.
+            let img = image::RgbaImage::new(1, 1);
+            let dyn_img = image::DynamicImage::ImageRgba8(img);
+            let mut buf = Cursor::new(Vec::new());
+            dyn_img
+                .write_to(&mut buf, image::ImageFormat::Png)
+                .expect("PNG encode failed");
+            let png_bytes = buf.into_inner();
+
+            // Decode back to RGBA via image::load_from_memory.
+            let decoded = image::load_from_memory(&png_bytes).expect("PNG decode failed");
+            let rgba_img = decoded.to_rgba8();
+            let width = rgba_img.width();
+            let height = rgba_img.height();
+
+            // Send through the channel exactly as process_pty_output would.
+            let pending = PendingImage {
+                command: meta,
+                rgba: rgba_img.into_raw(),
+                width,
+                height,
+            };
+            tx.try_send(pending).expect("channel send failed");
+        });
+
+        handle.await.expect("spawn_blocking task panicked");
+
+        // Drain the channel and assert exactly one image arrived.
+        let img = rx.try_recv().expect("expected one PendingImage in channel");
+        assert_eq!(img.width, 1, "width should be 1");
+        assert_eq!(img.height, 1, "height should be 1");
+        assert_eq!(img.rgba.len(), 4, "1 pixel × 4 RGBA bytes");
+
+        // Channel should be empty now.
+        assert!(rx.try_recv().is_err(), "channel should be empty after one recv");
+    }
+}
