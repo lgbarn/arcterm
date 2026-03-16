@@ -191,6 +191,7 @@ impl TextRenderer {
 
         // Build TextArea slice from the now-stable row_buffers.
         let default_fg = palette.fg_glyphon();
+        let scaled_cell_h = cell_h * scale_factor;
         let text_areas: Vec<TextArea> = self
             .row_buffers
             .iter()
@@ -198,7 +199,7 @@ impl TextRenderer {
             .map(|(row_idx, buf)| TextArea {
                 buffer: buf,
                 left: 0.0,
-                top: row_idx as f32 * cell_h,
+                top: row_idx as f32 * scaled_cell_h,
                 scale: scale_factor,
                 bounds: TextBounds::default(),
                 default_color: default_fg,
@@ -316,11 +317,12 @@ impl TextRenderer {
                 TextBounds::default()
             };
 
+            let scaled_cell_h = cell_h * meta.scale_factor;
             for (row_idx, buf) in slot.iter().take(meta.num_rows).enumerate() {
                 text_areas.push(TextArea {
                     buffer: buf,
                     left: meta.offset_x,
-                    top: meta.offset_y + row_idx as f32 * cell_h,
+                    top: meta.offset_y + row_idx as f32 * scaled_cell_h,
                     scale: meta.scale_factor,
                     bounds,
                     default_color: meta.default_fg,
