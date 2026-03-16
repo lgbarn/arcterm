@@ -10,7 +10,8 @@ use tokio::sync::mpsc;
 ///
 /// Produced by the Kitty graphics pipeline after receiving a complete
 /// (possibly chunked) APC sequence and decoding PNG/JPEG to raw RGBA bytes.
-#[allow(dead_code)] // Used in Phase 5 image rendering integration
+/// Delivered to the app layer via an `mpsc::Receiver<PendingImage>` returned
+/// by `Terminal::new()`.
 pub struct PendingImage {
     /// Parsed Kitty command metadata (action, format, id, etc.).
     pub command: KittyCommand,
@@ -29,14 +30,12 @@ pub struct Terminal {
     grid_state: GridState,
     /// Kitty chunk assembler — buffers multi-chunk APC transfers by image ID.
     chunk_assembler: KittyChunkAssembler,
-    /// Decoded images ready for GPU texture upload.
+    /// Sender half of the image decode channel.
     ///
-    /// Populated by `process_pty_output` when a complete Kitty image transfer
-    /// is received.  The app layer drains these via `take_pending_images`.
-    ///
-    /// TODO(phase-5): move PNG/JPEG decoding to a background thread for
-    /// images larger than 1MB to avoid blocking the PTY processing thread.
-    pub pending_images: Vec<PendingImage>,
+    /// Cloned into each `tokio::task::spawn_blocking` closure that decodes a
+    /// Kitty image.  The receiver is returned by `Terminal::new()` so the app
+    /// layer can drain completed images via `try_recv` in `about_to_wait`.
+    image_tx: mpsc::Sender<PendingImage>,
 }
 
 impl Terminal {
@@ -48,34 +47,43 @@ impl Terminal {
     /// `cwd` optionally sets the working directory for the spawned shell.
     /// Pass `None` to inherit the current process's working directory.
     ///
-    /// Returns `(terminal, receiver)` where `receiver` delivers raw PTY bytes.
-    /// The receiver is returned separately so the `App` layer owns it and can
-    /// poll it in `about_to_wait`.
+    /// Returns `(terminal, pty_rx, image_rx)` where `pty_rx` delivers raw PTY
+    /// bytes and `image_rx` delivers decoded `PendingImage` values produced by
+    /// `process_pty_output` on the tokio blocking thread pool.  Both receivers
+    /// are returned separately so the `App` layer owns them and can drain them
+    /// via `try_recv` in `about_to_wait`.
     pub fn new(
         size: GridSize,
         shell: Option<String>,
         cwd: Option<&Path>,
-    ) -> Result<(Self, mpsc::Receiver<Vec<u8>>), PtyError> {
+    ) -> Result<(Self, mpsc::Receiver<Vec<u8>>, mpsc::Receiver<PendingImage>), PtyError> {
         let (pty, rx) = PtySession::new(size, shell, cwd)?;
         let scanner = ApcScanner::new();
         let grid_state = GridState::new(Grid::new(size));
+        let (image_tx, image_rx) = mpsc::channel(32);
         Ok((
             Terminal {
                 pty,
                 scanner,
                 grid_state,
                 chunk_assembler: KittyChunkAssembler::new(),
-                pending_images: Vec::new(),
+                image_tx,
             },
             rx,
+            image_rx,
         ))
     }
 
     /// Feed raw PTY output bytes through the VT processor into the grid.
     ///
     /// Also processes any Kitty APC sequences received during this batch:
-    /// payloads are parsed, chunk-assembled, and decoded to RGBA pixels.
-    /// Completed images are stored in `pending_images` for the next render.
+    /// payloads are parsed and chunk-assembled here (synchronous, fast).
+    /// When a complete image transfer is assembled, decoding is offloaded to
+    /// `tokio::task::spawn_blocking`; decoded images are delivered to the app
+    /// layer via the `mpsc::Receiver<PendingImage>` returned by `new()`.
+    ///
+    /// Note: decoded images arrive with one-frame latency relative to the PTY
+    /// data that triggered them; this is acceptable for Kitty image rendering.
     pub fn process_pty_output(&mut self, bytes: &[u8]) {
         self.scanner.advance(&mut self.grid_state, bytes);
 
@@ -85,37 +93,38 @@ impl Terminal {
             if let Some(cmd) = parse_kitty_command(&raw)
                 && let Some((meta, decoded_bytes)) = self.chunk_assembler.receive_chunk(&cmd)
             {
-                // Decode PNG/JPEG to RGBA using the `image` crate.
-                // Synchronous decode is acceptable for Phase 4 basic support
-                // (images under 1MB). For large images, async decode is a
-                // Phase 5 improvement (see TODO above in pending_images).
-                match image::load_from_memory(&decoded_bytes) {
-                    Ok(dyn_img) => {
-                        let rgba_img = dyn_img.to_rgba8();
-                        let width = rgba_img.width();
-                        let height = rgba_img.height();
-                        self.pending_images.push(PendingImage {
-                            command: meta,
-                            rgba: rgba_img.into_raw(),
-                            width,
-                            height,
-                        });
+                // Offload PNG/JPEG decoding to the tokio blocking thread pool.
+                // The Sender is cheap to clone; the closure captures ownership
+                // of the raw bytes and metadata so no shared state is needed.
+                let tx = self.image_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    match image::load_from_memory(&decoded_bytes) {
+                        Ok(dyn_img) => {
+                            let rgba_img = dyn_img.to_rgba8();
+                            let width = rgba_img.width();
+                            let height = rgba_img.height();
+                            let img = PendingImage {
+                                command: meta,
+                                rgba: rgba_img.into_raw(),
+                                width,
+                                height,
+                            };
+                            // try_send: if the channel is full or closed, warn
+                            // and drop the image rather than blocking.
+                            if let Err(e) = tx.try_send(img) {
+                                log::warn!("Kitty image channel send failed: {e}");
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "Kitty image decode failed for image_id={}: {e}",
+                                meta.image_id
+                            );
+                        }
                     }
-                    Err(e) => {
-                        log::warn!(
-                            "Kitty image decode failed for image_id={}: {e}",
-                            meta.image_id
-                        );
-                    }
-                }
+                });
             }
         }
-    }
-
-    /// Drain and return all decoded images ready for GPU texture upload.
-    #[allow(dead_code)] // Wired in Phase 5 image rendering
-    pub fn take_pending_images(&mut self) -> Vec<PendingImage> {
-        std::mem::take(&mut self.pending_images)
     }
 
     /// Drain and return all pending DSR/DA reply bytes queued by the VT processor.
