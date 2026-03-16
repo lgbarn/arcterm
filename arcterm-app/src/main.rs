@@ -1508,10 +1508,14 @@ impl ApplicationHandler for App {
                     // Auto-detect structured content in newly-written rows.
                     // Lock Term briefly to extract a snapshot for detection, then unlock.
                     let cursor_row = terminal.cursor_row();
+                    #[cfg(feature = "latency-trace")]
+                    let t_snap = TraceInstant::now();
                     let detect_snapshot = {
                         let term = terminal.lock_term();
                         arcterm_render::snapshot_from_term(&*term)
                     };
+                    #[cfg(feature = "latency-trace")]
+                    log::debug!("[latency] snapshot acquired in {:?}", t_snap.elapsed());
                     if let Some(detector) = state.auto_detectors.get_mut(&id) {
                         let detections = detector.scan_rows(&detect_snapshot, cursor_row);
                         if !detections.is_empty() {
