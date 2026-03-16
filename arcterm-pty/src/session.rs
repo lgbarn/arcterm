@@ -525,4 +525,28 @@ mod tests {
             result
         );
     }
+
+    // ── ISSUE-001 regression tests ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_write_after_explicit_shutdown() {
+        let (mut session, _rx) = PtySession::new(default_size(), None, None)
+            .expect("should spawn PTY session");
+        session.shutdown();
+        let result = session.write(b"data after shutdown");
+        assert!(result.is_err(), "write after shutdown must fail");
+        assert_eq!(
+            result.unwrap_err().kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "write after shutdown must return BrokenPipe"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_is_idempotent() {
+        let (mut session, _rx) = PtySession::new(default_size(), None, None)
+            .expect("should spawn PTY session");
+        session.shutdown();
+        session.shutdown(); // second call must not panic
+    }
 }
