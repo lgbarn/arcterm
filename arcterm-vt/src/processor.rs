@@ -988,6 +988,24 @@ mod phase9_regression_tests {
     }
 
     #[test]
+    fn set_mode_1047_enters_alt_screen() {
+        let mut gs = make_gs();
+        let mut proc = Processor::new();
+        proc.advance(&mut gs, b"\x1b[?1047h");
+        assert!(gs.modes.alt_screen, "mode 1047 should enter alt screen");
+    }
+
+    #[test]
+    fn reset_mode_1047_leaves_alt_screen() {
+        let mut gs = make_gs();
+        let mut proc = Processor::new();
+        proc.advance(&mut gs, b"\x1b[?1047h");
+        assert!(gs.modes.alt_screen);
+        proc.advance(&mut gs, b"\x1b[?1047l");
+        assert!(!gs.modes.alt_screen, "mode 1047 reset should leave alt screen");
+    }
+
+    #[test]
     fn set_mode_1000_enables_mouse_click_report() {
         let mut gs = make_gs();
         let mut proc = Processor::new();
