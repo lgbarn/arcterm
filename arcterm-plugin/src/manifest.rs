@@ -130,6 +130,15 @@ impl PluginManifest {
         if self.wasm.trim().is_empty() {
             return Err("plugin wasm path must not be empty".to_string());
         }
+        if self.wasm.contains("..") {
+            return Err(format!("plugin wasm path '{}' must not contain '..'", self.wasm));
+        }
+        if self.wasm.starts_with('/') || self.wasm.starts_with('\\') {
+            return Err(format!("plugin wasm path '{}' must not be an absolute path", self.wasm));
+        }
+        if self.wasm.contains('\\') {
+            return Err(format!("plugin wasm path '{}' must not contain backslashes", self.wasm));
+        }
         if self.api_version != SUPPORTED_API_VERSION {
             return Err(format!(
                 "unsupported api_version '{}': this runtime requires '{}'",
@@ -362,5 +371,34 @@ mod tests {
     fn validate_accepts_safe_name() {
         // A plain alphanumeric name with hyphens is always valid.
         make_manifest("my-plugin-v2").validate().expect("safe name must pass");
+    }
+
+    fn make_manifest_wasm(wasm: &str) -> PluginManifest {
+        PluginManifest {
+            name: "my-plugin".to_string(),
+            version: "0.1.0".to_string(),
+            api_version: "0.1".to_string(),
+            description: String::new(),
+            wasm: wasm.to_string(),
+            permissions: Permissions::default(),
+        }
+    }
+
+    #[test]
+    fn validate_wasm_rejects_path_traversal() {
+        let err = make_manifest_wasm("../../evil.wasm").validate().expect_err("should reject ..");
+        assert!(err.contains(".."), "{err}");
+    }
+
+    #[test]
+    fn validate_wasm_rejects_absolute_unix() {
+        let err = make_manifest_wasm("/etc/evil.wasm").validate().expect_err("should reject absolute path");
+        assert!(err.contains("absolute"), "{err}");
+    }
+
+    #[test]
+    fn validate_wasm_rejects_backslash() {
+        let err = make_manifest_wasm("..\\evil.wasm").validate().expect_err("should reject backslash");
+        assert!(err.contains("..") || err.contains("backslash"), "{err}");
     }
 }

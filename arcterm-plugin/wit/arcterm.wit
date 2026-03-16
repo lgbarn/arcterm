@@ -23,6 +23,7 @@ interface types {
         pane-closed,
         command-executed,
         workspace-switched,
+        key-input,
     }
 
     /// Keyboard modifiers state for key-input events.

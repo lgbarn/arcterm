@@ -84,9 +84,7 @@ impl PluginEvent {
             PluginEvent::PaneClosed(_) => WitEventKind::PaneClosed,
             PluginEvent::CommandExecuted(_) => WitEventKind::CommandExecuted,
             PluginEvent::WorkspaceSwitched(_) => WitEventKind::WorkspaceSwitched,
-            // KeyInput does not map to a subscribable EventKind — it is delivered
-            // directly to the focused plugin pane, not via the broadcast bus.
-            PluginEvent::KeyInput { .. } => WitEventKind::PaneOpened,
+            PluginEvent::KeyInput { .. } => WitEventKind::KeyInput,
         }
     }
 }
@@ -211,12 +209,22 @@ impl PluginManager {
         let dest = self.plugin_dir.join(&manifest.name);
         std::fs::create_dir_all(&dest)?;
 
-        // Copy all files from source to dest.
+        // Copy all files from source to dest, rejecting symlinks.
         for entry in std::fs::read_dir(source_path)? {
             let entry = entry?;
+            let metadata = entry.path().symlink_metadata()?;
+            if metadata.file_type().is_symlink() {
+                anyhow::bail!(
+                    "plugin source directory contains a symlink '{}'; symlinks are not permitted",
+                    entry.file_name().to_string_lossy()
+                );
+            }
+            if !metadata.is_file() {
+                continue;
+            }
             let file_name = entry.file_name();
             let dest_file = dest.join(&file_name);
-            std::fs::copy(entry.path(), dest_file)?;
+            std::fs::copy(entry.path(), &dest_file)?;
         }
 
         Ok(dest)
@@ -239,6 +247,14 @@ impl PluginManager {
             .map_err(|e| anyhow::anyhow!("plugin.toml validation failed: {e}"))?;
 
         let wasm_path = dir.join(&manifest.wasm);
+        let wasm_canonical = wasm_path.canonicalize().unwrap_or(wasm_path.clone());
+        let dir_canonical = dir.canonicalize().unwrap_or(dir.to_path_buf());
+        if !wasm_canonical.starts_with(&dir_canonical) {
+            anyhow::bail!(
+                "plugin wasm path '{}' resolves outside the plugin directory",
+                manifest.wasm
+            );
+        }
         let wasm_bytes = std::fs::read(&wasm_path)
             .map_err(|e| anyhow::anyhow!("cannot read wasm '{}': {e}", wasm_path.display()))?;
 
@@ -562,6 +578,41 @@ wasm        = "plugin.wasm"
         fs::write(dir.join("plugin.toml"), toml).expect("write plugin.toml");
         // Write a placeholder wasm file so the file-copy test can verify it.
         fs::write(dir.join("plugin.wasm"), b"placeholder").expect("write placeholder wasm");
+    }
+
+    // ── M-1: KeyInput event kind maps to WitEventKind::KeyInput ──────────
+
+    #[test]
+    fn key_input_event_kind_is_key_input() {
+        let ev = PluginEvent::KeyInput {
+            key_char: Some("a".to_string()),
+            key_name: "a".to_string(),
+            modifiers: KeyInputModifiers::default(),
+        };
+        assert!(matches!(ev.kind(), WitEventKind::KeyInput));
+    }
+
+    // ── M-6: copy_plugin_files rejects symlinks ───────────────────────────
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_plugin_files_rejects_symlinks() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let source = tmp.path().join("symlink-plugin-src");
+        write_plugin_toml(&source, "symlink-plugin");
+
+        // Create a symlink inside the source directory.
+        let target = tmp.path().join("secret.txt");
+        fs::write(&target, b"secret data").expect("write target");
+        std::os::unix::fs::symlink(&target, source.join("secret_link.txt"))
+            .expect("create symlink");
+
+        let install_root = tmp.path().join("installed");
+        let mgr = PluginManager::new_with_dir(install_root).expect("PluginManager::new_with_dir");
+
+        let err = mgr.copy_plugin_files(&source).expect_err("should fail due to symlink");
+        let msg = format!("{err}");
+        assert!(msg.contains("symlink"), "expected symlink error, got: {msg}");
     }
 
     // ── (a) copy_plugin_files copies files to plugin_dir ─────────────────
