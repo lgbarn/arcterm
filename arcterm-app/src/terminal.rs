@@ -25,6 +25,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self as std_mpsc};
@@ -217,6 +218,23 @@ pub struct Terminal {
     osc7770_rx: std_mpsc::Receiver<(String, String)>,
     /// Side channel receiver for OSC 133 events from the reader thread.
     osc133_rx: std_mpsc::Receiver<Osc133Event>,
+    /// Owns the `Pty` so the child shell is not SIGHUP'd until `Terminal` drops.
+    ///
+    /// CRITICAL-1: Without this field, `pty` would drop at the end of `Terminal::new()`,
+    /// causing `Pty::drop` to call `libc::kill(child_pid, SIGHUP)` and `child.wait()`,
+    /// killing the shell immediately after construction.
+    _pty: alacritty_terminal::tty::Pty,
+    /// Raw file descriptor of the PTY master, used for `TIOCSWINSZ` ioctl.
+    ///
+    /// CRITICAL-2: The fd is captured before the reader/writer threads take ownership
+    /// of `File` clones. The fd remains valid for the lifetime of `Terminal` because
+    /// `_pty` owns the master `File` that backs it.
+    pty_master_fd: std::os::unix::io::RawFd,
+    /// In-progress OSC 7770 structured content accumulator for this terminal instance.
+    ///
+    /// REVIEW-2.1-D: Stored per-`Terminal` instead of a thread-local so that OSC 7770
+    /// state from one pane cannot leak into another pane's accumulator.
+    active_osc7770: Option<StructuredContentAccumulator>,
 }
 
 impl Terminal {
@@ -253,6 +271,10 @@ impl Terminal {
         // ── 2. Create PTY ───────────────────────────────────────────────────
         let pty = tty::new(&options, window_size, 0)?;
         let child_pid = pty.child().id();
+        // Capture the master fd before reader/writer threads take File clones.
+        // The fd remains valid for the lifetime of Terminal because _pty keeps
+        // the underlying File open. Used for TIOCSWINSZ in resize().
+        let pty_master_fd = pty.file().as_raw_fd();
 
         // ── 3. Set up shared state ──────────────────────────────────────────
         let exit_code: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
@@ -411,17 +433,6 @@ impl Terminal {
         // ── 8. Image decode channel ─────────────────────────────────────────
         let (image_tx, image_rx) = mpsc::channel(32);
 
-        // We keep `_pty` alive through the write_rx closure above (the writer
-        // thread owns the cloned fd). However we still need to keep the original
-        // Pty struct alive so the child process is not orphaned. We accomplish
-        // this by storing a field that drops with Terminal.
-        //
-        // NOTE: We intentionally do NOT store the `Pty` in `Terminal` because
-        // it would expose it to Drop-ordering issues with the reader/writer
-        // threads. Instead, we rely on the fact that the child process was
-        // started by `tty::new` and will be SIGCHLD'd when the fd closes.
-        // The child_pid extracted above is all we need for cwd/process queries.
-
         Ok((
             Terminal {
                 term,
@@ -440,6 +451,9 @@ impl Terminal {
                 apc_rx,
                 osc7770_rx,
                 osc133_rx,
+                _pty: pty,
+                pty_master_fd,
+                active_osc7770: None,
             },
             image_rx,
         ))
@@ -451,13 +465,16 @@ impl Terminal {
     ///
     /// Errors (e.g. broken pipe after shell exit) are logged and swallowed
     /// so the caller does not need to handle them.
+    ///
+    /// Uses blocking `send` instead of `try_send` so that keystrokes are never
+    /// silently dropped when the channel is momentarily full (REVIEW-2.1-G).
     pub fn write_input(&self, data: &[u8]) {
         if data.is_empty() {
             return;
         }
         let bytes: Cow<'static, [u8]> = Cow::Owned(data.to_vec());
-        if let Err(e) = self.write_tx.try_send(bytes) {
-            log::warn!("PTY write channel send failed: {e}");
+        if let Err(e) = self.write_tx.send(bytes) {
+            log::warn!("PTY write channel send failed (writer thread exited?): {e}");
         }
     }
 
@@ -490,26 +507,31 @@ impl Terminal {
         self.tiocswinsz(window_size);
     }
 
-    /// Send TIOCSWINSZ to the PTY to notify the shell of the new window size.
+    /// Send TIOCSWINSZ to the PTY master fd and then SIGWINCH to the child process.
     ///
-    /// On macOS/Linux, we look up the PTY master fd from `/proc/{pid}/fd/0` (Linux)
-    /// or use a stored fd. Since we don't have direct access to the Pty after
-    /// construction, we use the `child_pid` to send SIGWINCH which causes the
-    /// PTY driver to update TIOCGWINSZ from the process's stored winsz.
-    ///
-    /// Note: This is a best-effort implementation. A more robust approach would
-    /// store the raw fd and call ioctl directly, which Wave 4 can clean up.
+    /// Calls `ioctl(TIOCSWINSZ)` on the stored PTY master fd so that programs that
+    /// query `ioctl(TIOCGWINSZ)` (vim, tmux, etc.) see the updated dimensions. The
+    /// SIGWINCH signal is sent afterward so the shell and foreground process group
+    /// receive the standard resize notification.
     fn tiocswinsz(&self, window_size: WindowSize) {
         #[cfg(unix)]
         unsafe {
-            use libc::{TIOCSWINSZ, ioctl};
-
-            // Send SIGWINCH to the child process to trigger a resize notification.
-            // The PTY master fd is in the writer thread, so we can't call ioctl
-            // on it directly here. SIGWINCH + the Term resize above is sufficient
-            // for most shells to pick up the new dimensions.
+            let ws = libc::winsize {
+                ws_row: window_size.num_lines,
+                ws_col: window_size.num_cols,
+                ws_xpixel: window_size.cell_width.saturating_mul(window_size.num_cols),
+                ws_ypixel: window_size.cell_height.saturating_mul(window_size.num_lines),
+            };
+            let ret = libc::ioctl(self.pty_master_fd, libc::TIOCSWINSZ, &ws);
+            if ret != 0 {
+                log::warn!(
+                    "TIOCSWINSZ ioctl failed (fd={}): {}",
+                    self.pty_master_fd,
+                    std::io::Error::last_os_error()
+                );
+            }
+            // Send SIGWINCH to notify the child process group of the resize.
             libc::kill(self.child_pid as i32, libc::SIGWINCH);
-            let _ = (window_size, TIOCSWINSZ, ioctl); // suppress unused warnings
         }
     }
 
@@ -534,7 +556,12 @@ impl Terminal {
 
         // Drain OSC 7770 params (each message is (params, captured_text)).
         while let Ok((params, captured_text)) = self.osc7770_rx.try_recv() {
-            dispatch_osc7770(&params, &captured_text, &mut self.completed_blocks);
+            dispatch_osc7770(
+                &params,
+                &captured_text,
+                &mut self.active_osc7770,
+                &mut self.completed_blocks,
+            );
         }
 
         // Drain OSC 133 events.
@@ -848,18 +875,15 @@ impl Terminal {
 /// - `"end"` → closes the active accumulator
 /// - Other variants (tools/list, tools/call, context/query) are not yet wired;
 ///   they are handled by the existing MCP pipeline in Wave 4.
+///
+/// `active` is per-`Terminal` instance state so that OSC 7770 accumulators
+/// cannot leak between panes (REVIEW-2.1-D).
 fn dispatch_osc7770(
     params: &str,
     captured_text: &str,
+    active: &mut Option<StructuredContentAccumulator>,
     completed_blocks: &mut Vec<StructuredContentAccumulator>,
 ) {
-    // We use a thread-local active accumulator stack to handle nested blocks.
-    // This simple implementation supports only one level of nesting for now.
-    use std::cell::RefCell;
-    thread_local! {
-        static ACTIVE: RefCell<Option<StructuredContentAccumulator>> = const { RefCell::new(None) };
-    }
-
     let parts: Vec<&str> = params.splitn(3, ';').collect();
     match parts.first().copied().unwrap_or("") {
         "start" => {
@@ -888,20 +912,16 @@ fn dispatch_osc7770(
                     }
                 }
             }
-            ACTIVE.with(|cell| {
-                *cell.borrow_mut() = Some(StructuredContentAccumulator::new(content_type, attrs));
-            });
+            *active = Some(StructuredContentAccumulator::new(content_type, attrs));
         }
         "end" => {
-            ACTIVE.with(|cell| {
-                if let Some(mut acc) = cell.borrow_mut().take() {
-                    // Store the text captured between start and end by the reader thread.
-                    // The captured_text is the raw terminal output (may include ANSI codes).
-                    // Strip ANSI escape sequences so the buffer contains only text.
-                    acc.buffer = strip_ansi(captured_text);
-                    completed_blocks.push(acc);
-                }
-            });
+            if let Some(mut acc) = active.take() {
+                // Store the text captured between start and end by the reader thread.
+                // The captured_text is the raw terminal output (may include ANSI codes).
+                // Strip ANSI escape sequences so the buffer contains only text.
+                acc.buffer = strip_ansi(captured_text);
+                completed_blocks.push(acc);
+            }
         }
         _ => {
             // Other variants (tools/list, tools/call, context/query) — not yet wired here.
@@ -914,6 +934,10 @@ fn dispatch_osc7770(
 ///
 /// This is a minimal implementation that removes CSI and OSC sequences.
 /// Used to clean the raw terminal output captured between OSC 7770 start/end markers.
+///
+/// The implementation operates on the byte level for ANSI detection but appends
+/// validated UTF-8 characters to the output, so multi-byte codepoints are preserved
+/// correctly (REVIEW-2.1-E).
 fn strip_ansi(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut result = String::with_capacity(s.len());
@@ -957,8 +981,17 @@ fn strip_ansi(s: &str) -> String {
             // Skip other control characters (except newline and tab).
             i += 1;
         } else {
-            result.push(bytes[i] as char);
-            i += 1;
+            // Decode one UTF-8 character starting at `i` and append it.
+            // This correctly handles multi-byte sequences; `s` is already valid UTF-8
+            // so `std::str::from_utf8` on the remaining slice will succeed.
+            let remaining = &s[i..];
+            let ch = remaining.chars().next().unwrap_or('\0');
+            if ch != '\0' {
+                result.push(ch);
+                i += ch.len_utf8();
+            } else {
+                i += 1;
+            }
         }
     }
     result
@@ -1112,14 +1145,18 @@ mod tests {
     fn osc7770_dispatch_start_end() {
         use super::dispatch_osc7770;
 
+        let mut active = None;
         let mut completed = Vec::new();
-        dispatch_osc7770("start;type=code;lang=rust", "", &mut completed);
+        dispatch_osc7770("start;type=code;lang=rust", "", &mut active, &mut completed);
         // No completed blocks yet — accumulator is open.
         assert!(completed.is_empty());
+        // Active accumulator should be set.
+        assert!(active.is_some());
 
-        dispatch_osc7770("end", "fn hello() {}", &mut completed);
-        // Now we should have one completed block.
+        dispatch_osc7770("end", "fn hello() {}", &mut active, &mut completed);
+        // Now we should have one completed block and no active accumulator.
         assert_eq!(completed.len(), 1);
+        assert!(active.is_none());
         let block = &completed[0];
         assert_eq!(
             block.content_type,
