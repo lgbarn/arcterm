@@ -63,6 +63,10 @@ pub enum KeyAction {
     SaveWorkspace,
     /// Open the command palette.
     OpenPalette,
+    /// Jump to the most recently active AI pane (Leader+a).
+    JumpToAiPane,
+    /// Toggle the plan status strip / expanded plan view (Leader+p).
+    TogglePlanView,
     /// The key was consumed by the state machine (no PTY bytes).
     Consumed,
 }
@@ -219,6 +223,10 @@ impl KeymapHandler {
                         "q" => Some(KeyAction::ClosePane),
                         "z" => Some(KeyAction::ToggleZoom),
                         "t" => Some(KeyAction::NewTab),
+                        // Leader+a jumps to the most recently active AI pane.
+                        "a" => Some(KeyAction::JumpToAiPane),
+                        // Leader+p toggles the plan status strip / expanded plan view.
+                        "p" => Some(KeyAction::TogglePlanView),
                         // Leader+w opens the workspace switcher (CONTEXT-5: Leader+w).
                         "w" => Some(KeyAction::OpenWorkspaceSwitcher),
                         // Leader+s saves the current session to a timestamped workspace file.
@@ -674,5 +682,27 @@ mod tests {
         let action = press(&mut h, char_key("s"), no_mods());
         assert_eq!(action, KeyAction::SaveWorkspace);
         assert!(!h.is_leader_pending(), "state must reset to Normal after SaveWorkspace");
+    }
+
+    // -----------------------------------------------------------------------
+    // PLAN-7.2 Task 2: Leader+a → JumpToAiPane, Leader+p → TogglePlanView
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn leader_then_a_jumps_to_ai_pane() {
+        let mut h = KeymapHandler::new(500);
+        press(&mut h, char_key("a"), ctrl()); // enter leader
+        let action = press(&mut h, char_key("a"), no_mods()); // 'a' without ctrl
+        assert_eq!(action, KeyAction::JumpToAiPane);
+        assert!(!h.is_leader_pending(), "state must reset to Normal after JumpToAiPane");
+    }
+
+    #[test]
+    fn leader_then_p_toggles_plan_view() {
+        let mut h = KeymapHandler::new(500);
+        press(&mut h, char_key("a"), ctrl()); // enter leader
+        let action = press(&mut h, char_key("p"), no_mods());
+        assert_eq!(action, KeyAction::TogglePlanView);
+        assert!(!h.is_leader_pending(), "state must reset to Normal after TogglePlanView");
     }
 }

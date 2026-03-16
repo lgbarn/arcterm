@@ -2468,6 +2468,24 @@ impl ApplicationHandler for App {
                             }
                         }
 
+                        KeyAction::JumpToAiPane => {
+                            // Jump to the pane that most recently ran an AI agent.
+                            // Will be fully wired when plan.rs state is available (Task 3).
+                            if let Some(ai_id) = state.last_ai_pane {
+                                if state.panes.contains_key(&ai_id) {
+                                    state.set_focused_pane(ai_id);
+                                    state.selection.clear();
+                                    state.window.request_redraw();
+                                }
+                            }
+                        }
+
+                        KeyAction::TogglePlanView => {
+                            // Toggle plan status overlay. Full plan.rs integration in Task 3.
+                            // Stub: will be replaced in Task 3 with proper PlanViewState toggle.
+                            state.window.request_redraw();
+                        }
+
                         KeyAction::Consumed => {
                             // Key consumed by state machine (leader chord entered).
                             // No PTY write needed.
@@ -2609,6 +2627,8 @@ fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action
         | KeyAction::OpenPalette
         | KeyAction::OpenWorkspaceSwitcher
         | KeyAction::SaveWorkspace
+        | KeyAction::JumpToAiPane
+        | KeyAction::TogglePlanView
         | KeyAction::Consumed => {}
     }
 }
