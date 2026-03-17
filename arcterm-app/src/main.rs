@@ -1267,6 +1267,7 @@ impl ApplicationHandler for App {
         };
 
         if state.shell_exited {
+            event_loop.exit();
             return;
         }
 
@@ -1698,12 +1699,11 @@ impl ApplicationHandler for App {
             state.idle_cycles = 0;
             event_loop.set_control_flow(ControlFlow::Poll);
         } else {
-            state.idle_cycles = state.idle_cycles.saturating_add(1);
-            if state.idle_cycles >= 3 {
-                event_loop.set_control_flow(ControlFlow::Wait);
-            } else {
-                event_loop.set_control_flow(ControlFlow::Poll);
-            }
+            // No new data — switch to Wait immediately so the event loop
+            // sleeps until the next wakeup, keyboard event, or window event.
+            // Previous threshold of 3 idle cycles caused unnecessary CPU
+            // spinning between bursts of PTY output.
+            event_loop.set_control_flow(ControlFlow::Wait);
         }
 
         // DSR/DA replies are handled by ArcTermEventListener::send_event(PtyWrite).
@@ -2391,6 +2391,13 @@ impl ApplicationHandler for App {
             // -----------------------------------------------------------------
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed {
+                    // When the shell has exited and the banner is showing,
+                    // any key press closes the window.  (ISSUE-005 / Bug B)
+                    if state.shell_exited {
+                        event_loop.exit();
+                        return;
+                    }
+
                     #[cfg(feature = "latency-trace")]
                     let t0 = TraceInstant::now();
 
