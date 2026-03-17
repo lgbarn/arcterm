@@ -668,6 +668,12 @@ struct AppState {
     /// Receiver for async Ollama generate results (Ok = command, Err = error msg).
     ollama_result_rx: Option<mpsc::Receiver<Result<String, String>>>,
 
+    // ---- AI pane (Leader+i persistent chat) ----
+    /// Per-pane AI chat state; only populated for AI panes.
+    ai_pane_states: HashMap<PaneId, ai_pane::AiPaneState>,
+    /// Receiver for streaming Ollama chat chunks (chunk text, or None for done).
+    ai_chat_rx: Option<(PaneId, mpsc::Receiver<Option<String>>)>,
+
     // ---- deferred plugin loading ----
     /// Set to `true` once plugins have been loaded after the first frame.
     plugins_loaded: bool,
@@ -717,6 +723,7 @@ impl AppState {
         self.auto_detectors.remove(&id);
         self.structured_blocks.remove(&id);
         self.cached_snapshots.remove(&id);
+        self.ai_pane_states.remove(&id);
     }
 
     // -----------------------------------------------------------------------
@@ -1615,6 +1622,102 @@ impl AppState {
                 DispatchOutcome::Exit
             }
 
+            KeyAction::OpenAiPane => {
+                // Remember the pane that was focused BEFORE the split — that is
+                // the sibling whose context we want to inject.
+                let sibling_id = focused_id;
+
+                // Split the active pane vertically (right side becomes the AI pane).
+                // Reuse the same geometry logic as KeyAction::Split(Axis::Vertical).
+                let rects = self.compute_pane_rects();
+                let focused_rect = rects.get(&focused_id).copied().unwrap_or(PixelRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 800.0,
+                    height: 600.0,
+                });
+                let new_rect = PixelRect {
+                    height: focused_rect.height / 2.0,
+                    ..focused_rect
+                };
+                let new_size = self.grid_size_for_rect(new_rect);
+                let new_id = self.spawn_pane(new_size);
+
+                let orig_size = self.grid_size_for_rect(new_rect);
+                let (cell_w, cell_h) = self.cell_dims();
+                if let Some(terminal) = self.panes.get_mut(&focused_id) {
+                    terminal.resize(orig_size.1, orig_size.0, cell_w, cell_h);
+                }
+
+                let active = self.tab_manager.active;
+                self.tab_layouts[active].split(focused_id, Axis::Vertical, new_id);
+                self.set_focused_pane(new_id);
+
+                // Create AiPaneState for the new pane and inject sibling context.
+                let mut ai_state = ai_pane::AiPaneState::new();
+                {
+                    let cwd_str: Option<String> = self
+                        .panes
+                        .get(&sibling_id)
+                        .and_then(|t| t.cwd())
+                        .and_then(|p| p.to_str().map(str::to_string));
+                    let ctx = self.pane_contexts.get(&sibling_id);
+                    let last_cmd = ctx.and_then(|c| c.last_command.clone());
+                    let exit_code = ctx.and_then(|c| c.last_exit_code);
+                    let scrollback: Vec<String> = self
+                        .panes
+                        .get(&sibling_id)
+                        .map(|t| {
+                            let rows = t.all_text_rows();
+                            let start = rows.len().saturating_sub(30);
+                            rows[start..].to_vec()
+                        })
+                        .unwrap_or_default();
+                    ai_state.inject_context(
+                        cwd_str.as_deref(),
+                        last_cmd.as_deref(),
+                        exit_code,
+                        &scrollback,
+                    );
+                }
+                self.ai_pane_states.insert(new_id, ai_state);
+                log::info!("OpenAiPane: created AI pane {:?} (sibling {:?})", new_id, sibling_id);
+
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::RefreshAiContext => {
+                let focused = focused_id;
+                if self.ai_pane_states.contains_key(&focused) {
+                    // Collect sibling context from all other panes.
+                    let siblings = context::collect_sibling_contexts(
+                        &self.pane_contexts,
+                        &self.panes,
+                        focused,
+                    );
+                    if let Some(ai_state) = self.ai_pane_states.get_mut(&focused) {
+                        for sibling in &siblings {
+                            let cwd_str =
+                                sibling.cwd.as_ref().and_then(|p| p.to_str().map(str::to_string));
+                            ai_state.inject_context(
+                                cwd_str.as_deref(),
+                                sibling.last_command.as_deref(),
+                                sibling.exit_code,
+                                &sibling.scrollback,
+                            );
+                        }
+                        log::info!(
+                            "RefreshAiContext: injected {} sibling(s) into pane {:?}",
+                            siblings.len(),
+                            focused
+                        );
+                    }
+                    DispatchOutcome::Redraw
+                } else {
+                    DispatchOutcome::None
+                }
+            }
+
             // Forward and Consumed stay in the keyboard handler.
             KeyAction::Forward(_) | KeyAction::Consumed => DispatchOutcome::None,
         }
@@ -1911,6 +2014,8 @@ impl ApplicationHandler for App {
             overlay_review: None,
             command_overlay: None,
             ollama_result_rx: None,
+            ai_pane_states: HashMap::new(),
+            ai_chat_rx: None,
             plugins_loaded: false,
             #[cfg(feature = "latency-trace")]
             key_press_t0: None,

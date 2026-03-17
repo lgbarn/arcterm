@@ -73,6 +73,10 @@ pub enum KeyAction {
     CrossPaneSearch,
     /// Open the command overlay (Ctrl+Space).
     OpenCommandOverlay,
+    /// Open a new AI chat pane (Leader+i).
+    OpenAiPane,
+    /// Refresh sibling context in the active AI pane (Leader+c).
+    RefreshAiContext,
     // ---- Menu-only actions (no leader-key binding) ----
     /// Spawn a new arcterm window as a separate OS process (Cmd+N).
     NewWindow,
@@ -282,6 +286,10 @@ impl KeymapHandler {
                         "w" => Some(KeyAction::OpenWorkspaceSwitcher),
                         // Leader+s saves the current session to a timestamped workspace file.
                         "s" => Some(KeyAction::SaveWorkspace),
+                        // Leader+i opens a new AI chat pane.
+                        "i" => Some(KeyAction::OpenAiPane),
+                        // Leader+c refreshes sibling context in the active AI pane.
+                        "c" => Some(KeyAction::RefreshAiContext),
                         // Leader+W (shift) closes the active tab.
                         "W" => Some(KeyAction::CloseTab),
                         d @ ("1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9") => {
@@ -828,6 +836,34 @@ mod tests {
         assert!(
             !h.is_leader_pending(),
             "state must reset to Normal after CrossPaneSearch"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PLAN-16 Phase 3 Task 2: Leader+i → OpenAiPane, Leader+c → RefreshAiContext
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn leader_then_i_opens_ai_pane() {
+        let mut h = KeymapHandler::new(500);
+        press(&mut h, char_key("a"), ctrl()); // enter leader
+        let action = press(&mut h, char_key("i"), no_mods());
+        assert_eq!(action, KeyAction::OpenAiPane);
+        assert!(
+            !h.is_leader_pending(),
+            "state must reset to Normal after OpenAiPane"
+        );
+    }
+
+    #[test]
+    fn leader_then_c_refreshes_ai_context() {
+        let mut h = KeymapHandler::new(500);
+        press(&mut h, char_key("a"), ctrl()); // enter leader
+        let action = press(&mut h, char_key("c"), no_mods());
+        assert_eq!(action, KeyAction::RefreshAiContext);
+        assert!(
+            !h.is_leader_pending(),
+            "state must reset to Normal after RefreshAiContext"
         );
     }
 }
