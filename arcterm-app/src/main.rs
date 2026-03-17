@@ -556,9 +556,6 @@ struct AppState {
     /// Leader-key state machine.
     keymap: KeymapHandler,
 
-    /// Set to `true` once ALL PTY channels close (all panes have exited).
-    shell_exited: bool,
-
     // ---- structured output ----
     /// Highlight engine: owns SyntaxSet + ThemeSet; loaded once at startup.
     highlight_engine: HighlightEngine,
@@ -972,7 +969,6 @@ impl AppState {
         tab.zoomed = None;
 
         self.selection.clear();
-        self.shell_exited = false;
 
         log::info!(
             "Restored workspace '{}' with {} pane(s)",
@@ -1222,7 +1218,6 @@ impl ApplicationHandler for App {
             tab_manager,
             tab_layouts,
             keymap,
-            shell_exited: false,
             highlight_engine: HighlightEngine::new(),
             auto_detectors,
             structured_blocks: structured_blocks_map,
@@ -1265,11 +1260,6 @@ impl ApplicationHandler for App {
         let Some(state) = &mut self.state else {
             return;
         };
-
-        if state.shell_exited {
-            event_loop.exit();
-            return;
-        }
 
         // ------------------------------------------------------------------
         // Deferred plugin loading — runs once, after the first frame has been
@@ -1679,11 +1669,11 @@ impl ApplicationHandler for App {
             }
         }
 
-        // When ALL panes are gone, the session has ended.
+        // When ALL panes are gone, the session has ended — exit immediately.
         if state.panes.is_empty() {
-            log::info!("All panes closed — shell has exited");
-            state.shell_exited = true;
-            state.window.request_redraw();
+            log::info!("All panes closed — exiting");
+            event_loop.exit();
+            return;
         }
 
         if got_data {
@@ -2076,44 +2066,6 @@ impl ApplicationHandler for App {
                 // Build pane render infos.
                 let mut pane_infos: Vec<PaneRenderInfo<'_>> = Vec::new();
 
-                // ISSUE-005: Shell-exit indicator — when the shell process has exited,
-                // we render a banner in the last row of the snapshot cells before
-                // displaying the frame. Any refactor of this block must preserve the
-                // banner so users are informed when a shell session ends.
-                if state.shell_exited {
-                    // Show exit banner on the focused pane (or first available).
-                    let target_id = focused;
-                    if let Some(terminal) = state.panes.get(&target_id) {
-                        let mut display = {
-                            let term = terminal.lock_term();
-                            arcterm_render::snapshot_from_term(&*term)
-                        };
-                        let last_row = display.rows.saturating_sub(1);
-                        let msg = "[ Shell exited — press any key to close ]";
-                        // Write the banner into the last row of the snapshot.
-                        let cols = display.cols;
-                        let row_start = last_row * cols;
-                        for col in 0..cols {
-                            let cell = &mut display.cells[row_start + col];
-                            cell.c = ' ';
-                            cell.fg = arcterm_render::SnapshotColor::Indexed(11);
-                            cell.bg = arcterm_render::SnapshotColor::Indexed(0);
-                            cell.bold = true;
-                        }
-                        for (col, ch) in msg.chars().enumerate() {
-                            if col >= cols {
-                                break;
-                            }
-                            display.cells[row_start + col].c = ch;
-                        }
-                        display.cursor_row = last_row.saturating_sub(1);
-                        display.cursor_col = 0;
-                        // Render immediately as a single-pane frame.
-                        state.renderer.render_frame(&display, scale);
-                        return;
-                    }
-                }
-
                 // Normal multi-pane render.
                 // Lock each terminal briefly to extract a snapshot, then release the lock
                 // before GPU rendering so the reader thread is not blocked.
@@ -2391,13 +2343,6 @@ impl ApplicationHandler for App {
             // -----------------------------------------------------------------
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed {
-                    // When the shell has exited and the banner is showing,
-                    // any key press closes the window.  (ISSUE-005 / Bug B)
-                    if state.shell_exited {
-                        event_loop.exit();
-                        return;
-                    }
-
                     #[cfg(feature = "latency-trace")]
                     let t0 = TraceInstant::now();
 
