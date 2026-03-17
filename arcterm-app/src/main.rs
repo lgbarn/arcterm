@@ -569,6 +569,7 @@ struct AppState {
 
     // ---- configuration ----
     config: config::ArctermConfig,
+    default_font_size: f32,
     config_rx: Option<std::sync::mpsc::Receiver<config::ArctermConfig>>,
 
     // ---- selection & clipboard ----
@@ -746,36 +747,7 @@ impl AppState {
     /// Called on `CloseRequested` before exiting. Errors are logged but never
     /// prevent the exit — session save is best-effort.
     fn save_session(&self) -> Result<(), workspace::WorkspaceError> {
-        use std::collections::HashMap as HM;
-
-        // Build per-pane metadata from live terminals.
-        let mut pane_metadata: HM<PaneId, workspace::PaneMetadata> = HM::new();
-        for (id, terminal) in &self.panes {
-            let directory = terminal.cwd().and_then(|p| p.to_str().map(str::to_string));
-            pane_metadata.insert(
-                *id,
-                workspace::PaneMetadata { command: None, directory, env: None },
-            );
-        }
-
-        // Capture using the active tab's layout.
-        let win_size = self.window.inner_size();
-        let workspace_file = workspace::capture_session(
-            &self.tab_manager,
-            &pane_metadata,
-            "_last_session",
-            Some((win_size.width, win_size.height)),
-        );
-
-        // Ensure the workspaces directory exists.
-        let dir = workspace::workspaces_dir();
-        std::fs::create_dir_all(&dir)?;
-
-        let path = dir.join("_last_session.toml");
-        workspace_file.save_to_file(&path)?;
-        log::info!("Session saved to {}", path.display());
-
-        Ok(())
+        self.save_named_session("_last_session")
     }
 
     /// Capture the current session and write it to a named workspace file in
@@ -1438,7 +1410,7 @@ impl AppState {
                         }
                     }
                 }
-                DispatchOutcome::Redraw
+                DispatchOutcome::None
             }
 
             KeyAction::Paste => {
@@ -1474,20 +1446,23 @@ impl AppState {
             KeyAction::SearchNext => {
                 if let Some(ref mut overlay) = self.search_overlay {
                     overlay.next_match();
+                    DispatchOutcome::Redraw
+                } else {
+                    DispatchOutcome::None
                 }
-                DispatchOutcome::Redraw
             }
 
             KeyAction::SearchPrevious => {
                 if let Some(ref mut overlay) = self.search_overlay {
                     overlay.prev_match();
+                    DispatchOutcome::Redraw
+                } else {
+                    DispatchOutcome::None
                 }
-                DispatchOutcome::Redraw
             }
 
             KeyAction::ClearScrollback => {
-                let focused = self.tab_manager.active_tab().focus;
-                if let Some(terminal) = self.panes.get_mut(&focused) {
+                if let Some(terminal) = self.panes.get_mut(&focused_id) {
                     terminal.with_term_mut(|term| {
                         term.grid_mut().clear_history();
                     });
@@ -1508,7 +1483,7 @@ impl AppState {
             }
 
             KeyAction::ResetFontSize => {
-                self.config.font_size = config::ArctermConfig::load().font_size;
+                self.config.font_size = self.default_font_size;
                 log::info!("Font size reset to: {}", self.config.font_size);
                 DispatchOutcome::Redraw
             }
@@ -1560,8 +1535,7 @@ impl AppState {
             }
 
             KeyAction::ResetTerminal => {
-                let focused = self.tab_manager.active_tab().focus;
-                if let Some(terminal) = self.panes.get_mut(&focused) {
+                if let Some(terminal) = self.panes.get_mut(&focused_id) {
                     terminal.with_term_mut(|term| {
                         use alacritty_terminal::vte::ansi::Handler;
                         term.reset_state();
@@ -1588,18 +1562,12 @@ impl AppState {
             }
 
             KeyAction::OpenHelp => {
-                #[cfg(target_os = "macos")]
-                let _ = std::process::Command::new("open")
-                    .arg("https://github.com/user/arcterm")
-                    .spawn();
+                open_url("https://github.com/lgbarn/arcterm");
                 DispatchOutcome::None
             }
 
             KeyAction::ReportIssue => {
-                #[cfg(target_os = "macos")]
-                let _ = std::process::Command::new("open")
-                    .arg("https://github.com/user/arcterm/issues/new")
-                    .spawn();
+                open_url("https://github.com/lgbarn/arcterm/issues/new");
                 DispatchOutcome::None
             }
 
@@ -1856,6 +1824,7 @@ impl ApplicationHandler for App {
             auto_detectors,
             structured_blocks: structured_blocks_map,
             copy_button_rects: Vec::new(),
+            default_font_size: cfg.font_size,
             config: cfg,
             config_rx,
             selection: Selection::default(),
@@ -1899,11 +1868,9 @@ impl ApplicationHandler for App {
         };
 
         // ------------------------------------------------------------------
-        // Poll native menu bar events.
+        // Drain all pending native menu bar events.
         // ------------------------------------------------------------------
-        if let Ok(menu_event) = muda::MenuEvent::receiver().try_recv() {
-            // Clone the action to avoid holding an immutable borrow on state
-            // while dispatch_action() needs &mut self.
+        while let Ok(menu_event) = muda::MenuEvent::receiver().try_recv() {
             let action = state.app_menu.action_for_id(&menu_event.id).cloned();
             if let Some(action) = action {
                 execute_key_action(state, event_loop, action);
@@ -3414,6 +3381,17 @@ impl ApplicationHandler for App {
 // Forward, SwitchTab, ResizePane, Consumed, and OpenPalette are never emitted
 // by the palette and are handled as no-ops here.
 // ---------------------------------------------------------------------------
+
+/// Open a URL in the default browser.
+#[cfg(target_os = "macos")]
+fn open_url(url: &str) {
+    let _ = std::process::Command::new("open").arg(url).spawn();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn open_url(_url: &str) {
+    log::debug!("open_url: not implemented on this platform");
+}
 
 fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action: KeyAction) {
     match state.dispatch_action(&action) {
