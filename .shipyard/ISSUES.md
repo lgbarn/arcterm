@@ -469,6 +469,98 @@ Non-blocking findings logged by the review agent. Resolve before the phase close
 - **Description:** A 20-line Proleptic Gregorian date algorithm (Hinnant civil-from-days) is inlined inside a `match` arm, making it untestable and unattributed. It is the only date-formatting site in the codebase.
 - **Remediation:** Extract to a `fn session_timestamp_name() -> String` function with a doc comment crediting the algorithm. Consider using `chrono` or `time` if either is already a transitive dependency.
 
+### ISSUE-031 — `ollama_result_rx` not cleared when overlay is closed during Loading
+
+- **Severity:** Important
+- **Source:** REVIEW-2.1 (Phase 16, Plan 2.1)
+- **File:** `arcterm-app/src/main.rs:3376-3379`
+- **Description:** When `CmdAction::Close` is handled, `command_overlay` is set to `None` but `ollama_result_rx` is not. The spawned tokio task continues running; the drain loop in `about_to_wait` (line 2103) remains active until the task completes, holding the channel open. If the user immediately opens a new overlay and submits, the old `rx` is overwritten and dropped, the old task's send silently fails. No crash or hang results, but it is a resource leak for the duration of the LLM call.
+- **Remediation:** In the `CmdAction::Close` arm, add `state.ollama_result_rx = None;` before `state.window.request_redraw();`.
+
+### ISSUE-032 — Missing HTTP status check before deserializing Ollama generate response
+
+- **Severity:** Important
+- **Source:** REVIEW-2.1 (Phase 16, Plan 2.1)
+- **File:** `arcterm-app/src/main.rs:3396-3406`
+- **Description:** `client.generate()` returns `Ok(resp)` for any HTTP status including 4xx/5xx. The code immediately calls `resp.json::<GenerateChunk>()`. Ollama error bodies (`{"error":"model not found"}`) do not deserialize as `GenerateChunk`, so the user sees a misleading "parse error" instead of the actual server message.
+- **Remediation:** After `Ok(resp) =>`, add: `if !resp.status().is_success() { let status = resp.status(); let _ = tx.send(Err(format!("Ollama error: {status}"))).await; return; }` before the `.json()` call.
+
+### ISSUE-033 — `GenerateChunk.done` field is never checked; silent assumption about non-streaming response
+
+- **Severity:** Suggestion
+- **Source:** REVIEW-2.1 (Phase 16, Plan 2.1)
+- **File:** `arcterm-app/src/main.rs:3398-3401` and `arcterm-app/src/ollama.rs:43-46`
+- **Description:** With `stream: false`, Ollama always sets `done: true`. The code reads `chunk.response` without asserting this. The `done` field on `GenerateChunk` is unused and the assumption is undocumented.
+- **Remediation:** Add `debug_assert!(chunk.done, "expected done=true for non-streaming generate response");` after deserialization, or add a comment noting the invariant.
+
+### ISSUE-034 — No guard against submitting while a stream is in-flight
+
+- **Severity:** Important
+- **Source:** REVIEW-3.1 (Phase 16, Plan 3.1)
+- **File:** `arcterm-app/src/main.rs:3803-3819`
+- **Description:** Pressing Enter while `ai_state.streaming == true` unconditionally calls `add_user_message()`, replaces `ai_chat_rx`, and spawns a new tokio task. The abandoned prior task continues running, consuming Ollama resources until it naturally finishes. With a slow model and rapid user input, multiple concurrent Ollama requests can stack up silently.
+- **Remediation:** Add a guard before the submission block — e.g., `if ai_state.streaming { state.window.request_redraw(); return; }` — so new messages are rejected while a response is in-flight. Optionally display a "waiting..." hint in the input bar to signal the blocked state to the user.
+
+### ISSUE-035 — Markdown/code rendering not implemented (plan spec unmet)
+
+- **Severity:** Important
+- **Source:** REVIEW-3.1 (Phase 16, Plan 3.1)
+- **File:** `arcterm-app/src/main.rs:3289-3301`
+- **Description:** Plan 3.1 Task 3 Step 2 specifies "Use existing `pulldown-cmark` + `syntect` for Markdown/code in responses." The implementation renders assistant messages verbatim. Code blocks appear as raw triple-backtick text. The summary does not list this as a known deviation.
+- **Remediation:** Either implement Markdown stripping before display (strip code fences, bold markers, etc.) using the already-present `pulldown-cmark` dependency, or explicitly carry this forward as a known gap in the next plan phase.
+
+### ISSUE-036 — Streaming "..." indicator can visually overlap chat content
+
+- **Severity:** Important
+- **Source:** REVIEW-3.1 (Phase 16, Plan 3.1)
+- **File:** `arcterm-app/src/main.rs:3329-3335`
+- **Description:** The "  ..." streaming indicator is placed at `pane_rect.y + pane_rect.height - cell_h * 2.5`, which falls within the scrollable content area (`content_height = pane_rect.height - cell_h * 3.5`). When the chat viewport is full, the last visible chat line renders at the same y-position as the indicator, with no separating background quad to prevent visual bleed-through.
+- **Remediation:** Extend the content area reservation to exclude the indicator row (e.g., `content_height = pane_rect.height - cell_h * 4.5` when streaming), or back the indicator with an `OverlayQuad` matching the pane background color at `[pane_rect.x, pane_rect.y + pane_rect.height - cell_h * 2.5, pane_rect.width, cell_h]`.
+
+### ISSUE-037 — `finalize_response` pushes empty assistant message when stream produces no content
+
+- **Severity:** Important
+- **Source:** REVIEW-3.1 (Phase 16, Plan 3.1)
+- **File:** `arcterm-app/src/ai_pane.rs:92-99`
+- **Description:** `finalize_response()` unconditionally pushes `ChatMessage { role: "assistant", content: "" }` to history. If the Ollama stream completes with zero non-empty content chunks (network timeout, model error, early `break`), an empty assistant message is included in subsequent API calls, which can confuse some model implementations.
+- **Remediation:** Guard the history push: `if !self.pending_response.is_empty() { self.history.push(ChatMessage { role: "assistant".to_string(), content: self.pending_response.clone() }); }`. Continue to set `streaming = false` and `pending_response.clear()` unconditionally.
+
+### ISSUE-038 — Duplicated OllamaClient construction pattern in two spawn sites
+
+- **Severity:** medium
+- **Source:** simplifier (Phase 16)
+- **File:** `arcterm-app/src/main.rs:3645-3655`, `arcterm-app/src/main.rs:3821-3829`
+- **Date:** 2026-03-17T21:44:11Z
+- **Description:** Two `tokio::spawn` blocks independently clone `state.config.ai.endpoint` and `state.config.ai.model`, then construct `OllamaClient::new(endpoint, model)` inside the closure with a local `use crate::ollama::OllamaClient;` import. The pattern is identical except for the subsequent API call (`generate` vs `chat`).
+- **Remediation:** Add `fn ollama_client(&self) -> ollama::OllamaClient` to `AppState`. Both spawn closures call `state.ollama_client()` instead of duplicating the clone + construction. Remove the two local `use` imports.
+
+### ISSUE-039 — `is_some().unwrap()` double-access on `ollama_result_rx`
+
+- **Severity:** medium
+- **Source:** simplifier (Phase 16)
+- **File:** `arcterm-app/src/main.rs:2209-2225`
+- **Date:** 2026-03-17T21:44:11Z
+- **Description:** The Ollama result drain checks `if state.ollama_result_rx.is_some()` then immediately calls `.as_mut().unwrap()`. This is the anti-pattern the skill flags as AI bloat. The idiomatic Rust form is `if let Some(rx) = state.ollama_result_rx.as_mut()`.
+- **Remediation:** Replace the outer guard with `if let Some(rx) = state.ollama_result_rx.as_mut() { if let Ok(result) = rx.try_recv() { ... } }`.
+
+### ISSUE-040 — `last_ai_pane` cleanup not centralized in `remove_pane_resources`
+
+- **Severity:** medium
+- **Source:** simplifier (Phase 16)
+- **File:** `arcterm-app/src/main.rs:1224-1225`, `1242-1243`, `1311-1312`, `2525-2526`
+- **Date:** 2026-03-17T21:44:11Z
+- **Description:** The two-line guard `if self.last_ai_pane == Some(id) { self.last_ai_pane = None; }` appears in four separate close paths instead of once inside `remove_pane_resources`. A future close path that calls `remove_pane_resources` but omits the guard will silently leave a dangling `last_ai_pane` reference.
+- **Remediation:** Add the guard to `remove_pane_resources` at `arcterm-app/src/main.rs:717` and remove the four scattered copies.
+
+### ISSUE-041 — Command overlay system prompt is an anonymous inline literal
+
+- **Severity:** low
+- **Source:** simplifier (Phase 16)
+- **File:** `arcterm-app/src/main.rs:3656`
+- **Date:** 2026-03-17T21:44:11Z
+- **Description:** The AI pane defines its system prompt as `pub const SYSTEM_PROMPT` in `ai_pane.rs`. The command overlay's system prompt is an anonymous string literal buried inside a `tokio::spawn` closure. Both encode behavioral contracts with the model and deserve the same treatment.
+- **Remediation:** Define `const GENERATE_SYSTEM_PROMPT: &str = "..."` at the top of `command_overlay.rs` and reference it at the spawn site in `main.rs`.
+
 ---
 
 ## Resolved

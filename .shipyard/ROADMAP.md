@@ -563,7 +563,7 @@ Phase 15 depends on Phases 12-14 being complete. It is the final gate before v0.
 
 **Goal:** Add Ollama-backed AI assistant to arcterm via two components: a persistent AI Pane for conversational interaction and a Command Overlay for quick one-shot command lookup.
 
-**Status:** building
+**Status:** complete ✅
 
 **Success Criteria:**
 - `[ai]` config section with `endpoint` and `model` fields, hot-reloadable
