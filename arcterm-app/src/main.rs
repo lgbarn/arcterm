@@ -1571,6 +1571,13 @@ impl AppState {
                 DispatchOutcome::None
             }
 
+            KeyAction::Quit => {
+                if let Err(e) = self.save_session() {
+                    log::warn!("Failed to save session on quit: {e}");
+                }
+                DispatchOutcome::Exit
+            }
+
             // Forward and Consumed stay in the keyboard handler.
             KeyAction::Forward(_) | KeyAction::Consumed => DispatchOutcome::None,
         }

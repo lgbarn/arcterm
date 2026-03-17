@@ -56,6 +56,7 @@ impl AppMenu {
         let close_pane = item("Close Pane", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyW)), KeyAction::ClosePane);
         let close_tab = item("Close Tab", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyW)), KeyAction::CloseTab);
         let reset_terminal = item("Reset Terminal", None, KeyAction::ResetTerminal);
+        let quit = item("Quit Arcterm", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyQ)), KeyAction::Quit);
 
         shell
             .append_items(&[
@@ -69,6 +70,8 @@ impl AppMenu {
                 &close_tab,
                 &PredefinedMenuItem::separator(),
                 &reset_terminal,
+                &PredefinedMenuItem::separator(),
+                &quit,
             ])
             .expect("shell menu append_items failed");
 

@@ -110,6 +110,8 @@ pub enum KeyAction {
     OpenHelp,
     /// Open GitHub issues URL in browser.
     ReportIssue,
+    /// Quit the application (Cmd+Q). Saves session before exiting.
+    Quit,
     /// The key was consumed by the state machine (no PTY bytes).
     Consumed,
 }
