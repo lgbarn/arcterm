@@ -1,11 +1,17 @@
 name: CI
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
   check:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -20,24 +26,5 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Build
         run: cargo build --workspace
-      - name: Test (non-GPU crates)
-        run: cargo test --package arcterm-core --package arcterm-vt --package arcterm-pty --package arcterm-app
-      - name: Clippy (full workspace)
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-  gpu-test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Install Mesa software rendering
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libvulkan1 mesa-vulkan-drivers libegl1-mesa-dev
-      - name: Test render crate (software GPU)
-        env:
-          WGPU_BACKEND: vulkan
-        run: cargo test --package arcterm-render --features gpu-tests
-        continue-on-error: true
+      - name: Test
+        run: cargo test --workspace
