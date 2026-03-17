@@ -661,6 +661,12 @@ struct AppState {
     /// Config overlay review state; `None` when the overlay is closed.
     overlay_review: Option<overlay::OverlayReviewState>,
 
+    // ---- command overlay (Ctrl+Space quick-invoke LLM) ----
+    /// Command overlay state; `None` when the overlay is closed.
+    command_overlay: Option<command_overlay::CommandOverlayState>,
+    /// Receiver for async Ollama generate results (Ok = command, Err = error msg).
+    ollama_result_rx: Option<mpsc::Receiver<Result<String, String>>>,
+
     // ---- deferred plugin loading ----
     /// Set to `true` once plugins have been loaded after the first frame.
     plugins_loaded: bool,
@@ -1401,6 +1407,13 @@ impl AppState {
                 DispatchOutcome::Redraw
             }
 
+            KeyAction::OpenCommandOverlay => {
+                if self.command_overlay.is_none() {
+                    self.command_overlay = Some(command_overlay::CommandOverlayState::new());
+                }
+                DispatchOutcome::Redraw
+            }
+
             KeyAction::ReviewOverlay => {
                 let cfg = self.config.clone();
                 if let Some(review) = overlay::OverlayReviewState::new(&cfg) {
@@ -1895,6 +1908,8 @@ impl ApplicationHandler for App {
             plan_watcher_rx,
             workspace_root,
             overlay_review: None,
+            command_overlay: None,
+            ollama_result_rx: None,
             plugins_loaded: false,
             #[cfg(feature = "latency-trace")]
             key_press_t0: None,
@@ -2080,6 +2095,27 @@ impl ApplicationHandler for App {
                 overlay.execute_search(&pane_rows);
             }
             state.window.request_redraw();
+        }
+
+        // ------------------------------------------------------------------
+        // Drain Ollama generate results for the command overlay.
+        // ------------------------------------------------------------------
+        if state.ollama_result_rx.is_some() {
+            if let Ok(result) = state
+                .ollama_result_rx
+                .as_mut()
+                .unwrap()
+                .try_recv()
+            {
+                state.ollama_result_rx = None;
+                if let Some(ref mut overlay) = state.command_overlay {
+                    match result {
+                        Ok(cmd) => overlay.set_result(cmd),
+                        Err(msg) => overlay.set_error(msg),
+                    }
+                }
+                state.window.request_redraw();
+            }
         }
 
         // ------------------------------------------------------------------
@@ -3292,6 +3328,69 @@ impl ApplicationHandler for App {
                             }
                             OverlayAction::Noop => {
                                 state.overlay_review = Some(review);
+                            }
+                        }
+                        return;
+                    }
+
+                    // Command overlay is modal — route ALL key input through it when open.
+                    if state.command_overlay.is_some() {
+                        use command_overlay::OverlayAction as CmdAction;
+                        let mut overlay = state.command_overlay.take().unwrap();
+                        let cmd_action = overlay.handle_key(&event.logical_key);
+                        match cmd_action {
+                            CmdAction::Close => {
+                                // Overlay stays None (already taken).
+                                state.window.request_redraw();
+                            }
+                            CmdAction::UpdateQuery => {
+                                state.command_overlay = Some(overlay);
+                                state.window.request_redraw();
+                            }
+                            CmdAction::Submit => {
+                                // Spawn async Ollama request.
+                                let query = overlay.query.clone();
+                                let endpoint = state.config.ai.endpoint.clone();
+                                let model = state.config.ai.model.clone();
+                                let (tx, rx) = mpsc::channel(1);
+                                state.ollama_result_rx = Some(rx);
+                                state.command_overlay = Some(overlay);
+                                tokio::spawn(async move {
+                                    use crate::ollama::OllamaClient;
+                                    let client = OllamaClient::new(endpoint, model);
+                                    let system = Some("You are a shell command assistant. Return ONLY a single shell command with no explanation, no markdown, no backticks. Just the raw command.");
+                                    match client.generate(&query, system).await {
+                                        Ok(resp) => {
+                                            match resp.json::<crate::ollama::GenerateChunk>().await {
+                                                Ok(chunk) => {
+                                                    let cmd = chunk.response.trim().to_string();
+                                                    let _ = tx.send(Ok(cmd)).await;
+                                                }
+                                                Err(e) => {
+                                                    let _ = tx.send(Err(format!("parse error: {e}"))).await;
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            let _ = tx.send(Err(format!("LLM unavailable: {e}"))).await;
+                                        }
+                                    }
+                                });
+                                state.window.request_redraw();
+                            }
+                            CmdAction::Accept(cmd) => {
+                                // Write command + newline to active pane PTY.
+                                let focused = state.focused_pane();
+                                if let Some(terminal) = state.panes.get_mut(&focused) {
+                                    let mut payload = cmd.into_bytes();
+                                    payload.push(b'\n');
+                                    terminal.write_input(&payload);
+                                }
+                                // Overlay stays None (already taken).
+                                state.window.request_redraw();
+                            }
+                            CmdAction::Noop => {
+                                state.command_overlay = Some(overlay);
                             }
                         }
                         return;

@@ -71,6 +71,8 @@ pub enum KeyAction {
     ReviewOverlay,
     /// Open cross-pane search (Leader+/).
     CrossPaneSearch,
+    /// Open the command overlay (Ctrl+Space).
+    OpenCommandOverlay,
     // ---- Menu-only actions (no leader-key binding) ----
     /// Spawn a new arcterm window as a separate OS process (Cmd+N).
     NewWindow,
@@ -214,9 +216,9 @@ impl KeymapHandler {
                             _ => {}
                         }
                     }
-                    // Ctrl+Space → open command palette.
+                    // Ctrl+Space → open command overlay.
                     if let Key::Named(NamedKey::Space) = logical_key {
-                        return KeyAction::OpenPalette;
+                        return KeyAction::OpenCommandOverlay;
                     }
                 }
 
@@ -506,14 +508,14 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Task 1: Normal mode — Ctrl+Space → OpenPalette
+    // Normal mode — Ctrl+Space → OpenCommandOverlay
     // -----------------------------------------------------------------------
 
     #[test]
-    fn ctrl_space_opens_palette() {
+    fn ctrl_space_opens_command_overlay() {
         let mut h = KeymapHandler::new(500);
         let action = press(&mut h, Key::Named(NamedKey::Space), ctrl());
-        assert_eq!(action, KeyAction::OpenPalette);
+        assert_eq!(action, KeyAction::OpenCommandOverlay);
     }
 
     // -----------------------------------------------------------------------
