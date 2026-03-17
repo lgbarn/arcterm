@@ -1,7 +1,7 @@
 {
-  "phase": 15,
-  "status": "complete",
-  "position": "Phase 15 build complete — Event Handling & Exit Hardening",
-  "message": "All 6 items fixed. 416 tests pass. Clippy clean. v0.2.0 ready to ship.",
-  "updated_at": "2026-03-17T04:00:00Z"
+  "phase": 16,
+  "status": "building",
+  "position": "Building phase 16 — Local LLM Integration (Ollama)",
+  "message": "3 waves: foundation, command overlay, AI pane. Executing wave 1.",
+  "updated_at": "2026-03-17T13:00:00Z"
 }

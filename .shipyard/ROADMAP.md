@@ -557,6 +557,32 @@ Phases 1-8 (v0.1.0, complete) ──> Phase 9-11 (v0.1.1, superseded)
 
 Phase 15 depends on Phases 12-14 being complete. It is the final gate before v0.2.0.
 
+---
+
+## Phase 16: Local LLM Integration (Ollama) ✦ NEW
+
+**Goal:** Add Ollama-backed AI assistant to arcterm via two components: a persistent AI Pane for conversational interaction and a Command Overlay for quick one-shot command lookup.
+
+**Status:** building
+
+**Success Criteria:**
+- `[ai]` config section with `endpoint` and `model` fields, hot-reloadable
+- Ollama REST client (`/api/chat` streaming, `/api/generate` one-shot)
+- SiblingContext includes last 30 lines of scrollback in OSC 7770 responses
+- `Ctrl+Space` opens a command overlay: type question → get one shell command → Enter pastes it
+- `Leader+i` opens a persistent AI chat pane with sibling context awareness
+- `Leader+c` refreshes sibling context in the active AI pane
+- Graceful degradation when Ollama is not running ("LLM unavailable")
+
+**Scope:**
+- Wave 1 (Plan 1.1): `[ai]` config, Ollama HTTP client (`reqwest`), scrollback context extension
+- Wave 2 (Plan 2.1): Command overlay state machine, keymap wiring, rendering
+- Wave 3 (Plan 3.1): AI pane chat state, keymap wiring, streamed chat rendering
+
+**Dependencies:** Phase 15 (stable v0.2.0 base)
+
+**Design:** `docs/plans/2026-03-17-local-llm-integration-design.md`
+
 ## v0.2.0 Cumulative Milestones
 
 | After Phase | Arcterm Is... |
