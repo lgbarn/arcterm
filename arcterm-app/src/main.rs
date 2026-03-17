@@ -3176,6 +3176,27 @@ impl ApplicationHandler for App {
                                 state.window.request_redraw();
                             }
                         }
+
+                        // Menu-only actions: not triggered via keyboard chords.
+                        // They will be handled when wired through dispatch_action() in Task 4.
+                        KeyAction::Copy
+                        | KeyAction::Paste
+                        | KeyAction::SelectAll
+                        | KeyAction::SearchNext
+                        | KeyAction::SearchPrevious
+                        | KeyAction::ClearScrollback
+                        | KeyAction::IncreaseFontSize
+                        | KeyAction::DecreaseFontSize
+                        | KeyAction::ResetFontSize
+                        | KeyAction::ToggleFullScreen
+                        | KeyAction::Minimize
+                        | KeyAction::EqualizeSplits
+                        | KeyAction::NextTab
+                        | KeyAction::PreviousTab
+                        | KeyAction::ResetTerminal
+                        | KeyAction::ShowDebugInfo
+                        | KeyAction::OpenHelp
+                        | KeyAction::ReportIssue => {}
                     }
                 }
             }
@@ -3321,6 +3342,24 @@ fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action
         | KeyAction::TogglePlanView
         | KeyAction::ReviewOverlay
         | KeyAction::CrossPaneSearch
+        | KeyAction::Copy
+        | KeyAction::Paste
+        | KeyAction::SelectAll
+        | KeyAction::SearchNext
+        | KeyAction::SearchPrevious
+        | KeyAction::ClearScrollback
+        | KeyAction::IncreaseFontSize
+        | KeyAction::DecreaseFontSize
+        | KeyAction::ResetFontSize
+        | KeyAction::ToggleFullScreen
+        | KeyAction::Minimize
+        | KeyAction::EqualizeSplits
+        | KeyAction::NextTab
+        | KeyAction::PreviousTab
+        | KeyAction::ResetTerminal
+        | KeyAction::ShowDebugInfo
+        | KeyAction::OpenHelp
+        | KeyAction::ReportIssue
         | KeyAction::Consumed => {}
     }
 }

@@ -40,6 +40,7 @@ base64.workspace = true
 clap = { version = "4", features = ["derive"] }
 arcterm-plugin = { path = "../arcterm-plugin" }
 similar = "2"
+muda = "0.17"
 
 [build-dependencies]
 clap = { version = "4", features = ["derive"] }

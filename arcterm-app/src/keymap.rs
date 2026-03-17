@@ -71,6 +71,43 @@ pub enum KeyAction {
     ReviewOverlay,
     /// Open cross-pane search (Leader+/).
     CrossPaneSearch,
+    // ---- Menu-only actions (no leader-key binding) ----
+    /// Copy selected text to clipboard (Cmd+C).
+    Copy,
+    /// Paste from clipboard (Cmd+V).
+    Paste,
+    /// Select all text in the active pane's scrollback + visible buffer.
+    SelectAll,
+    /// Navigate to the next search match (Cmd+G).
+    SearchNext,
+    /// Navigate to the previous search match (Cmd+Shift+G).
+    SearchPrevious,
+    /// Clear the scrollback buffer of the active pane (Cmd+K).
+    ClearScrollback,
+    /// Increase font size by 1pt (Cmd+=).
+    IncreaseFontSize,
+    /// Decrease font size by 1pt (Cmd+-).
+    DecreaseFontSize,
+    /// Reset font size to config default (Cmd+0).
+    ResetFontSize,
+    /// Toggle native fullscreen (Ctrl+Cmd+F).
+    ToggleFullScreen,
+    /// Minimize the window (Cmd+M).
+    Minimize,
+    /// Reset all split ratios to 0.5.
+    EqualizeSplits,
+    /// Next tab (Cmd+Shift+]).
+    NextTab,
+    /// Previous tab (Cmd+Shift+[).
+    PreviousTab,
+    /// Reset terminal emulation state.
+    ResetTerminal,
+    /// Show debug info overlay (version, GPU, config path, pane count).
+    ShowDebugInfo,
+    /// Open Arcterm help URL in browser.
+    OpenHelp,
+    /// Open GitHub issues URL in browser.
+    ReportIssue,
     /// The key was consumed by the state machine (no PTY bytes).
     Consumed,
 }
