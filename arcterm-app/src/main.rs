@@ -1650,7 +1650,15 @@ impl ApplicationHandler for App {
         }
 
         // Remove closed panes and associated state.
+        // Also update the layout tree for each closed pane so stale Leaf nodes
+        // are pruned and siblings are promoted.
+        let active = state.tab_manager.active;
         for id in closed_panes {
+            // Update layout tree: promote sibling when a split loses a child.
+            if let Some(new_root) = state.tab_layouts[active].close(id) {
+                state.tab_layouts[active] = new_root;
+            }
+
             state.panes.remove(&id);
             state.image_channels.remove(&id);
             state.auto_detectors.remove(&id);
@@ -1674,6 +1682,18 @@ impl ApplicationHandler for App {
             log::info!("All panes closed — exiting");
             event_loop.exit();
             return;
+        }
+
+        // If the focused pane was among those that exited, move focus to the
+        // first remaining pane in the active tab's layout tree.
+        {
+            let focused = state.focused_pane();
+            if !state.panes.contains_key(&focused) {
+                let remaining = state.tab_layouts[active].all_pane_ids();
+                if let Some(&new_focus) = remaining.first() {
+                    state.set_focused_pane(new_focus);
+                }
+            }
         }
 
         if got_data {
