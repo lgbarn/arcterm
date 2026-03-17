@@ -197,6 +197,7 @@ mod terminal;
 mod workspace;
 mod ollama;
 mod command_overlay;
+mod ai_pane;
 
 use std::collections::HashMap;
 use std::sync::Arc;
