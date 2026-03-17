@@ -254,7 +254,7 @@ dependencies = [
 
 [[package]]
 name = "arcterm-app"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "alacritty_terminal",
  "arboard",
@@ -285,7 +285,7 @@ dependencies = [
 
 [[package]]
 name = "arcterm-plugin"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "dirs",
@@ -301,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "arcterm-render"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "alacritty_terminal",
  "bytemuck",
