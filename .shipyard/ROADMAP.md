@@ -506,20 +506,56 @@ All of the following must be true before tagging v0.1.1:
 
 ---
 
+## Phase 15: Event Handling & Exit Hardening (HIGH PRIORITY)
+
+**Goal:** Harden event handling, pane lifecycle, and exit flows. Fix remaining gaps found during manual testing.
+
+**Success Criteria:**
+- `exit` in single-pane closes window immediately (no banner, no extra frame)
+- Closing one side of a split promotes the sibling to full size
+- Closing the last pane in a multi-pane layout closes the window
+- Multiple panes exiting simultaneously doesn't panic or leave stale state
+- Window drag-resize doesn't cause visible lag or dozens of intermediate renders
+- `PresentMode` is logged at startup
+- Reader thread EOF sends final wakeup signal
+- All existing tests pass, no regressions in keyboard input latency
+
+**Scope:**
+- Reader thread EOF wakeup (REVIEW-2.1-H fix)
+- Remove exit banner — auto-close immediately on last pane exit
+- Layout tree cleanup on pane close (sibling promotion, tab removal, focus update)
+- Multi-pane simultaneous exit (batch removal, no iteration invalidation)
+- Resize coalescing (defer resize to next frame during drag)
+- Fifo fallback logging (log actual PresentMode at startup)
+
+**Risk:** Layout tree mutations during pane close are the most complex item. The recursive `PaneNode` tree needs careful surgery to avoid stale references. Existing `close_pane()` logic in `layout.rs` should handle most cases but needs audit for edge cases (closing last pane in a tab, closing both sides of a split simultaneously).
+
+**Estimated Scope:** Small — ~15% of a phase. Most changes are 5-20 lines each.
+
+**Design:** `.shipyard/designs/2026-03-17-event-handling-design.md`
+
+---
+
 ## v0.2.0 Phase Dependency Graph
 
 ```
 Phases 1-8 (v0.1.0, complete) ──> Phase 9-11 (v0.1.1, superseded)
           │
           v
-     Phase 12: Engine Swap
+     Phase 12: Engine Swap (complete)
           │
-          ├──> Phase 13: Renderer Optimization  ─┐
-          │                                       ├──> v0.2.0 ships
-          └──> Phase 14: Remaining Stabilization ─┘
+          ├──> Phase 13: Renderer Optimization (complete) ─┐
+          │                                                 │
+          └──> Phase 14: Remaining Stabilization (complete) ┘
+                              │
+                              v
+                    Phase 15: Event Handling & Exit Hardening
+                              │
+                              v
+                         v0.2.0 ships
 ```
 
-Phase 12 must complete first. Phases 13 and 14 are independent and can execute in parallel.
+Phase 15 depends on Phases 12-14 being complete. It is the final gate before v0.2.0.
 
 ## v0.2.0 Cumulative Milestones
 
@@ -527,7 +563,8 @@ Phase 12 must complete first. Phases 13 and 14 are independent and can execute i
 |---|---|
 | 12 | Running on alacritty's proven terminal engine — 17+ bugs eliminated, ring-buffer grid, full VT compliance |
 | 13 | Rendering efficiently in multi-pane mode with proper frame pacing |
-| 14 | All surviving app, plugin, and runtime issues resolved — v0.2.0 ships |
+| 14 | All surviving app, plugin, and runtime issues resolved |
+| 15 | Event handling, pane lifecycle, and exit flows hardened — v0.2.0 ships |
 
 ## v0.2.0 Release Criteria
 
@@ -541,6 +578,8 @@ All of the following must be true before tagging v0.2.0:
 - All surviving ISSUES.md items resolved
 - Both High concerns (H-1, H-2) resolved
 - All Medium concerns (M-1 through M-6) resolved
+- `exit` closes window immediately
+- Pane close promotes siblings correctly in layout tree
 - `cargo test --workspace` passes
 - `cargo clippy --workspace -- -D warnings` clean
 - `ls`, `vim`, `top`, `htop`, `tmux` render correctly
