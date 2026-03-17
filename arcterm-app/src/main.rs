@@ -196,6 +196,7 @@ mod tab;
 mod terminal;
 mod workspace;
 mod ollama;
+mod command_overlay;
 
 use std::collections::HashMap;
 use std::sync::Arc;
