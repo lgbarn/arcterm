@@ -470,6 +470,23 @@ impl PaneNode {
         }
     }
 
+    /// Reset all split ratios in this tree to 0.5.
+    pub fn equalize(&mut self) {
+        match self {
+            PaneNode::Leaf { .. } | PaneNode::PluginPane { .. } => {}
+            PaneNode::HSplit { ratio, left, right } => {
+                *ratio = 0.5;
+                left.equalize();
+                right.equalize();
+            }
+            PaneNode::VSplit { ratio, top, bottom } => {
+                *ratio = 0.5;
+                top.equalize();
+                bottom.equalize();
+            }
+        }
+    }
+
     /// Adjust the split ratio of the split node whose *direct child* is `target`.
     ///
     /// `delta` is added to the ratio; the result is clamped to `[0.05, 0.95]`.

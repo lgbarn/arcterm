@@ -1408,26 +1408,193 @@ impl AppState {
                 DispatchOutcome::None
             }
 
-            // Menu-only actions: stubs until Task 5 implements them.
-            KeyAction::Copy
-            | KeyAction::Paste
-            | KeyAction::SelectAll
-            | KeyAction::SearchNext
-            | KeyAction::SearchPrevious
-            | KeyAction::ClearScrollback
-            | KeyAction::IncreaseFontSize
-            | KeyAction::DecreaseFontSize
-            | KeyAction::ResetFontSize
-            | KeyAction::ToggleFullScreen
-            | KeyAction::Minimize
-            | KeyAction::EqualizeSplits
-            | KeyAction::NextTab
-            | KeyAction::PreviousTab
-            | KeyAction::ResetTerminal
-            | KeyAction::ShowDebugInfo
-            | KeyAction::OpenHelp
-            | KeyAction::ReportIssue => {
-                log::debug!("menu-only action not yet implemented: {:?}", action);
+            KeyAction::Copy => {
+                let focused = focused_id;
+                if let Some(terminal) = self.panes.get(&focused) {
+                    let snapshot = {
+                        let term = terminal.lock_term();
+                        arcterm_render::snapshot_from_term(&*term)
+                    };
+                    let text = self.selection.extract_text(&snapshot);
+                    if !text.is_empty() {
+                        if let Some(cb) = &mut self.clipboard {
+                            if let Err(e) = cb.copy(&text) {
+                                log::warn!("Copy: clipboard write failed: {e}");
+                            }
+                        }
+                    }
+                }
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::Paste => {
+                let focused = focused_id;
+                if let Some(cb) = &mut self.clipboard {
+                    match cb.paste() {
+                        Ok(text) => {
+                            if let Some(terminal) = self.panes.get_mut(&focused) {
+                                let bracketed = terminal.bracketed_paste();
+                                if bracketed {
+                                    let mut payload = b"\x1b[200~".to_vec();
+                                    payload.extend_from_slice(text.as_bytes());
+                                    payload.extend_from_slice(b"\x1b[201~");
+                                    terminal.write_input(&payload);
+                                } else {
+                                    terminal.write_input(text.as_bytes());
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("Paste: clipboard read failed: {e}");
+                        }
+                    }
+                }
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::SelectAll => {
+                log::debug!("SelectAll: not yet implemented");
+                DispatchOutcome::None
+            }
+
+            KeyAction::SearchNext => {
+                if let Some(ref mut overlay) = self.search_overlay {
+                    overlay.next_match();
+                }
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::SearchPrevious => {
+                if let Some(ref mut overlay) = self.search_overlay {
+                    overlay.prev_match();
+                }
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::ClearScrollback => {
+                let focused = focused_id;
+                if let Some(terminal) = self.panes.get_mut(&focused) {
+                    // Write the CSI 3J escape sequence directly to the terminal
+                    // to clear its scrollback buffer.
+                    terminal.write_input(b"\x1b[3J");
+                }
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::IncreaseFontSize => {
+                self.config.font_size += 1.0;
+                log::info!("Font size: {}", self.config.font_size);
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::DecreaseFontSize => {
+                self.config.font_size = (self.config.font_size - 1.0).max(6.0);
+                log::info!("Font size: {}", self.config.font_size);
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::ResetFontSize => {
+                self.config.font_size = config::ArctermConfig::load().font_size;
+                log::info!("Font size reset to: {}", self.config.font_size);
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::ToggleFullScreen => {
+                use winit::window::Fullscreen;
+                if self.window.fullscreen().is_some() {
+                    self.window.set_fullscreen(None);
+                } else {
+                    self.window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+                }
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::Minimize => {
+                let _ = self.window.set_minimized(true);
+                DispatchOutcome::None
+            }
+
+            KeyAction::EqualizeSplits => {
+                let active = self.tab_manager.active;
+                if let Some(layout) = self.tab_layouts.get_mut(active) {
+                    layout.equalize();
+                }
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::NextTab => {
+                let count = self.tab_manager.tabs.len();
+                if count > 1 {
+                    self.tab_manager.active = (self.tab_manager.active + 1) % count;
+                    let new_focus = self.tab_manager.active_tab().focus;
+                    self.set_focused_pane(new_focus);
+                    self.selection.clear();
+                }
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::PreviousTab => {
+                let count = self.tab_manager.tabs.len();
+                if count > 1 {
+                    self.tab_manager.active =
+                        (self.tab_manager.active + count - 1) % count;
+                    let new_focus = self.tab_manager.active_tab().focus;
+                    self.set_focused_pane(new_focus);
+                    self.selection.clear();
+                }
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::ResetTerminal => {
+                let focused = focused_id;
+                if let Some(terminal) = self.panes.get_mut(&focused) {
+                    // RIS (Reset to Initial State) resets terminal state.
+                    terminal.write_input(b"\x1bc");
+                }
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::ShowDebugInfo => {
+                let pane_count = self.panes.len();
+                let tab_count = self.tab_manager.tabs.len();
+                let focused = focused_id;
+                let win_size = self.window.inner_size();
+                log::info!(
+                    "Debug: panes={}, tabs={}, focused={:?}, window={}x{}, font_size={}",
+                    pane_count,
+                    tab_count,
+                    focused,
+                    win_size.width,
+                    win_size.height,
+                    self.config.font_size,
+                );
+                if let Some(terminal) = self.panes.get_mut(&focused) {
+                    let info = format!(
+                        "\r\n--- Arcterm Debug ---\r\nPanes: {}\r\nTabs: {}\r\nWindow: {}x{}\r\nFont: {}pt\r\n---\r\n",
+                        pane_count,
+                        tab_count,
+                        win_size.width,
+                        win_size.height,
+                        self.config.font_size,
+                    );
+                    terminal.write_input(info.as_bytes());
+                }
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::OpenHelp => {
+                #[cfg(target_os = "macos")]
+                let _ = std::process::Command::new("open")
+                    .arg("https://github.com/user/arcterm")
+                    .spawn();
+                DispatchOutcome::None
+            }
+
+            KeyAction::ReportIssue => {
+                #[cfg(target_os = "macos")]
+                let _ = std::process::Command::new("open")
+                    .arg("https://github.com/user/arcterm/issues/new")
+                    .spawn();
                 DispatchOutcome::None
             }
 
