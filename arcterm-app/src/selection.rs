@@ -285,7 +285,7 @@ impl Clipboard {
 mod tests {
     use super::*;
     use alacritty_terminal::vte::ansi::CursorShape;
-    use arcterm_render::{RenderSnapshot, SnapshotCell, SnapshotColor};
+    use arcterm_render::{RenderSnapshot, SnapshotCell};
 
     // -----------------------------------------------------------------------
     // Helper: build a RenderSnapshot from text rows
@@ -309,24 +309,6 @@ mod tests {
             cursor_visible: false,
             cursor_shape: CursorShape::Block,
         }
-    }
-
-    fn make_snapshot_row(s: &str) -> (RenderSnapshot, usize) {
-        let cols = s.len().max(1);
-        let mut cells = vec![SnapshotCell::default(); cols];
-        for (c, ch) in s.chars().enumerate() {
-            cells[c].c = ch;
-        }
-        let snap = RenderSnapshot {
-            cells,
-            cols,
-            rows: 1,
-            cursor_row: 0,
-            cursor_col: 0,
-            cursor_visible: false,
-            cursor_shape: CursorShape::Block,
-        };
-        (snap, cols)
     }
 
     // -----------------------------------------------------------------------

@@ -405,7 +405,7 @@ fn is_heading(line: &str) -> bool {
 #[cfg(test)]
 fn rows_from_strings(lines: &[&str]) -> RenderSnapshot {
     use alacritty_terminal::vte::ansi::CursorShape;
-    use arcterm_render::{SnapshotCell, SnapshotColor};
+    use arcterm_render::SnapshotCell;
 
     let num_rows = lines.len();
     let num_cols = lines.iter().map(|l| l.len()).max().unwrap_or(1);

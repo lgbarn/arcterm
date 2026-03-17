@@ -1424,12 +1424,11 @@ impl AppState {
                         arcterm_render::snapshot_from_term(&*term)
                     };
                     let text = self.selection.extract_text(&snapshot);
-                    if !text.is_empty() {
-                        if let Some(cb) = &mut self.clipboard {
-                            if let Err(e) = cb.copy(&text) {
-                                log::warn!("Copy: clipboard write failed: {e}");
-                            }
-                        }
+                    if !text.is_empty()
+                        && let Some(cb) = &mut self.clipboard
+                        && let Err(e) = cb.copy(&text)
+                    {
+                        log::warn!("Copy: clipboard write failed: {e}");
                     }
                 }
                 DispatchOutcome::None
@@ -1522,7 +1521,7 @@ impl AppState {
             }
 
             KeyAction::Minimize => {
-                let _ = self.window.set_minimized(true);
+                self.window.set_minimized(true);
                 DispatchOutcome::None
             }
 
