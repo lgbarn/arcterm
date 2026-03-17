@@ -675,6 +675,21 @@ struct AppState {
     app_menu: menu::AppMenu,
 }
 
+// ---------------------------------------------------------------------------
+// Outcome returned by AppState::dispatch_action().
+// ---------------------------------------------------------------------------
+
+/// What the caller should do after `dispatch_action` returns.
+#[derive(Debug, PartialEq, Eq)]
+enum DispatchOutcome {
+    /// Nothing to do.
+    None,
+    /// Request a redraw.
+    Redraw,
+    /// Exit the event loop (last tab was closed).
+    Exit,
+}
+
 impl AppState {
     // -----------------------------------------------------------------------
     // Active-tab helpers
@@ -998,6 +1013,428 @@ impl AppState {
 
         self.window.set_title(&format!("Arcterm — {}", ws.workspace.name));
     }
+
+    // -----------------------------------------------------------------------
+    // Shared action dispatcher — used by keyboard handler AND menu bar events.
+    // -----------------------------------------------------------------------
+
+    /// Dispatch a [`KeyAction`] that may originate from a keyboard binding or
+    /// a native menu-bar click.  Returns a [`DispatchOutcome`] telling the
+    /// caller whether to redraw, exit, or do nothing.
+    ///
+    /// `KeyAction::Forward` and `KeyAction::Consumed` are intentionally **not**
+    /// handled here; those require the winit `KeyEvent` from the keyboard path
+    /// and must stay in `window_event`.
+    fn dispatch_action(&mut self, action: &KeyAction) -> DispatchOutcome {
+        let focused_id = self.focused_pane();
+
+        match action {
+            KeyAction::NavigatePane(dir) => {
+                // ── Neovim-aware pane crossing ────────────────────────────
+                // 1. Retrieve (or refresh) the cached Neovim state for the
+                //    focused pane.
+                let child_pid = self
+                    .panes
+                    .get(&focused_id)
+                    .and_then(|t| t.child_pid());
+
+                let nvim_state = {
+                    let needs_refresh = self
+                        .nvim_states
+                        .get(&focused_id)
+                        .map(|s| !s.is_fresh())
+                        .unwrap_or(true);
+
+                    if needs_refresh {
+                        let fresh = neovim::NeovimState::check(child_pid);
+                        self.nvim_states.insert(focused_id, fresh);
+                    }
+
+                    let s = self.nvim_states.get(&focused_id).unwrap();
+                    (s.is_nvim, s.socket_path.clone())
+                };
+
+                // 2. If the pane is running Neovim and we have a socket path,
+                //    query whether Neovim has a split in the requested direction.
+                let nvim_consumed = if nvim_state.0 {
+                    if let Some(ref socket_path) = nvim_state.1 {
+                        tokio::task::block_in_place(|| {
+                            match neovim::NvimRpcClient::connect(socket_path) {
+                                Ok(mut client) => {
+                                    match neovim::has_nvim_neighbor(&mut client, *dir) {
+                                        Ok(true) => {
+                                            let ctrl_byte: &[u8] = match dir {
+                                                Direction::Left  => &[0x08], // Ctrl+h
+                                                Direction::Down  => &[0x0A], // Ctrl+j
+                                                Direction::Up    => &[0x0B], // Ctrl+k
+                                                Direction::Right => &[0x0C], // Ctrl+l
+                                            };
+                                            if let Some(terminal) =
+                                                self.panes.get_mut(&focused_id)
+                                            {
+                                                terminal.write_input(ctrl_byte);
+                                            }
+                                            true // consumed by Neovim
+                                        }
+                                        Ok(false) => false, // fall through
+                                        Err(e) => {
+                                            log::debug!(
+                                                "nvim RPC query failed for {:?}: {e}",
+                                                focused_id
+                                            );
+                                            false
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    log::debug!(
+                                        "nvim socket connect failed for {:?}: {e}",
+                                        focused_id
+                                    );
+                                    false
+                                }
+                            }
+                        })
+                    } else {
+                        false // no socket → fall through
+                    }
+                } else {
+                    false // not nvim → fall through
+                };
+
+                // Lazily refresh AI detection for the focused pane.
+                {
+                    let needs_ai_refresh = self
+                        .ai_states
+                        .get(&focused_id)
+                        .map(|s| !s.is_fresh())
+                        .unwrap_or(true);
+
+                    if needs_ai_refresh {
+                        let fresh = ai_detect::AiAgentState::check(child_pid);
+                        if let Some(ref kind) = fresh.kind {
+                            let was_known = self
+                                .ai_states
+                                .get(&focused_id)
+                                .and_then(|s| s.kind.as_ref())
+                                .is_some();
+                            if !was_known {
+                                log::info!(
+                                    "AI agent detected in pane {:?}: {:?}",
+                                    focused_id,
+                                    kind
+                                );
+                            }
+                            self.last_ai_pane = Some(focused_id);
+                            if let Some(ctx) = self.pane_contexts.get_mut(&focused_id) {
+                                ctx.ai_type = Some(kind.clone());
+                            }
+                        }
+                        self.ai_states.insert(focused_id, fresh);
+                    }
+                }
+
+                // 3. If Neovim did not consume the key, use arcterm's
+                //    layout-based navigation.
+                if !nvim_consumed {
+                    let rects = self.compute_pane_rects();
+                    if let Some(new_focus) = self
+                        .active_layout()
+                        .focus_in_direction(focused_id, *dir, &rects)
+                    {
+                        self.set_focused_pane(new_focus);
+                        self.selection.clear();
+                        return DispatchOutcome::Redraw;
+                    }
+                }
+                DispatchOutcome::None
+            }
+
+            KeyAction::Split(axis) => {
+                let rects = self.compute_pane_rects();
+                let focused = focused_id;
+                let focused_rect = rects.get(&focused).copied().unwrap_or(PixelRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 800.0,
+                    height: 600.0,
+                });
+
+                let new_rect = match *axis {
+                    Axis::Horizontal => PixelRect {
+                        width: focused_rect.width / 2.0,
+                        ..focused_rect
+                    },
+                    Axis::Vertical => PixelRect {
+                        height: focused_rect.height / 2.0,
+                        ..focused_rect
+                    },
+                };
+                let new_size = self.grid_size_for_rect(new_rect);
+                let new_id = self.spawn_pane(new_size);
+
+                let orig_size = self.grid_size_for_rect(new_rect);
+                let (cell_w, cell_h) = self.cell_dims();
+                if let Some(terminal) = self.panes.get_mut(&focused) {
+                    terminal.resize(orig_size.1, orig_size.0, cell_w, cell_h);
+                }
+
+                let active = self.tab_manager.active;
+                self.tab_layouts[active].split(focused, *axis, new_id);
+                self.set_focused_pane(new_id);
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::ClosePane => {
+                let focused = focused_id;
+                let active = self.tab_manager.active;
+                let pane_count = self.tab_layouts[active].all_pane_ids().len();
+
+                if pane_count <= 1 {
+                    // Last pane in the tab — close the tab if possible.
+                    let removed_ids = self.tab_manager.close_tab(active);
+                    if active < self.tab_layouts.len() {
+                        self.tab_layouts.remove(active);
+                    }
+                    for id in removed_ids {
+                        let lid = id;
+                        self.panes.remove(&lid);
+                        self.image_channels.remove(&lid);
+                        self.nvim_states.remove(&lid);
+                        self.ai_states.remove(&lid);
+                        self.pane_contexts.remove(&lid);
+                        if self.last_ai_pane == Some(lid) {
+                            self.last_ai_pane = None;
+                        }
+                    }
+                    // If no tabs left, signal exit.
+                    if self.tab_manager.tab_count() == 0 {
+                        return DispatchOutcome::Exit;
+                    }
+                    let new_focus = self.tab_manager.active_tab().focus;
+                    self.set_focused_pane(new_focus);
+                } else {
+                    // Multiple panes: promote sibling.
+                    let replacement = self.tab_layouts[active].close(focused);
+                    if let Some(new_root) = replacement {
+                        self.tab_layouts[active] = new_root;
+                    }
+
+                    self.panes.remove(&focused);
+                    self.image_channels.remove(&focused);
+                    self.nvim_states.remove(&focused);
+                    self.ai_states.remove(&focused);
+                    self.pane_contexts.remove(&focused);
+                    if self.last_ai_pane == Some(focused) {
+                        self.last_ai_pane = None;
+                    }
+
+                    let remaining = self.tab_layouts[active].all_pane_ids();
+                    if let Some(&new_focus) = remaining.first() {
+                        self.set_focused_pane(new_focus);
+                    }
+                }
+                self.selection.clear();
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::ToggleZoom => {
+                let tab = self.tab_manager.active_tab_mut();
+                if tab.zoomed == Some(focused_id) {
+                    tab.zoomed = None;
+                } else {
+                    tab.zoomed = Some(focused_id);
+                }
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::ResizePane(dir) => {
+                let focused = focused_id;
+                let delta = match *dir {
+                    Direction::Right | Direction::Down => RESIZE_DELTA,
+                    Direction::Left | Direction::Up => -RESIZE_DELTA,
+                };
+                let active = self.tab_manager.active;
+                self.tab_layouts[active].resize_split(focused, delta);
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::NewTab => {
+                let win_size = self.window.inner_size();
+                let full_size = self.renderer.grid_size_for_window(
+                    win_size.width,
+                    win_size.height,
+                    self.window.scale_factor(),
+                );
+                let new_id = self.spawn_pane(full_size);
+                let tab_idx = self.tab_manager.add_tab(new_id);
+                self.tab_layouts.push(PaneNode::Leaf { pane_id: new_id });
+                self.tab_manager.switch_to(tab_idx);
+                self.set_focused_pane(new_id);
+                self.selection.clear();
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::SwitchTab(n) => {
+                // n is 1-indexed.
+                self.tab_manager.switch_to(n.saturating_sub(1));
+                let new_focus = self.tab_manager.active_tab().focus;
+                self.set_focused_pane(new_focus);
+                self.selection.clear();
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::CloseTab => {
+                let active = self.tab_manager.active;
+                let removed_ids = self.tab_manager.close_tab(active);
+                if !removed_ids.is_empty() {
+                    if active < self.tab_layouts.len() {
+                        self.tab_layouts.remove(active);
+                    }
+                    for id in removed_ids {
+                        let lid = id;
+                        self.panes.remove(&lid);
+                        self.image_channels.remove(&lid);
+                    }
+                    let new_focus = self.tab_manager.active_tab().focus;
+                    self.set_focused_pane(new_focus);
+                    self.selection.clear();
+                    DispatchOutcome::Redraw
+                } else {
+                    DispatchOutcome::None
+                }
+            }
+
+            KeyAction::OpenPalette => {
+                self.palette_mode = Some(PaletteState::new());
+                log::info!("Command palette: open");
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::OpenWorkspaceSwitcher => {
+                let entries = workspace::discover_workspaces();
+                log::info!("Workspace switcher: open ({} entries)", entries.len());
+                self.workspace_switcher = Some(WorkspaceSwitcherState::new(entries));
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::SaveWorkspace => {
+                let name = {
+                    use std::time::{SystemTime, UNIX_EPOCH};
+                    let secs = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let mins_total = secs / 60;
+                    let hh = (mins_total / 60) % 24;
+                    let mm = mins_total % 60;
+                    let days = secs / 86400;
+                    let z = days as i64 + 719468;
+                    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+                    let doe = z - era * 146097;
+                    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+                    let y = yoe + era * 400;
+                    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+                    let mp = (5 * doy + 2) / 153;
+                    let d = doy - (153 * mp + 2) / 5 + 1;
+                    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+                    let y = if m <= 2 { y + 1 } else { y };
+                    format!("session-{y:04}{m:02}{d:02}-{hh:02}{mm:02}")
+                };
+                if let Err(e) = self.save_named_session(&name) {
+                    log::error!("Leader+s: failed to save workspace '{name}': {e}");
+                }
+                DispatchOutcome::None
+            }
+
+            KeyAction::JumpToAiPane => {
+                if let Some(ai_id) = self.last_ai_pane
+                    && self.panes.contains_key(&ai_id)
+                {
+                    let errors = std::mem::take(&mut self.pending_errors);
+                    if !errors.is_empty()
+                        && let Some(ai_terminal) = self.panes.get_mut(&ai_id)
+                    {
+                        for err_ctx in &errors {
+                            let payload = context::format_error_osc7770(err_ctx);
+                            ai_terminal.write_input(&payload);
+                        }
+                        log::info!(
+                            "JumpToAiPane: injected {} error context(s) into pane {:?}",
+                            errors.len(),
+                            ai_id
+                        );
+                    }
+                    self.set_focused_pane(ai_id);
+                    self.selection.clear();
+                    DispatchOutcome::Redraw
+                } else {
+                    DispatchOutcome::None
+                }
+            }
+
+            KeyAction::TogglePlanView => {
+                if self.plan_view.is_some() {
+                    self.plan_view = None;
+                } else {
+                    if self.plan_strip.is_none() {
+                        let root = self.workspace_root.clone();
+                        let strip = plan::PlanStripState::discover(&root);
+                        if !strip.summaries.is_empty() {
+                            self.plan_strip = Some(strip);
+                        }
+                    }
+                    let summaries = self
+                        .plan_strip
+                        .as_ref()
+                        .map(|s| s.summaries.clone())
+                        .unwrap_or_default();
+                    self.plan_view = Some(plan::PlanViewState::new(summaries));
+                }
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::CrossPaneSearch => {
+                self.search_overlay = Some(search::SearchOverlayState::new());
+                DispatchOutcome::Redraw
+            }
+
+            KeyAction::ReviewOverlay => {
+                let cfg = self.config.clone();
+                if let Some(review) = overlay::OverlayReviewState::new(&cfg) {
+                    self.overlay_review = Some(review);
+                    return DispatchOutcome::Redraw;
+                }
+                DispatchOutcome::None
+            }
+
+            // Menu-only actions: stubs until Task 5 implements them.
+            KeyAction::Copy
+            | KeyAction::Paste
+            | KeyAction::SelectAll
+            | KeyAction::SearchNext
+            | KeyAction::SearchPrevious
+            | KeyAction::ClearScrollback
+            | KeyAction::IncreaseFontSize
+            | KeyAction::DecreaseFontSize
+            | KeyAction::ResetFontSize
+            | KeyAction::ToggleFullScreen
+            | KeyAction::Minimize
+            | KeyAction::EqualizeSplits
+            | KeyAction::NextTab
+            | KeyAction::PreviousTab
+            | KeyAction::ResetTerminal
+            | KeyAction::ShowDebugInfo
+            | KeyAction::OpenHelp
+            | KeyAction::ReportIssue => {
+                log::debug!("menu-only action not yet implemented: {:?}", action);
+                DispatchOutcome::None
+            }
+
+            // Forward and Consumed stay in the keyboard handler.
+            KeyAction::Forward(_) | KeyAction::Consumed => DispatchOutcome::None,
+        }
+    }
 }
 
 struct App {
@@ -1292,12 +1729,22 @@ impl ApplicationHandler for App {
         // ------------------------------------------------------------------
         // Poll native menu bar events.
         // ------------------------------------------------------------------
-        if let Ok(event) = muda::MenuEvent::receiver().try_recv() {
-            if let Some(action) = state.app_menu.action_for_id(&event.id) {
-                log::debug!("menu event: {:?}", action);
-                // Full dispatch will be wired in Task 4. For now, just log.
+        if let Ok(menu_event) = muda::MenuEvent::receiver().try_recv() {
+            // Clone the action to avoid holding an immutable borrow on state
+            // while dispatch_action() needs &mut self.
+            let action = state.app_menu.action_for_id(&menu_event.id).cloned();
+            if let Some(action) = action {
+                match state.dispatch_action(&action) {
+                    DispatchOutcome::Redraw => {
+                        state.window.request_redraw();
+                    }
+                    DispatchOutcome::Exit => {
+                        event_loop.exit();
+                        return;
+                    }
+                    DispatchOutcome::None => {}
+                }
             }
-            state.window.request_redraw();
         }
 
         // ------------------------------------------------------------------
@@ -2774,452 +3221,26 @@ impl ApplicationHandler for App {
                             }
                         }
 
-                        KeyAction::NavigatePane(dir) => {
-                            // ── Neovim-aware pane crossing ──────────────────
-                            // 1. Retrieve (or refresh) the cached Neovim state
-                            //    for the focused pane.
-                            let child_pid = state
-                                .panes
-                                .get(&focused_id)
-                                .and_then(|t| t.child_pid());
-
-                            let nvim_state = {
-                                let needs_refresh = state
-                                    .nvim_states
-                                    .get(&focused_id)
-                                    .map(|s| !s.is_fresh())
-                                    .unwrap_or(true);
-
-                                if needs_refresh {
-                                    let fresh = neovim::NeovimState::check(child_pid);
-                                    state.nvim_states.insert(focused_id, fresh);
-                                }
-
-                                // Borrow the state immutably for the check below.
-                                let s = state.nvim_states.get(&focused_id).unwrap();
-                                (s.is_nvim, s.socket_path.clone())
-                            };
-
-                            // 2. If the pane is running Neovim and we have a
-                            //    socket path, query whether Neovim has a split
-                            //    in the requested direction.
-                            let nvim_consumed = if nvim_state.0 {
-                                if let Some(ref socket_path) = nvim_state.1 {
-                                    // Use block_in_place — we are already inside
-                                    // the Tokio runtime context established in
-                                    // main().  This runs the synchronous socket
-                                    // I/O on the current thread without blocking
-                                    // the async executor.
-                                    tokio::task::block_in_place(|| {
-                                        match neovim::NvimRpcClient::connect(socket_path) {
-                                            Ok(mut client) => {
-                                                match neovim::has_nvim_neighbor(&mut client, dir) {
-                                                    Ok(true) => {
-                                                        // Neovim has a split in this
-                                                        // direction — forward the key.
-                                                        let ctrl_byte: &[u8] = match dir {
-                                                            Direction::Left  => &[0x08], // Ctrl+h
-                                                            Direction::Down  => &[0x0A], // Ctrl+j
-                                                            Direction::Up    => &[0x0B], // Ctrl+k
-                                                            Direction::Right => &[0x0C], // Ctrl+l
-                                                        };
-                                                        if let Some(terminal) =
-                                                            state.panes.get_mut(&focused_id)
-                                                        {
-                                                            terminal.write_input(ctrl_byte);
-                                                        }
-                                                        true // consumed by Neovim
-                                                    }
-                                                    Ok(false) => false, // fall through
-                                                    Err(e) => {
-                                                        log::debug!(
-                                                            "nvim RPC query failed for {:?}: {e}",
-                                                            focused_id
-                                                        );
-                                                        false // fall through
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                log::debug!(
-                                                    "nvim socket connect failed for {:?}: {e}",
-                                                    focused_id
-                                                );
-                                                false // fall through
-                                            }
-                                        }
-                                    })
-                                } else {
-                                    false // no socket → fall through
-                                }
-                            } else {
-                                false // not nvim → fall through
-                            };
-
-                            // Lazily refresh AI detection for the focused pane
-                            // (5-second TTL, same pattern as Neovim detection).
-                            {
-                                let needs_ai_refresh = state
-                                    .ai_states
-                                    .get(&focused_id)
-                                    .map(|s| !s.is_fresh())
-                                    .unwrap_or(true);
-
-                                if needs_ai_refresh {
-                                    let fresh = ai_detect::AiAgentState::check(child_pid);
-                                    // SC-1: log when a new AI agent is first detected.
-                                    if let Some(ref kind) = fresh.kind {
-                                        let was_known = state
-                                            .ai_states
-                                            .get(&focused_id)
-                                            .and_then(|s| s.kind.as_ref())
-                                            .is_some();
-                                        if !was_known {
-                                            log::info!(
-                                                "AI agent detected in pane {:?}: {:?}",
-                                                focused_id,
-                                                kind
-                                            );
-                                        }
-                                        // Update last_ai_pane and sync ai_type into PaneContext.
-                                        state.last_ai_pane = Some(focused_id);
-                                        if let Some(ctx) = state.pane_contexts.get_mut(&focused_id) {
-                                            ctx.ai_type = Some(kind.clone());
-                                        }
-                                    }
-                                    state.ai_states.insert(focused_id, fresh);
-                                }
-                            }
-
-                            // 3. If Neovim did not consume the key, use
-                            //    arcterm's layout-based navigation.
-                            if !nvim_consumed {
-                                let rects = state.compute_pane_rects();
-                                if let Some(new_focus) = state
-                                    .active_layout()
-                                    .focus_in_direction(focused_id, dir, &rects)
-                                {
-                                    state.set_focused_pane(new_focus);
-                                    state.selection.clear();
-                                    state.window.request_redraw();
-                                }
-                            }
-                        }
-
-                        KeyAction::Split(axis) => {
-                            let rects = state.compute_pane_rects();
-                            let focused = focused_id;
-                            let focused_rect = rects.get(&focused).copied().unwrap_or(PixelRect {
-                                x: 0.0,
-                                y: 0.0,
-                                width: 800.0,
-                                height: 600.0,
-                            });
-
-                            // Compute size for the new pane (half of focused pane's rect).
-                            let new_rect = match axis {
-                                Axis::Horizontal => PixelRect {
-                                    width: focused_rect.width / 2.0,
-                                    ..focused_rect
-                                },
-                                Axis::Vertical => PixelRect {
-                                    height: focused_rect.height / 2.0,
-                                    ..focused_rect
-                                },
-                            };
-                            let new_size = state.grid_size_for_rect(new_rect);
-                            let new_id = state.spawn_pane(new_size);
-
-                            // Also resize the original pane to its new half.
-                            let orig_size = state.grid_size_for_rect(new_rect);
-                            let (cell_w, cell_h) = state.cell_dims();
-                            if let Some(terminal) = state.panes.get_mut(&focused) {
-                                terminal.resize(orig_size.1, orig_size.0, cell_w, cell_h);
-                            }
-
-                            // Update the layout tree.
-                            let active = state.tab_manager.active;
-                            state.tab_layouts[active].split(focused, axis, new_id);
-
-                            // Focus the new pane.
-                            state.set_focused_pane(new_id);
-                            state.window.request_redraw();
-                        }
-
-                        KeyAction::ClosePane => {
-                            let focused = focused_id;
-                            let active = state.tab_manager.active;
-                            let pane_count = state.tab_layouts[active].all_pane_ids().len();
-
-                            if pane_count <= 1 {
-                                // Last pane in the tab — close the tab if possible.
-                                let removed_ids = state.tab_manager.close_tab(active);
-                                // Remove layout for this tab.
-                                if active < state.tab_layouts.len() {
-                                    state.tab_layouts.remove(active);
-                                }
-                                for id in removed_ids {
-                                    let lid = id;
-                                    state.panes.remove(&lid);
-                                    // pty_channels removed (alacritty reader thread owns PTY)
-                                    state.image_channels.remove(&lid);
-                                    state.nvim_states.remove(&lid);
-                                    state.ai_states.remove(&lid);
-                                    state.pane_contexts.remove(&lid);
-                                    if state.last_ai_pane == Some(lid) {
-                                        state.last_ai_pane = None;
-                                    }
-                                }
-                                // If no tabs left, exit.
-                                if state.tab_manager.tab_count() == 0 {
-                                    event_loop.exit();
-                                    return;
-                                }
-                                // Focus the first pane of the now-active tab.
-                                let new_focus = state.tab_manager.active_tab().focus;
-                                state.set_focused_pane(new_focus);
-                            } else {
-                                // Multiple panes: promote sibling.
-                                let replacement = state.tab_layouts[active].close(focused);
-                                if let Some(new_root) = replacement {
-                                    state.tab_layouts[active] = new_root;
-                                }
-
-                                // Remove the terminal and channel.
-                                state.panes.remove(&focused);
-                                // pty_channels removed (alacritty reader thread owns PTY)
-                                state.image_channels.remove(&focused);
-                                state.nvim_states.remove(&focused);
-                                state.ai_states.remove(&focused);
-                                state.pane_contexts.remove(&focused);
-                                if state.last_ai_pane == Some(focused) {
-                                    state.last_ai_pane = None;
-                                }
-
-                                // Focus the first remaining pane.
-                                let remaining = state.tab_layouts[active].all_pane_ids();
-                                if let Some(&new_focus) = remaining.first() {
-                                    state.set_focused_pane(new_focus);
-                                }
-                            }
-                            state.selection.clear();
-                            state.window.request_redraw();
-                        }
-
-                        KeyAction::ToggleZoom => {
-                            let focused = focused_id;
-                            let tab = state.tab_manager.active_tab_mut();
-                            if tab.zoomed == Some(focused) {
-                                tab.zoomed = None;
-                            } else {
-                                tab.zoomed = Some(focused);
-                            }
-                            state.window.request_redraw();
-                        }
-
-                        KeyAction::ResizePane(dir) => {
-                            let focused = focused_id;
-                            let delta = match dir {
-                                Direction::Right | Direction::Down => RESIZE_DELTA,
-                                Direction::Left | Direction::Up => -RESIZE_DELTA,
-                            };
-                            let active = state.tab_manager.active;
-                            state.tab_layouts[active].resize_split(focused, delta);
-                            state.window.request_redraw();
-                        }
-
-                        KeyAction::NewTab => {
-                            // Compute size for a full-window single pane.
-                            let win_size = state.window.inner_size();
-                            let full_size = state.renderer.grid_size_for_window(
-                                win_size.width,
-                                win_size.height,
-                                state.window.scale_factor(),
-                            );
-                            let new_id = state.spawn_pane(full_size);
-                            let tab_idx = state.tab_manager.add_tab(new_id);
-                            // Add the layout tree for the new tab.
-                            state.tab_layouts.push(PaneNode::Leaf { pane_id: new_id });
-                            state.tab_manager.switch_to(tab_idx);
-                            state.set_focused_pane(new_id);
-                            state.selection.clear();
-                            state.window.request_redraw();
-                        }
-
-                        KeyAction::SwitchTab(n) => {
-                            // n is 1-indexed.
-                            state.tab_manager.switch_to(n.saturating_sub(1));
-                            // Focus the active pane of the newly-switched-to tab.
-                            let new_focus = state.tab_manager.active_tab().focus;
-                            state.set_focused_pane(new_focus);
-                            state.selection.clear();
-                            state.window.request_redraw();
-                        }
-
-                        KeyAction::CloseTab => {
-                            let active = state.tab_manager.active;
-                            let removed_ids = state.tab_manager.close_tab(active);
-                            if !removed_ids.is_empty() {
-                                // Remove layout for this tab.
-                                if active < state.tab_layouts.len() {
-                                    state.tab_layouts.remove(active);
-                                }
-                                for id in removed_ids {
-                                    let lid = id;
-                                    state.panes.remove(&lid);
-                                    // pty_channels removed (alacritty reader thread owns PTY)
-                                    state.image_channels.remove(&lid);
-                                }
-                                // Focus active tab's pane.
-                                let new_focus = state.tab_manager.active_tab().focus;
-                                state.set_focused_pane(new_focus);
-                                state.selection.clear();
-                                state.window.request_redraw();
-                            }
-                        }
-
-                        KeyAction::OpenPalette => {
-                            state.palette_mode = Some(PaletteState::new());
-                            log::info!("Command palette: open");
-                            state.window.request_redraw();
-                        }
-
-                        KeyAction::OpenWorkspaceSwitcher => {
-                            let entries = workspace::discover_workspaces();
-                            log::info!("Workspace switcher: open ({} entries)", entries.len());
-                            state.workspace_switcher = Some(WorkspaceSwitcherState::new(entries));
-                            state.window.request_redraw();
-                        }
-
-                        KeyAction::SaveWorkspace => {
-                            // Generate a timestamp-based name: session-YYYYMMDD-HHMM
-                            // Uses std::time::SystemTime to avoid adding a chrono dependency.
-                            let name = {
-                                use std::time::{SystemTime, UNIX_EPOCH};
-                                let secs = SystemTime::now()
-                                    .duration_since(UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs();
-                                // Decompose epoch seconds into date/time components.
-                                let mins_total = secs / 60;
-                                let hh = (mins_total / 60) % 24;
-                                let mm = mins_total % 60;
-                                // Days since epoch (Unix epoch = 1970-01-01).
-                                let days = secs / 86400;
-                                // Gregorian calendar decomposition.
-                                // Algorithm: http://howardhinnant.github.io/date_algorithms.html
-                                let z = days as i64 + 719468;
-                                let era = if z >= 0 { z } else { z - 146096 } / 146097;
-                                let doe = z - era * 146097;
-                                let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-                                let y = yoe + era * 400;
-                                let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-                                let mp = (5 * doy + 2) / 153;
-                                let d = doy - (153 * mp + 2) / 5 + 1;
-                                let m = if mp < 10 { mp + 3 } else { mp - 9 };
-                                let y = if m <= 2 { y + 1 } else { y };
-                                format!("session-{y:04}{m:02}{d:02}-{hh:02}{mm:02}")
-                            };
-                            if let Err(e) = state.save_named_session(&name) {
-                                log::error!("Leader+s: failed to save workspace '{name}': {e}");
-                            }
-                        }
-
-                        KeyAction::JumpToAiPane => {
-                            // Jump to the pane that most recently ran an AI agent.
-                            // If pending_errors are queued, drain and inject them into the
-                            // AI pane's PTY input as OSC 7770 error blocks.
-                            if let Some(ai_id) = state.last_ai_pane
-                                && state.panes.contains_key(&ai_id)
-                            {
-                                // Drain and inject any pending error contexts.
-                                let errors =
-                                    std::mem::take(&mut state.pending_errors);
-                                if !errors.is_empty()
-                                    && let Some(ai_terminal) =
-                                        state.panes.get_mut(&ai_id)
-                                {
-                                    for err_ctx in &errors {
-                                        let payload =
-                                            context::format_error_osc7770(err_ctx);
-                                        ai_terminal.write_input(&payload);
-                                    }
-                                    log::info!(
-                                        "JumpToAiPane: injected {} error context(s) into pane {:?}",
-                                        errors.len(),
-                                        ai_id
-                                    );
-                                }
-                                state.set_focused_pane(ai_id);
-                                state.selection.clear();
-                                state.window.request_redraw();
-                            }
-                        }
-
-                        KeyAction::TogglePlanView => {
-                            if state.plan_view.is_some() {
-                                // Close the expanded overlay.
-                                state.plan_view = None;
-                            } else {
-                                // Ensure the strip is populated before opening the view.
-                                if state.plan_strip.is_none() {
-                                    let root = state.workspace_root.clone();
-                                    let strip = plan::PlanStripState::discover(&root);
-                                    if !strip.summaries.is_empty() {
-                                        state.plan_strip = Some(strip);
-                                    }
-                                }
-                                // Open the expanded overlay with current summaries.
-                                let summaries = state
-                                    .plan_strip
-                                    .as_ref()
-                                    .map(|s| s.summaries.clone())
-                                    .unwrap_or_default();
-                                state.plan_view = Some(plan::PlanViewState::new(summaries));
-                            }
-                            state.window.request_redraw();
-                        }
-
                         KeyAction::Consumed => {
                             // Key consumed by state machine (leader chord entered).
                             // No PTY write needed.
                         }
 
-                        KeyAction::CrossPaneSearch => {
-                            // Open the cross-pane search overlay.
-                            state.search_overlay = Some(search::SearchOverlayState::new());
-                            state.window.request_redraw();
-                        }
-
-                        KeyAction::ReviewOverlay => {
-                            // Open the config overlay review if there are pending files.
-                            let cfg = state.config.clone();
-                            if let Some(review) = overlay::OverlayReviewState::new(&cfg) {
-                                state.overlay_review = Some(review);
-                                state.window.request_redraw();
+                        other => {
+                            // All other actions are dispatched through the shared
+                            // dispatch_action() method, which is also used by menu events.
+                            match state.dispatch_action(&other) {
+                                DispatchOutcome::Redraw => {
+                                    state.window.request_redraw();
+                                }
+                                DispatchOutcome::Exit => {
+                                    event_loop.exit();
+                                    return;
+                                }
+                                DispatchOutcome::None => {}
                             }
                         }
 
-                        // Menu-only actions: not triggered via keyboard chords.
-                        // They will be handled when wired through dispatch_action() in Task 4.
-                        KeyAction::Copy
-                        | KeyAction::Paste
-                        | KeyAction::SelectAll
-                        | KeyAction::SearchNext
-                        | KeyAction::SearchPrevious
-                        | KeyAction::ClearScrollback
-                        | KeyAction::IncreaseFontSize
-                        | KeyAction::DecreaseFontSize
-                        | KeyAction::ResetFontSize
-                        | KeyAction::ToggleFullScreen
-                        | KeyAction::Minimize
-                        | KeyAction::EqualizeSplits
-                        | KeyAction::NextTab
-                        | KeyAction::PreviousTab
-                        | KeyAction::ResetTerminal
-                        | KeyAction::ShowDebugInfo
-                        | KeyAction::OpenHelp
-                        | KeyAction::ReportIssue => {}
                     }
                 }
             }
@@ -3238,152 +3259,14 @@ impl ApplicationHandler for App {
 // ---------------------------------------------------------------------------
 
 fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action: KeyAction) {
-    let focused_id = state.focused_pane();
-
-    match action {
-        KeyAction::NavigatePane(dir) => {
-            let rects = state.compute_pane_rects();
-            if let Some(new_focus) =
-                state.active_layout().focus_in_direction(focused_id, dir, &rects)
-            {
-                state.set_focused_pane(new_focus);
-                state.selection.clear();
-            }
+    // Delegate to the shared dispatcher.  The caller (palette execute path) is
+    // responsible for calling state.window.request_redraw() after this returns
+    // when needed; the redraw call is already present at the call site.
+    match state.dispatch_action(&action) {
+        DispatchOutcome::Exit => {
+            event_loop.exit();
         }
-
-        KeyAction::Split(axis) => {
-            let rects = state.compute_pane_rects();
-            let focused_rect = rects.get(&focused_id).copied().unwrap_or(PixelRect {
-                x: 0.0,
-                y: 0.0,
-                width: 800.0,
-                height: 600.0,
-            });
-            let new_rect = match axis {
-                Axis::Horizontal => PixelRect { width: focused_rect.width / 2.0, ..focused_rect },
-                Axis::Vertical => PixelRect { height: focused_rect.height / 2.0, ..focused_rect },
-            };
-            let new_size = state.grid_size_for_rect(new_rect);
-            let new_id = state.spawn_pane(new_size);
-            let orig_size = state.grid_size_for_rect(new_rect);
-            let (cell_w, cell_h) = state.cell_dims();
-            if let Some(terminal) = state.panes.get_mut(&focused_id) {
-                terminal.resize(orig_size.1, orig_size.0, cell_w, cell_h);
-            }
-            let active = state.tab_manager.active;
-            state.tab_layouts[active].split(focused_id, axis, new_id);
-            state.set_focused_pane(new_id);
-        }
-
-        KeyAction::ClosePane => {
-            let active = state.tab_manager.active;
-            let pane_count = state.tab_layouts[active].all_pane_ids().len();
-            if pane_count <= 1 {
-                let removed_ids = state.tab_manager.close_tab(active);
-                if active < state.tab_layouts.len() {
-                    state.tab_layouts.remove(active);
-                }
-                for id in removed_ids {
-                    let lid = id;
-                    state.panes.remove(&lid);
-                    // pty_channels removed (alacritty reader thread owns PTY)
-                    state.image_channels.remove(&lid);
-                }
-                if state.tab_manager.tab_count() == 0 {
-                    event_loop.exit();
-                    return;
-                }
-                let new_focus = state.tab_manager.active_tab().focus;
-                state.set_focused_pane(new_focus);
-            } else {
-                let replacement = state.tab_layouts[active].close(focused_id);
-                if let Some(new_root) = replacement {
-                    state.tab_layouts[active] = new_root;
-                }
-                state.panes.remove(&focused_id);
-                // pty_channels removed (alacritty reader thread owns PTY)
-                state.image_channels.remove(&focused_id);
-                let remaining = state.tab_layouts[active].all_pane_ids();
-                if let Some(&new_focus) = remaining.first() {
-                    state.set_focused_pane(new_focus);
-                }
-            }
-            state.selection.clear();
-        }
-
-        KeyAction::ToggleZoom => {
-            let tab = state.tab_manager.active_tab_mut();
-            if tab.zoomed == Some(focused_id) {
-                tab.zoomed = None;
-            } else {
-                tab.zoomed = Some(focused_id);
-            }
-        }
-
-        KeyAction::NewTab => {
-            let win_size = state.window.inner_size();
-            let full_size = state.renderer.grid_size_for_window(
-                win_size.width,
-                win_size.height,
-                state.window.scale_factor(),
-            );
-            let new_id = state.spawn_pane(full_size);
-            let tab_idx = state.tab_manager.add_tab(new_id);
-            state.tab_layouts.push(PaneNode::Leaf { pane_id: new_id });
-            state.tab_manager.switch_to(tab_idx);
-            state.set_focused_pane(new_id);
-            state.selection.clear();
-        }
-
-        KeyAction::CloseTab => {
-            let active = state.tab_manager.active;
-            let removed_ids = state.tab_manager.close_tab(active);
-            if !removed_ids.is_empty() {
-                if active < state.tab_layouts.len() {
-                    state.tab_layouts.remove(active);
-                }
-                for id in removed_ids {
-                    let lid = id;
-                    state.panes.remove(&lid);
-                    // pty_channels removed (alacritty reader thread owns PTY)
-                    state.image_channels.remove(&lid);
-                }
-                let new_focus = state.tab_manager.active_tab().focus;
-                state.set_focused_pane(new_focus);
-                state.selection.clear();
-            }
-        }
-
-        // These are not reachable from palette actions but must be exhaustive.
-        KeyAction::Forward(_)
-        | KeyAction::ResizePane(_)
-        | KeyAction::SwitchTab(_)
-        | KeyAction::OpenPalette
-        | KeyAction::OpenWorkspaceSwitcher
-        | KeyAction::SaveWorkspace
-        | KeyAction::JumpToAiPane
-        | KeyAction::TogglePlanView
-        | KeyAction::ReviewOverlay
-        | KeyAction::CrossPaneSearch
-        | KeyAction::Copy
-        | KeyAction::Paste
-        | KeyAction::SelectAll
-        | KeyAction::SearchNext
-        | KeyAction::SearchPrevious
-        | KeyAction::ClearScrollback
-        | KeyAction::IncreaseFontSize
-        | KeyAction::DecreaseFontSize
-        | KeyAction::ResetFontSize
-        | KeyAction::ToggleFullScreen
-        | KeyAction::Minimize
-        | KeyAction::EqualizeSplits
-        | KeyAction::NextTab
-        | KeyAction::PreviousTab
-        | KeyAction::ResetTerminal
-        | KeyAction::ShowDebugInfo
-        | KeyAction::OpenHelp
-        | KeyAction::ReportIssue
-        | KeyAction::Consumed => {}
+        DispatchOutcome::Redraw | DispatchOutcome::None => {}
     }
 }
 
