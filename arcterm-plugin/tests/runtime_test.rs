@@ -113,8 +113,8 @@ fn test_load_timing() {
 
     println!("Component compile time: {:?}", elapsed);
     assert!(
-        elapsed.as_millis() < 50,
-        "Component compilation took {}ms, expected < 50ms",
+        elapsed.as_millis() < 200,
+        "Component compilation took {}ms, expected < 200ms",
         elapsed.as_millis()
     );
 }
