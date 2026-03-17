@@ -1472,11 +1472,11 @@ impl AppState {
             }
 
             KeyAction::ClearScrollback => {
-                let focused = focused_id;
+                let focused = self.tab_manager.active_tab().focus;
                 if let Some(terminal) = self.panes.get_mut(&focused) {
-                    // Write the CSI 3J escape sequence directly to the terminal
-                    // to clear its scrollback buffer.
-                    terminal.write_input(b"\x1b[3J");
+                    terminal.with_term_mut(|term| {
+                        term.grid_mut().clear_history();
+                    });
                 }
                 DispatchOutcome::Redraw
             }
@@ -1546,10 +1546,12 @@ impl AppState {
             }
 
             KeyAction::ResetTerminal => {
-                let focused = focused_id;
+                let focused = self.tab_manager.active_tab().focus;
                 if let Some(terminal) = self.panes.get_mut(&focused) {
-                    // RIS (Reset to Initial State) resets terminal state.
-                    terminal.write_input(b"\x1bc");
+                    terminal.with_term_mut(|term| {
+                        use alacritty_terminal::vte::ansi::Handler;
+                        term.reset_state();
+                    });
                 }
                 DispatchOutcome::Redraw
             }
@@ -1568,17 +1570,6 @@ impl AppState {
                     win_size.height,
                     self.config.font_size,
                 );
-                if let Some(terminal) = self.panes.get_mut(&focused) {
-                    let info = format!(
-                        "\r\n--- Arcterm Debug ---\r\nPanes: {}\r\nTabs: {}\r\nWindow: {}x{}\r\nFont: {}pt\r\n---\r\n",
-                        pane_count,
-                        tab_count,
-                        win_size.width,
-                        win_size.height,
-                        self.config.font_size,
-                    );
-                    terminal.write_input(info.as_bytes());
-                }
                 DispatchOutcome::Redraw
             }
 
