@@ -5,6 +5,15 @@
 
 use winit::keyboard::{Key, NamedKey};
 
+/// System prompt sent to Ollama for the command overlay's generate requests.
+///
+/// Instructs the model to return a single raw shell command with no prose,
+/// no markdown, and no backticks — exactly what the overlay needs to paste
+/// into the active PTY.
+pub const GENERATE_SYSTEM_PROMPT: &str =
+    "You are a shell command assistant. Return ONLY a single shell command \
+     with no explanation, no markdown, no backticks. Just the raw command.";
+
 /// Actions produced by the command overlay's key handler.
 #[derive(Debug, PartialEq)]
 pub enum OverlayAction {

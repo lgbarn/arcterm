@@ -724,6 +724,54 @@ impl AppState {
         self.structured_blocks.remove(&id);
         self.cached_snapshots.remove(&id);
         self.ai_pane_states.remove(&id);
+        if self.last_ai_pane == Some(id) {
+            self.last_ai_pane = None;
+        }
+    }
+
+    /// Construct an [`crate::ollama::OllamaClient`] from the current AI config.
+    ///
+    /// Call this before any `tokio::spawn` block that needs an Ollama client so
+    /// that config fields are cloned once in one place.
+    fn ollama_client(&self) -> crate::ollama::OllamaClient {
+        crate::ollama::OllamaClient::new(
+            self.config.ai.endpoint.clone(),
+            self.config.ai.model.clone(),
+        )
+    }
+
+    /// Split the focused pane vertically (below the current pane) and return
+    /// `(sibling_id, new_pane_id)`.
+    ///
+    /// The new pane receives focus.  The geometry (half-height split) is the
+    /// canonical implementation shared by [`KeyAction::Split`] and
+    /// [`KeyAction::OpenAiPane`].
+    fn split_pane_vertical(&mut self, focused_id: PaneId) -> (PaneId, PaneId) {
+        let rects = self.compute_pane_rects();
+        let focused_rect = rects.get(&focused_id).copied().unwrap_or(PixelRect {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        });
+        let new_rect = PixelRect {
+            height: focused_rect.height / 2.0,
+            ..focused_rect
+        };
+        let new_size = self.grid_size_for_rect(new_rect);
+        let new_id = self.spawn_pane(new_size);
+
+        let orig_size = new_size;
+        let (cell_w, cell_h) = self.cell_dims();
+        if let Some(terminal) = self.panes.get_mut(&focused_id) {
+            terminal.resize(orig_size.1, orig_size.0, cell_w, cell_h);
+        }
+
+        let active = self.tab_manager.active;
+        self.tab_layouts[active].split(focused_id, Axis::Vertical, new_id);
+        self.set_focused_pane(new_id);
+
+        (focused_id, new_id)
     }
 
     // -----------------------------------------------------------------------
@@ -1173,37 +1221,37 @@ impl AppState {
             }
 
             KeyAction::Split(axis) => {
-                let rects = self.compute_pane_rects();
-                let focused = focused_id;
-                let focused_rect = rects.get(&focused).copied().unwrap_or(PixelRect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 800.0,
-                    height: 600.0,
-                });
+                match *axis {
+                    Axis::Vertical => {
+                        self.split_pane_vertical(focused_id);
+                    }
+                    Axis::Horizontal => {
+                        let rects = self.compute_pane_rects();
+                        let focused_rect =
+                            rects.get(&focused_id).copied().unwrap_or(PixelRect {
+                                x: 0.0,
+                                y: 0.0,
+                                width: 800.0,
+                                height: 600.0,
+                            });
+                        let new_rect = PixelRect {
+                            width: focused_rect.width / 2.0,
+                            ..focused_rect
+                        };
+                        let new_size = self.grid_size_for_rect(new_rect);
+                        let new_id = self.spawn_pane(new_size);
 
-                let new_rect = match *axis {
-                    Axis::Horizontal => PixelRect {
-                        width: focused_rect.width / 2.0,
-                        ..focused_rect
-                    },
-                    Axis::Vertical => PixelRect {
-                        height: focused_rect.height / 2.0,
-                        ..focused_rect
-                    },
-                };
-                let new_size = self.grid_size_for_rect(new_rect);
-                let new_id = self.spawn_pane(new_size);
+                        let orig_size = new_size;
+                        let (cell_w, cell_h) = self.cell_dims();
+                        if let Some(terminal) = self.panes.get_mut(&focused_id) {
+                            terminal.resize(orig_size.1, orig_size.0, cell_w, cell_h);
+                        }
 
-                let orig_size = self.grid_size_for_rect(new_rect);
-                let (cell_w, cell_h) = self.cell_dims();
-                if let Some(terminal) = self.panes.get_mut(&focused) {
-                    terminal.resize(orig_size.1, orig_size.0, cell_w, cell_h);
+                        let active = self.tab_manager.active;
+                        self.tab_layouts[active].split(focused_id, Axis::Horizontal, new_id);
+                        self.set_focused_pane(new_id);
+                    }
                 }
-
-                let active = self.tab_manager.active;
-                self.tab_layouts[active].split(focused, *axis, new_id);
-                self.set_focused_pane(new_id);
                 DispatchOutcome::Redraw
             }
 
@@ -1219,11 +1267,7 @@ impl AppState {
                         self.tab_layouts.remove(active);
                     }
                     for id in removed_ids {
-                        let lid = id;
-                        self.remove_pane_resources(lid);
-                        if self.last_ai_pane == Some(lid) {
-                            self.last_ai_pane = None;
-                        }
+                        self.remove_pane_resources(id);
                     }
                     // If no tabs left, signal exit.
                     if self.tab_manager.tab_count() == 0 {
@@ -1239,9 +1283,6 @@ impl AppState {
                     }
 
                     self.remove_pane_resources(focused);
-                    if self.last_ai_pane == Some(focused) {
-                        self.last_ai_pane = None;
-                    }
 
                     let remaining = self.tab_layouts[active].all_pane_ids();
                     if let Some(&new_focus) = remaining.first() {
@@ -1306,11 +1347,7 @@ impl AppState {
                         self.tab_layouts.remove(active);
                     }
                     for id in removed_ids {
-                        let lid = id;
-                        self.remove_pane_resources(lid);
-                        if self.last_ai_pane == Some(lid) {
-                            self.last_ai_pane = None;
-                        }
+                        self.remove_pane_resources(id);
                     }
                     let new_focus = self.tab_manager.active_tab().focus;
                     self.set_focused_pane(new_focus);
@@ -1623,35 +1660,9 @@ impl AppState {
             }
 
             KeyAction::OpenAiPane => {
-                // Remember the pane that was focused BEFORE the split — that is
-                // the sibling whose context we want to inject.
-                let sibling_id = focused_id;
-
-                // Split the active pane vertically (right side becomes the AI pane).
-                // Reuse the same geometry logic as KeyAction::Split(Axis::Vertical).
-                let rects = self.compute_pane_rects();
-                let focused_rect = rects.get(&focused_id).copied().unwrap_or(PixelRect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 800.0,
-                    height: 600.0,
-                });
-                let new_rect = PixelRect {
-                    height: focused_rect.height / 2.0,
-                    ..focused_rect
-                };
-                let new_size = self.grid_size_for_rect(new_rect);
-                let new_id = self.spawn_pane(new_size);
-
-                let orig_size = self.grid_size_for_rect(new_rect);
-                let (cell_w, cell_h) = self.cell_dims();
-                if let Some(terminal) = self.panes.get_mut(&focused_id) {
-                    terminal.resize(orig_size.1, orig_size.0, cell_w, cell_h);
-                }
-
-                let active = self.tab_manager.active;
-                self.tab_layouts[active].split(focused_id, Axis::Vertical, new_id);
-                self.set_focused_pane(new_id);
+                // Split vertically; sibling_id is the original focused pane,
+                // new_id is the freshly spawned pane that becomes the AI pane.
+                let (sibling_id, new_id) = self.split_pane_vertical(focused_id);
 
                 // Create AiPaneState for the new pane and inject sibling context.
                 let mut ai_state = ai_pane::AiPaneState::new();
@@ -2206,22 +2217,17 @@ impl ApplicationHandler for App {
         // ------------------------------------------------------------------
         // Drain Ollama generate results for the command overlay.
         // ------------------------------------------------------------------
-        if state.ollama_result_rx.is_some() {
-            if let Ok(result) = state
-                .ollama_result_rx
-                .as_mut()
-                .unwrap()
-                .try_recv()
-            {
-                state.ollama_result_rx = None;
-                if let Some(ref mut overlay) = state.command_overlay {
-                    match result {
-                        Ok(cmd) => overlay.set_result(cmd),
-                        Err(msg) => overlay.set_error(msg),
-                    }
+        if let Some(rx) = state.ollama_result_rx.as_mut()
+            && let Ok(result) = rx.try_recv()
+        {
+            state.ollama_result_rx = None;
+            if let Some(ref mut overlay) = state.command_overlay {
+                match result {
+                    Ok(cmd) => overlay.set_result(cmd),
+                    Err(msg) => overlay.set_error(msg),
                 }
-                state.window.request_redraw();
             }
+            state.window.request_redraw();
         }
 
         // ------------------------------------------------------------------
@@ -2522,9 +2528,6 @@ impl ApplicationHandler for App {
             }
 
             state.remove_pane_resources(id);
-            if state.last_ai_pane == Some(id) {
-                state.last_ai_pane = None;
-            }
 
             // Notify plugins that a pane was closed.
             if let Some(ref tx) = state.plugin_event_tx {
@@ -3645,15 +3648,13 @@ impl ApplicationHandler for App {
                             CmdAction::Submit => {
                                 // Spawn async Ollama request.
                                 let query = overlay.query.clone();
-                                let endpoint = state.config.ai.endpoint.clone();
-                                let model = state.config.ai.model.clone();
+                                let client = state.ollama_client();
                                 let (tx, rx) = mpsc::channel(1);
                                 state.ollama_result_rx = Some(rx);
                                 state.command_overlay = Some(overlay);
                                 tokio::spawn(async move {
-                                    use crate::ollama::OllamaClient;
-                                    let client = OllamaClient::new(endpoint, model);
-                                    let system = Some("You are a shell command assistant. Return ONLY a single shell command with no explanation, no markdown, no backticks. Just the raw command.");
+                                    let system =
+                                        Some(command_overlay::GENERATE_SYSTEM_PROMPT);
                                     match client.generate(&query, system).await {
                                         Ok(resp) => {
                                             match resp.json::<crate::ollama::GenerateChunk>().await {
@@ -3818,15 +3819,12 @@ impl ApplicationHandler for App {
                                             .get(&focused_id)
                                             .map(|s| s.history.clone())
                                             .unwrap_or_default();
-                                        let endpoint = state.config.ai.endpoint.clone();
-                                        let model = state.config.ai.model.clone();
+                                        let client = state.ollama_client();
                                         let (tx, rx) = mpsc::channel::<Option<String>>(64);
                                         state.ai_chat_rx = Some((focused_id, rx));
 
                                         tokio::spawn(async move {
-                                            use crate::ollama::OllamaClient;
                                             use futures_util::StreamExt;
-                                            let client = OllamaClient::new(endpoint, model);
                                             match client.chat(history).await {
                                                 Ok(resp) => {
                                                     let mut stream =
