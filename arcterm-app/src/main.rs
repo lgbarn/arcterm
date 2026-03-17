@@ -2225,6 +2225,52 @@ impl ApplicationHandler for App {
         }
 
         // ------------------------------------------------------------------
+        // Drain AI pane streaming chat chunks.
+        // ------------------------------------------------------------------
+        {
+            let mut ai_done = false;
+            let mut ai_got_data = false;
+            if let Some((pane_id, ref mut rx)) = state.ai_chat_rx {
+                loop {
+                    match rx.try_recv() {
+                        Ok(Some(chunk)) => {
+                            if let Some(ai_state) = state.ai_pane_states.get_mut(&pane_id) {
+                                ai_state.append_response_chunk(&chunk);
+                            }
+                            ai_got_data = true;
+                        }
+                        Ok(None) => {
+                            // Stream finished.
+                            if let Some(ai_state) = state.ai_pane_states.get_mut(&pane_id) {
+                                ai_state.finalize_response();
+                            }
+                            ai_done = true;
+                            ai_got_data = true;
+                            break;
+                        }
+                        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                            // Task dropped without sending None — finalize anyway.
+                            if let Some(ai_state) = state.ai_pane_states.get_mut(&pane_id) {
+                                if ai_state.streaming {
+                                    ai_state.finalize_response();
+                                }
+                            }
+                            ai_done = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if ai_done {
+                state.ai_chat_rx = None;
+            }
+            if ai_got_data {
+                state.window.request_redraw();
+            }
+        }
+
+        // ------------------------------------------------------------------
         // Poll all panes for new PTY data via wakeup signals.
         //
         // The alacritty reader thread processes PTY bytes and sends `Wakeup`
@@ -3200,6 +3246,115 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                // AI pane chat overlay — rendered on top of each AI pane's terminal grid.
+                // For every pane that has an AiPaneState, draw a dark background covering the
+                // pane rect, then render the chat history as text lines, with a streaming
+                // indicator and the current input line at the bottom.
+                if !state.ai_pane_states.is_empty() {
+                    let cell_h = state.renderer.text.cell_size.height * sf;
+                    let focused = state.focused_pane();
+
+                    for (&pane_id, ai_state) in &state.ai_pane_states {
+                        if let Some(&pane_rect) = rects.get(&pane_id) {
+                            // Dark background overlay covering the whole pane.
+                            overlay_quads.push(OverlayQuad {
+                                rect: [
+                                    pane_rect.x,
+                                    pane_rect.y,
+                                    pane_rect.width,
+                                    pane_rect.height,
+                                ],
+                                color: [0.06, 0.07, 0.10, 0.96],
+                            });
+
+                            // AI pane header bar.
+                            overlay_quads.push(OverlayQuad {
+                                rect: [pane_rect.x, pane_rect.y, pane_rect.width, cell_h * 1.2],
+                                color: [0.12, 0.14, 0.22, 1.0],
+                            });
+                            let focus_marker = if pane_id == focused { "●" } else { "○" };
+                            palette_text.push((
+                                format!("{focus_marker} AI Assistant"),
+                                pane_rect.x + 8.0 * sf,
+                                pane_rect.y + (cell_h * 0.1).max(2.0),
+                            ));
+
+                            // Render chat history — skip the system messages.
+                            let content_y_start = pane_rect.y + cell_h * 1.4;
+                            let content_height = pane_rect.height - cell_h * 3.5;
+                            let max_visible_lines =
+                                (content_height / cell_h).floor() as usize;
+                            let mut display_lines: Vec<String> = Vec::new();
+
+                            for msg in &ai_state.history {
+                                match msg.role.as_str() {
+                                    "user" => {
+                                        display_lines.push(format!("> {}", msg.content));
+                                    }
+                                    "assistant" => {
+                                        for line in msg.content.lines() {
+                                            display_lines.push(line.to_string());
+                                        }
+                                        display_lines.push(String::new()); // blank separator
+                                    }
+                                    _ => {} // skip system messages
+                                }
+                            }
+
+                            // Show pending streaming content.
+                            if ai_state.streaming && !ai_state.pending_response.is_empty() {
+                                for line in ai_state.pending_response.lines() {
+                                    display_lines.push(line.to_string());
+                                }
+                            }
+
+                            // Scroll to show the most recent lines.
+                            let start_line = if display_lines.len() > max_visible_lines {
+                                display_lines.len() - max_visible_lines
+                            } else {
+                                0
+                            };
+
+                            for (i, line) in
+                                display_lines[start_line..].iter().enumerate()
+                            {
+                                palette_text.push((
+                                    line.clone(),
+                                    pane_rect.x + 8.0 * sf,
+                                    content_y_start + i as f32 * cell_h,
+                                ));
+                            }
+
+                            // Streaming indicator.
+                            if ai_state.streaming {
+                                palette_text.push((
+                                    "  ...".to_string(),
+                                    pane_rect.x + 8.0 * sf,
+                                    pane_rect.y + pane_rect.height - cell_h * 2.5,
+                                ));
+                            }
+
+                            // Input bar at the bottom.
+                            let input_bar_y = pane_rect.y + pane_rect.height - cell_h * 1.5;
+                            overlay_quads.push(OverlayQuad {
+                                rect: [
+                                    pane_rect.x,
+                                    input_bar_y,
+                                    pane_rect.width,
+                                    cell_h * 1.5,
+                                ],
+                                color: [0.10, 0.12, 0.18, 1.0],
+                            });
+                            let cursor = if pane_id == focused { "█" } else { "" };
+                            palette_text.push((
+                                format!("> {}{}", ai_state.input_buffer, cursor),
+                                pane_rect.x + 8.0 * sf,
+                                input_bar_y + (cell_h * 0.2).max(2.0),
+                            ));
+                        }
+                    }
+                }
+
                 // Collect plugin pane render infos from the active layout.
                 let plugin_pane_infos: Vec<PluginPaneRenderInfo> = {
                     let mut out = Vec::new();
@@ -3608,6 +3763,151 @@ impl ApplicationHandler for App {
                             }
                         }
                         return;
+                    }
+
+                    // AI pane input intercept — when the focused pane is an AI
+                    // pane, capture printable chars, Backspace, Enter, and Escape
+                    // before the keymap sees them.
+                    {
+                        let focused_id = state.focused_pane();
+                        if state.ai_pane_states.contains_key(&focused_id) {
+                            use winit::keyboard::{Key, NamedKey};
+                            match &event.logical_key {
+                                Key::Named(NamedKey::Escape) => {
+                                    // Escape: close the AI pane (ClosePane action).
+                                    let _ = state.dispatch_action(&KeyAction::ClosePane);
+                                    state.window.request_redraw();
+                                    return;
+                                }
+                                Key::Named(NamedKey::Backspace) => {
+                                    if let Some(ai_state) =
+                                        state.ai_pane_states.get_mut(&focused_id)
+                                    {
+                                        ai_state.input_buffer.pop();
+                                    }
+                                    state.window.request_redraw();
+                                    return;
+                                }
+                                Key::Named(NamedKey::Enter) => {
+                                    // Submit the input buffer to Ollama.
+                                    let input = state
+                                        .ai_pane_states
+                                        .get_mut(&focused_id)
+                                        .map(|s| {
+                                            let input = s.input_buffer.trim().to_string();
+                                            s.input_buffer.clear();
+                                            input
+                                        })
+                                        .unwrap_or_default();
+
+                                    if !input.is_empty() {
+                                        if let Some(ai_state) =
+                                            state.ai_pane_states.get_mut(&focused_id)
+                                        {
+                                            ai_state.add_user_message(input);
+                                        }
+
+                                        // Spawn tokio task that streams Ollama chat.
+                                        let history = state
+                                            .ai_pane_states
+                                            .get(&focused_id)
+                                            .map(|s| s.history.clone())
+                                            .unwrap_or_default();
+                                        let endpoint = state.config.ai.endpoint.clone();
+                                        let model = state.config.ai.model.clone();
+                                        let (tx, rx) = mpsc::channel::<Option<String>>(64);
+                                        state.ai_chat_rx = Some((focused_id, rx));
+
+                                        tokio::spawn(async move {
+                                            use crate::ollama::OllamaClient;
+                                            use futures_util::StreamExt;
+                                            let client = OllamaClient::new(endpoint, model);
+                                            match client.chat(history).await {
+                                                Ok(resp) => {
+                                                    let mut stream =
+                                                        resp.bytes_stream();
+                                                    while let Some(chunk_result) =
+                                                        stream.next().await
+                                                    {
+                                                        match chunk_result {
+                                                            Ok(bytes) => {
+                                                                if let Ok(text) =
+                                                                    std::str::from_utf8(&bytes)
+                                                                {
+                                                                    for line in
+                                                                        text.lines()
+                                                                    {
+                                                                        if line.is_empty() {
+                                                                            continue;
+                                                                        }
+                                                                        if let Ok(chunk) =
+                                                                            serde_json::from_str::<
+                                                                                crate::ollama::ChatChunk,
+                                                                            >(line)
+                                                                        {
+                                                                            if let Some(msg) =
+                                                                                chunk.message
+                                                                            {
+                                                                                if !msg
+                                                                                    .content
+                                                                                    .is_empty()
+                                                                                {
+                                                                                    let _ = tx
+                                                                                        .send(Some(
+                                                                                            msg.content,
+                                                                                        ))
+                                                                                        .await;
+                                                                                }
+                                                                            }
+                                                                            if chunk.done {
+                                                                                break;
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            Err(e) => {
+                                                                log::warn!(
+                                                                    "AI pane stream error: {e}"
+                                                                );
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                    // Signal done.
+                                                    let _ = tx.send(None).await;
+                                                }
+                                                Err(e) => {
+                                                    log::warn!(
+                                                        "AI pane Ollama request failed: {e}"
+                                                    );
+                                                    let _ =
+                                                        tx.send(Some(format!(
+                                                            "[Error: LLM unavailable — {e}]"
+                                                        )))
+                                                        .await;
+                                                    let _ = tx.send(None).await;
+                                                }
+                                            }
+                                        });
+                                    }
+                                    state.window.request_redraw();
+                                    return;
+                                }
+                                Key::Character(s) => {
+                                    if let Some(ai_state) =
+                                        state.ai_pane_states.get_mut(&focused_id)
+                                    {
+                                        ai_state.input_buffer.push_str(s.as_str());
+                                    }
+                                    state.window.request_redraw();
+                                    return;
+                                }
+                                _ => {
+                                    // All other keys (e.g., leader chord) fall through to keymap.
+                                }
+                            }
+                        }
                     }
 
                     // Route through the keymap handler.

@@ -265,6 +265,7 @@ dependencies = [
  "clap_mangen",
  "dirs",
  "env_logger",
+ "futures-util",
  "image",
  "libc",
  "log",
