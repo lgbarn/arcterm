@@ -1,7 +1,7 @@
 {
   "phase": 15,
-  "status": "planned",
-  "position": "Phase 15 planned, ready for build",
-  "message": "2 plans across 2 waves. Event handling & exit hardening. Final gate before v0.2.0.",
-  "updated_at": "2026-03-17T03:30:00Z"
+  "status": "complete",
+  "position": "Phase 15 build complete — Event Handling & Exit Hardening",
+  "message": "All 6 items fixed. 416 tests pass. Clippy clean. v0.2.0 ready to ship.",
+  "updated_at": "2026-03-17T04:00:00Z"
 }

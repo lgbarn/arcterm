@@ -357,6 +357,14 @@ Non-blocking findings logged by the review agent. Resolve before the phase close
 - **Description:** `let dir_canonical = dir.canonicalize().unwrap_or(dir.to_path_buf())` silently falls back to the raw path if the plugin directory cannot be canonicalized (e.g., a permission error). After ISSUE-018 fixed `wasm_canonical` to propagate errors explicitly, this line is the remaining `unwrap_or` in the same path. If `dir.canonicalize()` fails for a permission reason while `wasm_path.canonicalize()` succeeds, the subsequent `!wasm_canonical.starts_with(&dir_canonical)` comparison compares a canonical path against a raw path, producing a false positive "resolves outside the plugin directory" error that obscures the actual cause.
 - **Remediation:** Apply the same explicit error pattern: `let dir_canonical = dir.canonicalize().map_err(|e| anyhow::anyhow!("cannot canonicalize plugin directory '{}': {e}", dir.display()))?;`.
 
+### REVIEW-02-A — Background-tab pane exit leaves stale Leaf node in layout tree
+
+- **Severity:** Important
+- **Source:** REVIEW-02
+- **File:** `/Users/lgbarn/Personal/arcterm/arcterm-app/src/main.rs:1665,1668`
+- **Description:** The pane exit removal loop captures `let active = state.tab_manager.active` once before iterating `closed_panes`. `state.tab_layouts[active].close(id)` is called for every exited pane, but if the pane belongs to a background tab (a tab other than the one currently being displayed), `close()` returns `None` — the pane is not in the active tab's tree — and the stale `Leaf` node is left in the background tab's layout indefinitely. In the current single-tab-workflow the bug is dormant, but any multi-tab usage where a pane exits while the user is viewing a different tab will produce a permanently stale layout for that background tab.
+- **Remediation:** Add a helper `fn tab_index_for_pane(&self, id: PaneId) -> Option<usize>` on `AppState` that iterates `self.tab_layouts.iter().enumerate()` calling `all_pane_ids()` on each, returning the index of the tab whose layout contains `id`. In the removal loop, call this helper to route `close(id)` to the correct tab index rather than always using `active`.
+
 ---
 
 ## Resolved
