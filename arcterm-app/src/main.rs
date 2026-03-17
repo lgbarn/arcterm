@@ -3674,10 +3674,15 @@ impl ApplicationHandler for App {
                                 state.window.request_redraw();
                             }
                             CmdAction::Accept(cmd) => {
+                                // Strip ANSI/control sequences from the LLM response before
+                                // writing to the PTY (I1: PTY injection via unsanitized LLM
+                                // response). An adversarial Ollama response could otherwise
+                                // embed escape sequences that manipulate the terminal.
+                                let safe_cmd = terminal::strip_ansi(&cmd);
                                 // Write command + newline to active pane PTY.
                                 let focused = state.focused_pane();
                                 if let Some(terminal) = state.panes.get_mut(&focused) {
-                                    let mut payload = cmd.into_bytes();
+                                    let mut payload = safe_cmd.into_bytes();
                                     payload.push(b'\n');
                                     terminal.write_input(&payload);
                                 }

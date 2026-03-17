@@ -912,12 +912,13 @@ fn dispatch_osc7770(
 /// Strip ANSI escape sequences from a string, leaving only printable text.
 ///
 /// This is a minimal implementation that removes CSI and OSC sequences.
-/// Used to clean the raw terminal output captured between OSC 7770 start/end markers.
+/// Used to clean the raw terminal output captured between OSC 7770 start/end markers,
+/// and to sanitize LLM responses and scrollback before PTY writes or prompt injection.
 ///
 /// The implementation operates on the byte level for ANSI detection but appends
 /// validated UTF-8 characters to the output, so multi-byte codepoints are preserved
 /// correctly (REVIEW-2.1-E).
-fn strip_ansi(s: &str) -> String {
+pub(crate) fn strip_ansi(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut result = String::with_capacity(s.len());
     let mut i = 0;
@@ -1146,6 +1147,50 @@ mod tests {
         assert_eq!(
             block.buffer, "fn hello() {}",
             "buffer should contain captured text"
+        );
+    }
+
+    // -- I1: strip_ansi (PTY injection sanitization) --------------------------
+
+    #[test]
+    fn strip_ansi_removes_csi_sequences() {
+        use super::strip_ansi;
+        let input = "\x1b[32mhello\x1b[0m world";
+        assert_eq!(strip_ansi(input), "hello world");
+    }
+
+    #[test]
+    fn strip_ansi_removes_osc_sequences() {
+        use super::strip_ansi;
+        // OSC sequence terminated by BEL.
+        let input = "\x1b]0;window title\x07plain text";
+        assert_eq!(strip_ansi(input), "plain text");
+    }
+
+    #[test]
+    fn strip_ansi_preserves_plain_text() {
+        use super::strip_ansi;
+        let input = "ls -la /home/user";
+        assert_eq!(strip_ansi(input), "ls -la /home/user");
+    }
+
+    #[test]
+    fn strip_ansi_preserves_multibyte_utf8() {
+        use super::strip_ansi;
+        // Japanese characters — must not be corrupted.
+        let input = "\x1b[1m日本語\x1b[0m";
+        assert_eq!(strip_ansi(input), "日本語");
+    }
+
+    #[test]
+    fn strip_ansi_strips_embedded_escape_from_llm_response() {
+        use super::strip_ansi;
+        // Simulated adversarial LLM response with embedded cursor-up sequence.
+        let payload = "echo safe\x1b[Arm -rf /";
+        let sanitized = strip_ansi(payload);
+        assert!(
+            !sanitized.contains('\x1b'),
+            "sanitized output must not contain ESC: {sanitized:?}"
         );
     }
 }

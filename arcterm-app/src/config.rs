@@ -35,6 +35,47 @@ impl Default for AiConfig {
     }
 }
 
+impl AiConfig {
+    /// Validate the endpoint URL for I2: SSRF via unvalidated endpoint URL.
+    ///
+    /// Rules:
+    /// - Scheme must be `http` or `https`; any other scheme is rejected and the
+    ///   default endpoint is substituted.
+    /// - If the host is not a loopback address (localhost, 127.0.0.1, ::1) a
+    ///   warning is logged but the value is kept; users may legitimately point
+    ///   to a remote Ollama instance.
+    ///
+    /// Returns `self` with the endpoint corrected if necessary.
+    pub(crate) fn validate_endpoint(mut self) -> Self {
+        let ep = self.endpoint.trim();
+
+        // Check scheme.
+        let scheme_ok = ep.starts_with("http://") || ep.starts_with("https://");
+        if !scheme_ok {
+            log::warn!(
+                "config: ai.endpoint has an unsupported scheme (not http/https); \
+                 falling back to default endpoint"
+            );
+            self.endpoint = Self::default().endpoint;
+            return self;
+        }
+
+        // Warn if the host is not loopback.
+        let host_is_loopback = ep.contains("localhost")
+            || ep.contains("127.0.0.1")
+            || ep.contains("[::1]")
+            || ep.contains("::1");
+        if !host_is_loopback {
+            log::warn!(
+                "config: ai.endpoint points to a non-loopback host; \
+                 ensure this is intentional"
+            );
+        }
+
+        self
+    }
+}
+
 /// Full Arcterm configuration, sourced from `config.toml`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -177,7 +218,7 @@ const MAX_SCROLLBACK_LINES: usize = 1_000_000;
 impl ArctermConfig {
     /// Clamp fields to safe bounds. Returns `self` with any out-of-range values
     /// corrected and a warning logged.
-    fn validate(mut self) -> Self {
+    pub(crate) fn validate(mut self) -> Self {
         if self.scrollback_lines > MAX_SCROLLBACK_LINES {
             log::warn!(
                 "config: scrollback_lines {} exceeds maximum {}; clamping",
@@ -186,6 +227,8 @@ impl ArctermConfig {
             );
             self.scrollback_lines = MAX_SCROLLBACK_LINES;
         }
+        // I2: Validate the AI endpoint URL (scheme check + loopback warning).
+        self.ai = self.ai.validate_endpoint();
         self
     }
 }
@@ -827,5 +870,96 @@ mod tests {
         let cfg: ArctermConfig = toml::from_str(toml).expect("valid TOML");
         assert_eq!(cfg.ai.endpoint, "http://localhost:11434");
         assert_eq!(cfg.ai.model, "qwen2.5-coder:7b");
+    }
+
+    // -- I2: AiConfig endpoint URL validation ----------------------------------
+
+    #[test]
+    fn ai_endpoint_http_scheme_accepted() {
+        let cfg = AiConfig {
+            endpoint: "http://localhost:11434".to_string(),
+            model: "test".to_string(),
+        }
+        .validate_endpoint();
+        assert_eq!(cfg.endpoint, "http://localhost:11434");
+    }
+
+    #[test]
+    fn ai_endpoint_https_scheme_accepted() {
+        let cfg = AiConfig {
+            endpoint: "https://localhost:11434".to_string(),
+            model: "test".to_string(),
+        }
+        .validate_endpoint();
+        assert_eq!(cfg.endpoint, "https://localhost:11434");
+    }
+
+    #[test]
+    fn ai_endpoint_file_scheme_rejected_falls_back_to_default() {
+        let cfg = AiConfig {
+            endpoint: "file:///etc/passwd".to_string(),
+            model: "test".to_string(),
+        }
+        .validate_endpoint();
+        assert_eq!(
+            cfg.endpoint,
+            AiConfig::default().endpoint,
+            "file:// scheme must be rejected and replaced with default"
+        );
+    }
+
+    #[test]
+    fn ai_endpoint_ftp_scheme_rejected_falls_back_to_default() {
+        let cfg = AiConfig {
+            endpoint: "ftp://localhost/path".to_string(),
+            model: "test".to_string(),
+        }
+        .validate_endpoint();
+        assert_eq!(
+            cfg.endpoint,
+            AiConfig::default().endpoint,
+            "ftp:// scheme must be rejected and replaced with default"
+        );
+    }
+
+    #[test]
+    fn ai_endpoint_non_loopback_allowed_but_keeps_value() {
+        // Remote endpoints are allowed (user may have a remote Ollama).
+        let cfg = AiConfig {
+            endpoint: "http://192.168.1.100:11434".to_string(),
+            model: "test".to_string(),
+        }
+        .validate_endpoint();
+        assert_eq!(
+            cfg.endpoint, "http://192.168.1.100:11434",
+            "non-loopback http endpoint must be kept"
+        );
+    }
+
+    #[test]
+    fn ai_endpoint_127_0_0_1_is_loopback() {
+        let cfg = AiConfig {
+            endpoint: "http://127.0.0.1:11434".to_string(),
+            model: "test".to_string(),
+        }
+        .validate_endpoint();
+        assert_eq!(cfg.endpoint, "http://127.0.0.1:11434");
+    }
+
+    #[test]
+    fn validate_wires_ai_endpoint_validation() {
+        // Ensure ArctermConfig::validate() calls AiConfig::validate_endpoint().
+        let toml = r#"
+            [ai]
+            endpoint = "file:///etc/passwd"
+            model = "test"
+        "#;
+        let cfg: ArctermConfig = toml::from_str(toml).expect("valid TOML");
+        let validated = cfg.validate();
+        assert_eq!(
+            validated.ai.endpoint,
+            AiConfig::default().endpoint,
+            "validate() must reject file:// AI endpoint"
+        );
     }
 }
