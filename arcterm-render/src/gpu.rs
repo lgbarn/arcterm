@@ -55,7 +55,14 @@ impl GpuState {
 
         // VSync: cap frame rate to display refresh rate, preventing tearing and idle GPU spinning.
         let present_mode = wgpu::PresentMode::Fifo;
-        log::debug!("wgpu present mode: {:?}", present_mode);
+        let fifo_available = caps.present_modes.contains(&wgpu::PresentMode::Fifo);
+        if !fifo_available {
+            log::warn!(
+                "PresentMode::Fifo not in supported modes {:?}; frame pacing may be degraded",
+                caps.present_modes
+            );
+        }
+        log::info!("wgpu present mode: {:?} (fifo supported: {})", present_mode, fifo_available);
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
