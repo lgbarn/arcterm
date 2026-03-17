@@ -282,6 +282,9 @@ impl Terminal {
         let title: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
         let (wakeup_tx, wakeup_rx) = std_mpsc::channel::<()>();
+        // Clone before wakeup_tx is moved into ArcTermEventListener so the reader
+        // thread can send a final wakeup on EOF or error.
+        let wakeup_tx_for_reader = wakeup_tx.clone();
         // Bounded sync channel for write-back to PTY (16 slots = enough for DSR/DA bursts).
         let (write_tx, write_rx) = std_mpsc::sync_channel::<Cow<'static, [u8]>>(16);
 
@@ -374,6 +377,7 @@ impl Terminal {
                         Ok(0) => {
                             // PTY closed (shell exited).
                             log::debug!("PTY reader: EOF");
+                            let _ = wakeup_tx_for_reader.send(());
                             break;
                         }
                         Ok(n) => n,
@@ -385,6 +389,7 @@ impl Terminal {
                         }
                         Err(e) => {
                             log::debug!("PTY reader: {e}");
+                            let _ = wakeup_tx_for_reader.send(());
                             break;
                         }
                     };
