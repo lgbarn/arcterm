@@ -668,6 +668,11 @@ struct AppState {
     /// key-to-frame-presented latency under the `latency-trace` feature.
     #[cfg(feature = "latency-trace")]
     key_press_t0: Option<std::time::Instant>,
+
+    // ---- native menu bar ----
+    /// Native menu bar; held here so that the menu stays alive for the
+    /// duration of the app (muda requires the owner to keep it live).
+    app_menu: menu::AppMenu,
 }
 
 impl AppState {
@@ -1225,6 +1230,11 @@ impl ApplicationHandler for App {
             }
         };
 
+        // Build native menu bar.
+        let app_menu = menu::AppMenu::new();
+        #[cfg(target_os = "macos")]
+        app_menu.menu.init_for_nsapp();
+
         self.state = Some(AppState {
             window,
             renderer,
@@ -1270,6 +1280,7 @@ impl ApplicationHandler for App {
             plugins_loaded: false,
             #[cfg(feature = "latency-trace")]
             key_press_t0: None,
+            app_menu,
         });
     }
 
@@ -1277,6 +1288,17 @@ impl ApplicationHandler for App {
         let Some(state) = &mut self.state else {
             return;
         };
+
+        // ------------------------------------------------------------------
+        // Poll native menu bar events.
+        // ------------------------------------------------------------------
+        if let Ok(event) = muda::MenuEvent::receiver().try_recv() {
+            if let Some(action) = state.app_menu.action_for_id(&event.id) {
+                log::debug!("menu event: {:?}", action);
+                // Full dispatch will be wired in Task 4. For now, just log.
+            }
+            state.window.request_redraw();
+        }
 
         // ------------------------------------------------------------------
         // Deferred plugin loading — runs once, after the first frame has been
