@@ -195,6 +195,7 @@ mod selection;
 mod tab;
 mod terminal;
 mod workspace;
+mod ollama;
 
 use std::collections::HashMap;
 use std::sync::Arc;
