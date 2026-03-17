@@ -81,7 +81,7 @@ impl OllamaClient {
             stream: true,
         };
         self.http
-            .post(&self.url("/api/chat"))
+            .post(self.url("/api/chat"))
             .json(&req)
             .send()
             .await
@@ -102,7 +102,7 @@ impl OllamaClient {
             stream: false,
         };
         self.http
-            .post(&self.url("/api/generate"))
+            .post(self.url("/api/generate"))
             .json(&req)
             .send()
             .await

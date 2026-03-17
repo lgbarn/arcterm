@@ -42,6 +42,8 @@ pub struct SiblingContext {
     pub last_command: Option<String>,
     pub exit_code: Option<i32>,
     pub ai_type: Option<AiAgentKind>,
+    /// Last N lines of terminal output from this pane.
+    pub scrollback: Vec<String>,
 }
 
 // ── PaneContext ───────────────────────────────────────────────────────────────
@@ -165,12 +167,22 @@ pub fn collect_sibling_contexts(
         .filter(|&(&id, _)| id != exclude)
         .map(|(&id, ctx)| {
             let cwd = panes.get(&id).and_then(|t| t.cwd());
+            // Grab last 30 lines of visible terminal output.
+            let scrollback = panes
+                .get(&id)
+                .map(|t| {
+                    let rows = t.all_text_rows();
+                    let start = rows.len().saturating_sub(30);
+                    rows[start..].to_vec()
+                })
+                .unwrap_or_default();
             SiblingContext {
                 pane_id: id,
                 cwd,
                 last_command: ctx.last_command.clone(),
                 exit_code: ctx.last_exit_code,
                 ai_type: ctx.ai_type.clone(),
+                scrollback,
             }
         })
         .collect()
@@ -204,9 +216,22 @@ pub fn format_context_osc7770(siblings: &[SiblingContext]) -> Vec<u8> {
             Some(k) => format!("\"{}\"", ai_kind_str(k)),
             None => "null".to_string(),
         };
+        let scrollback_json: String = {
+            let escaped: Vec<String> = s
+                .scrollback
+                .iter()
+                .map(|l| {
+                    format!(
+                        "\"{}\"",
+                        l.replace('\\', "\\\\").replace('"', "\\\"")
+                    )
+                })
+                .collect();
+            format!("[{}]", escaped.join(","))
+        };
         entries.push(format!(
-            "{{\"pane_id\":{},\"cwd\":{},\"last_command\":{},\"exit_code\":{},\"ai_type\":{}}}",
-            s.pane_id.0, cwd_json, cmd_json, exit_json, ai_json
+            "{{\"pane_id\":{},\"cwd\":{},\"last_command\":{},\"exit_code\":{},\"ai_type\":{},\"scrollback\":{}}}",
+            s.pane_id.0, cwd_json, cmd_json, exit_json, ai_json, scrollback_json
         ));
     }
     let json = format!("[{}]", entries.join(","));
@@ -418,6 +443,43 @@ mod tests {
         assert!(s.contains("line C\n"));
     }
 
+    // ── Task 3 new tests (scrollback) ────────────────────────────────────────
+
+    /// SiblingContext includes scrollback field.
+    #[test]
+    fn sibling_context_has_scrollback() {
+        let sc = SiblingContext {
+            pane_id: make_pane_id(1),
+            cwd: None,
+            last_command: None,
+            exit_code: None,
+            ai_type: None,
+            scrollback: vec!["line1".to_string(), "line2".to_string()],
+        };
+        assert_eq!(sc.scrollback.len(), 2);
+        assert_eq!(sc.scrollback[0], "line1");
+    }
+
+    /// format_context_osc7770 includes scrollback in JSON output.
+    #[test]
+    fn format_context_osc7770_includes_scrollback() {
+        let siblings = vec![SiblingContext {
+            pane_id: make_pane_id(1),
+            cwd: Some(PathBuf::from("/tmp")),
+            last_command: Some("cargo build".to_string()),
+            exit_code: Some(1),
+            ai_type: None,
+            scrollback: vec![
+                "error[E0308]: type mismatch".to_string(),
+                "  --> src/main.rs:42".to_string(),
+            ],
+        }];
+        let bytes = format_context_osc7770(&siblings);
+        let s = String::from_utf8(bytes).unwrap();
+        assert!(s.contains("\"scrollback\":"));
+        assert!(s.contains("error[E0308]"));
+    }
+
     // ── Task 2 new tests ──────────────────────────────────────────────────────
 
     /// collect_sibling_contexts excludes the requesting pane.
@@ -461,6 +523,7 @@ mod tests {
                 last_command: Some("cargo test".to_string()),
                 exit_code: Some(0),
                 ai_type: None,
+                scrollback: vec![],
             },
             SiblingContext {
                 pane_id: make_pane_id(2),
@@ -468,6 +531,7 @@ mod tests {
                 last_command: None,
                 exit_code: None,
                 ai_type: Some(AiAgentKind::ClaudeCode),
+                scrollback: vec![],
             },
         ];
 
