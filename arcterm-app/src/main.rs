@@ -3005,6 +3005,40 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                // Command overlay — input bar with query, loading indicator, result, or error.
+                if let Some(ref co) = state.command_overlay {
+                    use command_overlay::OverlayPhase;
+                    let win_w = state.renderer.gpu.surface_config.width as f32;
+                    let cell_h = state.renderer.text.cell_size.height * sf;
+                    // Two-row bar at the top of the window (~60px at normal scale).
+                    let bar_h = cell_h * 2.5;
+
+                    // Background quad.
+                    overlay_quads.push(OverlayQuad {
+                        rect: [0.0, 0.0, win_w, bar_h],
+                        color: [0.08, 0.09, 0.14, 0.95],
+                    });
+
+                    // First line: label + query.
+                    let query_line = format!("AI> {}", co.query);
+                    palette_text.push((query_line, 8.0 * sf, (bar_h * 0.15).max(4.0 * sf)));
+
+                    // Second line: phase indicator.
+                    let phase_line = match &co.phase {
+                        OverlayPhase::Input => String::new(),
+                        OverlayPhase::Loading => "  ... waiting for LLM".to_string(),
+                        OverlayPhase::Result(cmd) => {
+                            format!("  >> {}  [Enter to accept · Esc to dismiss]", cmd)
+                        }
+                        OverlayPhase::Error(msg) => {
+                            format!("  !! {}", msg)
+                        }
+                    };
+                    if !phase_line.is_empty() {
+                        palette_text.push((phase_line, 8.0 * sf, bar_h * 0.55));
+                    }
+                }
+
                 // Search overlay — input bar and match highlight quads.
                 if let Some(ref so) = state.search_overlay {
                     let win_w = state.renderer.gpu.surface_config.width as f32;
