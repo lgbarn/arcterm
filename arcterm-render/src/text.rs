@@ -257,7 +257,9 @@ impl TextRenderer {
         buf_vec.truncate(num_rows);
 
         // Sync hash vec length with row count (u64::MAX forces first-frame reshaping).
-        row_hashes.resize(num_rows, u64::MAX);
+        if row_hashes.len() != num_rows {
+            row_hashes.resize(num_rows, u64::MAX);
+        }
 
         // Shape each row.
         for (row_idx, buf) in buf_vec.iter_mut().enumerate() {

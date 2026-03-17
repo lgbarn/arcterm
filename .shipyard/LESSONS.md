@@ -55,3 +55,31 @@
 - Review-driven issue logging (ISSUE-014 through ISSUE-019) creates a clean backlog for the next release
 
 ---
+
+## [2026-03-16] Performance Optimization Pass
+
+### What Went Well
+- Codebase exploration agent identified 10 bottlenecks with exact file/line references in one pass
+- Snapshot caching eliminated duplicate FairMutex locks per pane per frame
+- PTY reader batching reduces lock contention during heavy output bursts
+- Release build profile confirmed optimizations work: 84% idle (debug) → 99.1% idle (release)
+- Security audit caught a real cleanup gap (cached_snapshots not cleared on pane removal)
+
+### Surprises / Discoveries
+- macOS SIP blocks dtruss/dtrace on modern systems — syscall tracing requires workarounds (fs_usage, Docker, or Instruments)
+- fs_usage requires exact process name, not binary paths — easy to get wrong
+- Debug builds inflate CPU profiles ~20x vs release due to missing inlining
+- The #1 perf bottleneck was cosmic_text font fallback (binary search in fontdb), not our render loop or snapshot code
+- AtomicI32 with sentinel value is a clean replacement for Mutex<Option<i32>> on write-once values
+
+### Pitfalls to Avoid
+- Don't profile debug builds and draw conclusions — always profile release for meaningful data
+- Don't assume your code is the bottleneck — third-party library internals (cosmic_text font fallback) dominated the profile
+- Don't clone structured blocks per frame when you can borrow — restructuring pane_frames to include PaneId eliminated both the clone and a linear search
+
+### Process Improvements
+- Profile before and after optimizations to validate impact with real data
+- Use `sample` (macOS) for quick CPU profiles — it works under SIP and gives actionable call stacks
+- Batch related optimizations into phases by impact level — highest impact first ensures early wins
+
+---

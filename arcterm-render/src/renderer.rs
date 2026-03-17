@@ -189,15 +189,15 @@ impl Renderer {
                 height: ph as u32,
             };
 
-            let pane_quads = build_quad_instances_at(
+            build_quad_instances_at(
                 pane.snapshot,
                 &self.text.cell_size,
                 sf,
                 &self.palette,
                 px,
                 py,
+                &mut all_quads,
             );
-            all_quads.extend_from_slice(&pane_quads);
 
             self.text.prepare_grid_at(
                 pane.snapshot,
@@ -391,8 +391,9 @@ impl Renderer {
 // Quad instance builders
 // ---------------------------------------------------------------------------
 
-/// Convert a `RenderSnapshot` into a list of `QuadInstance`s for non-default
-/// backgrounds and the cursor block, offset to a specific pane origin.
+/// Append `QuadInstance`s for non-default backgrounds and the cursor block
+/// to `out`, offset to a specific pane origin.  Pushes directly into the
+/// caller's Vec to avoid a per-pane temporary allocation.
 pub fn build_quad_instances_at(
     snapshot: &RenderSnapshot,
     cell_size: &crate::text::CellSize,
@@ -400,11 +401,10 @@ pub fn build_quad_instances_at(
     palette: &RenderPalette,
     offset_x: f32,
     offset_y: f32,
-) -> Vec<QuadInstance> {
+    out: &mut Vec<QuadInstance>,
+) {
     let cell_w = cell_size.width * scale_factor;
     let cell_h = cell_size.height * scale_factor;
-
-    let mut quads: Vec<QuadInstance> = Vec::new();
 
     for row_idx in 0..snapshot.rows {
         let y = offset_y + row_idx as f32 * cell_h;
@@ -423,7 +423,7 @@ pub fn build_quad_instances_at(
 
             // Emit a background quad for non-default background colors.
             if !matches!(eff_bg, SnapshotColor::Default) {
-                quads.push(QuadInstance {
+                out.push(QuadInstance {
                     rect: [x, y, cell_w, cell_h],
                     color: term_color_to_f32(eff_bg, false, palette),
                 });
@@ -436,15 +436,13 @@ pub fn build_quad_instances_at(
                 } else {
                     term_color_to_f32(eff_fg, true, palette)
                 };
-                quads.push(QuadInstance {
+                out.push(QuadInstance {
                     rect: [x, y, cell_w, cell_h],
                     color: block_color,
                 });
             }
         }
     }
-
-    quads
 }
 
 /// Convert a `SnapshotColor` to an RGBA f32 array for the GPU quad pipeline.

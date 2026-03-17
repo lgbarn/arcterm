@@ -205,7 +205,7 @@ use std::time::Instant as TraceInstant;
 
 use arcterm_render::{
     ContentType, HighlightEngine, OverlayQuad, PaneRenderInfo, PluginPaneRenderInfo, PluginStyledLine,
-    RenderPalette, Renderer, StructuredBlock,
+    RenderPalette, RenderSnapshot, Renderer, StructuredBlock,
 };
 use keymap::{KeyAction, KeymapHandler};
 use palette::{PaletteState, WorkspaceSwitcherState};
@@ -598,6 +598,10 @@ struct AppState {
 
     // ---- performance / control flow ----
 
+    /// Cached terminal snapshots from `about_to_wait`, reused in `RedrawRequested`
+    /// to avoid taking a second snapshot per pane per frame.
+    cached_snapshots: HashMap<PaneId, RenderSnapshot>,
+
     fps_last_log: Instant,
     fps_frame_count: u32,
 
@@ -901,6 +905,7 @@ impl AppState {
             self.image_channels.remove(id);
             self.auto_detectors.remove(id);
             self.structured_blocks.remove(id);
+            self.cached_snapshots.remove(id);
             self.nvim_states.remove(id);
             self.ai_states.remove(id);
             self.pane_contexts.remove(id);
@@ -1242,6 +1247,7 @@ impl ApplicationHandler for App {
             pending_resize: None,
             selection_quads: Vec::new(),
 
+            cached_snapshots: HashMap::new(),
             fps_last_log: Instant::now(),
             fps_frame_count: 0,
             palette_mode: None,
@@ -1511,17 +1517,19 @@ impl ApplicationHandler for App {
 
                     // Auto-detect structured content in newly-written rows.
                     // Lock Term briefly to extract a snapshot for detection, then unlock.
+                    // The snapshot is cached for reuse in RedrawRequested to avoid
+                    // taking a second snapshot per pane per frame.
                     let cursor_row = terminal.cursor_row();
                     #[cfg(feature = "latency-trace")]
                     let t_snap = TraceInstant::now();
-                    let detect_snapshot = {
+                    let snapshot = {
                         let term = terminal.lock_term();
                         arcterm_render::snapshot_from_term(&*term)
                     };
                     #[cfg(feature = "latency-trace")]
                     log::debug!("[latency] snapshot acquired in {:?}", t_snap.elapsed());
                     if let Some(detector) = state.auto_detectors.get_mut(&id) {
-                        let detections = detector.scan_rows(&detect_snapshot, cursor_row);
+                        let detections = detector.scan_rows(&snapshot, cursor_row);
                         if !detections.is_empty() {
                             let pane_blocks = state.structured_blocks.entry(id).or_default();
                             for det in detections {
@@ -1542,6 +1550,8 @@ impl ApplicationHandler for App {
                             }
                         }
                     }
+                    // Cache snapshot for reuse in RedrawRequested.
+                    state.cached_snapshots.insert(id, snapshot);
                 }
 
                 // Drain OSC 133 exit codes into PaneContext.
@@ -1673,6 +1683,7 @@ impl ApplicationHandler for App {
             state.image_channels.remove(&id);
             state.auto_detectors.remove(&id);
             state.structured_blocks.remove(&id);
+            state.cached_snapshots.remove(&id);
             state.ai_states.remove(&id);
             state.pane_contexts.remove(&id);
             if state.last_ai_pane == Some(id) {
@@ -1733,12 +1744,16 @@ impl ApplicationHandler for App {
             }
             state.window.request_redraw();
 
-            event_loop.set_control_flow(ControlFlow::Poll);
+            // Use WaitUntil with a short deadline to coalesce rapid PTY wakeups
+            // without busy-spinning.  This gives the kernel ~2ms to accumulate
+            // more output before the next frame, reducing CPU usage during heavy
+            // output while keeping latency low.
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                Instant::now() + std::time::Duration::from_millis(2),
+            ));
         } else {
             // No new data — switch to Wait immediately so the event loop
             // sleeps until the next wakeup, keyboard event, or window event.
-            // Previous threshold of 3 idle cycles caused unnecessary CPU
-            // spinning between bursts of PTY output.
             event_loop.set_control_flow(ControlFlow::Wait);
         }
 
@@ -2105,28 +2120,21 @@ impl ApplicationHandler for App {
                 let mut pane_infos: Vec<PaneRenderInfo<'_>> = Vec::new();
 
                 // Normal multi-pane render.
-                // Lock each terminal briefly to extract a snapshot, then release the lock
-                // before GPU rendering so the reader thread is not blocked.
-                let pane_frames: Vec<(PixelRect, arcterm_render::RenderSnapshot, Vec<StructuredBlock>)> = rects
-                    .iter()
-                    .filter_map(|(id, rect)| {
-                        if rect.width <= 0.0 || rect.height <= 0.0 {
-                            return None;
-                        }
-                        state.panes.get(id).map(|t| {
-                            let snapshot = {
-                                let term = t.lock_term();
-                                arcterm_render::snapshot_from_term(&*term)
-                            };
-                            let blocks = state
-                                .structured_blocks
-                                .get(id)
-                                .cloned()
-                                .unwrap_or_default();
-                            (*rect, snapshot, blocks)
-                        })
-                    })
-                    .collect();
+                // Reuse cached snapshots from about_to_wait when available;
+                // fall back to a fresh snapshot for panes that had no PTY wakeup.
+                let mut pane_frames: Vec<(PaneId, PixelRect, arcterm_render::RenderSnapshot)> = Vec::new();
+                for (id, rect) in &rects {
+                    if rect.width <= 0.0 || rect.height <= 0.0 {
+                        continue;
+                    }
+                    if let Some(t) = state.panes.get(id) {
+                        let snapshot = state.cached_snapshots.remove(id).unwrap_or_else(|| {
+                            let term = t.lock_term();
+                            arcterm_render::snapshot_from_term(&*term)
+                        });
+                        pane_frames.push((*id, *rect, snapshot));
+                    }
+                }
 
                 // Clear stale image placements from the previous frame.
                 // New placements are pushed in about_to_wait when PTY output
@@ -2141,8 +2149,11 @@ impl ApplicationHandler for App {
                 let cell_w_phys = state.renderer.text.cell_size.width * sf;
                 let _ = cell_w_phys; // may be used for future sizing
 
-                for (i, (rect, _, blocks)) in pane_frames.iter().enumerate() {
-                    let _ = i;
+                // Empty block list used as a default when a pane has no structured blocks.
+                let empty_blocks: Vec<StructuredBlock> = Vec::new();
+
+                for (pane_id, rect, _) in &pane_frames {
+                    let blocks = state.structured_blocks.get(pane_id).unwrap_or(&empty_blocks);
                     let pw = rect.width;
                     let py = rect.y;
                     let px = rect.x;
@@ -2152,21 +2163,17 @@ impl ApplicationHandler for App {
                             let btn_size = 14.0_f32 * sf;
                             let btn_x = px + pw - btn_size - 4.0 * sf;
                             let btn_y = block_y + 2.0 * sf;
-                            // Find the pane id for this frame.
-                            if let Some((&pane_id, _)) = rects.iter().find(|(_, r)| {
-                                (r.x - rect.x).abs() < 1.0 && (r.y - rect.y).abs() < 1.0
-                            }) {
-                                state.copy_button_rects.push((
-                                    pane_id,
-                                    [btn_x, btn_y, btn_size, btn_size],
-                                    block_idx,
-                                ));
-                            }
+                            state.copy_button_rects.push((
+                                *pane_id,
+                                [btn_x, btn_y, btn_size, btn_size],
+                                block_idx,
+                            ));
                         }
                     }
                 }
 
-                for (rect, snapshot, blocks) in &pane_frames {
+                for (pane_id, rect, snapshot) in &pane_frames {
+                    let blocks = state.structured_blocks.get(pane_id).unwrap_or(&empty_blocks);
                     pane_infos.push(PaneRenderInfo {
                         snapshot,
                         rect: [rect.x, rect.y, rect.width, rect.height],

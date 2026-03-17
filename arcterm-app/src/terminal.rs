@@ -27,6 +27,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self as std_mpsc};
 
@@ -100,7 +101,7 @@ pub struct ArcTermEventListener {
     /// Channel to write DSR/DA reply bytes back to the PTY.
     write_tx: std_mpsc::SyncSender<Cow<'static, [u8]>>,
     /// Shared exit-code storage (set on `ChildExit`).
-    exit_code: Arc<Mutex<Option<i32>>>,
+    exit_code: Arc<AtomicI32>,
     /// Shared window title storage.
     title: Arc<Mutex<Option<String>>>,
 }
@@ -120,9 +121,7 @@ impl EventListener for ArcTermEventListener {
                 let _ = self.write_tx.try_send(bytes);
             }
             Event::ChildExit(code) => {
-                if let Ok(mut guard) = self.exit_code.lock() {
-                    *guard = Some(code);
-                }
+                self.exit_code.store(code, Ordering::Release);
                 // Also wake up the main thread so it can detect exit.
                 let _ = self.wakeup_tx.send(());
                 #[cfg(feature = "latency-trace")]
@@ -204,7 +203,7 @@ pub struct Terminal {
     /// Sender half of the Kitty image decode channel.
     image_tx: mpsc::Sender<PendingImage>,
     /// Shared exit-code storage (populated by `ArcTermEventListener`).
-    exit_code: Arc<Mutex<Option<i32>>>,
+    exit_code: Arc<AtomicI32>,
     /// Shared window title storage (populated by `ArcTermEventListener`).
     title: Arc<Mutex<Option<String>>>,
     /// Wakeup signal receiver — signals that Term has new data.
@@ -278,7 +277,7 @@ impl Terminal {
         let pty_master_fd = pty.file().as_raw_fd();
 
         // ── 3. Set up shared state ──────────────────────────────────────────
-        let exit_code: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
+        let exit_code: Arc<AtomicI32> = Arc::new(AtomicI32::new(-1));
         let title: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
         let (wakeup_tx, wakeup_rx) = std_mpsc::channel::<()>();
@@ -375,6 +374,14 @@ impl Terminal {
                 // passthrough bytes are copied here to accumulate the content.
                 let mut osc7770_capture: Option<Vec<u8>> = None;
 
+                // Passthrough accumulator: collects bytes across multiple reads
+                // and flushes under a single lock acquisition to reduce contention.
+                let mut passthrough_acc: Vec<u8> = Vec::with_capacity(65536);
+                // Flush threshold: flush when accumulated bytes exceed this or
+                // when a read returns fewer bytes than the buffer (likely no more
+                // data waiting in the kernel).
+                const FLUSH_THRESHOLD: usize = 64 * 1024;
+
                 loop {
                     let n = match reader.read(&mut buf) {
                         Ok(0) => {
@@ -382,11 +389,16 @@ impl Terminal {
                             // has_exited() returns true — ChildExit never
                             // fires because we bypass alacritty's EventLoop.
                             log::debug!("PTY reader: EOF");
-                            if let Ok(mut guard) = exit_code_for_reader.lock() {
-                                if guard.is_none() {
-                                    *guard = Some(0);
-                                }
+                            // Flush any remaining accumulated passthrough.
+                            if !passthrough_acc.is_empty() {
+                                let mut term_guard = term_for_reader.lock();
+                                parser.advance(&mut *term_guard, &passthrough_acc);
+                                passthrough_acc.clear();
                             }
+                            // Set exit code to 0 if not already set by ChildExit.
+                            let _ = exit_code_for_reader.compare_exchange(
+                                -1, 0, Ordering::AcqRel, Ordering::Relaxed,
+                            );
                             let _ = wakeup_tx_for_reader.send(());
                             break;
                         }
@@ -394,11 +406,24 @@ impl Terminal {
                         Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                         Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                             // Should not happen with blocking reads, but handle gracefully.
+                            // Flush accumulated passthrough before yielding.
+                            if !passthrough_acc.is_empty() {
+                                let mut term_guard = term_for_reader.lock();
+                                parser.advance(&mut *term_guard, &passthrough_acc);
+                                passthrough_acc.clear();
+                                let _ = wakeup_tx_for_reader.send(());
+                            }
                             std::thread::yield_now();
                             continue;
                         }
                         Err(e) => {
                             log::debug!("PTY reader: {e}");
+                            // Flush any remaining accumulated passthrough.
+                            if !passthrough_acc.is_empty() {
+                                let mut term_guard = term_for_reader.lock();
+                                parser.advance(&mut *term_guard, &passthrough_acc);
+                                passthrough_acc.clear();
+                            }
                             let _ = wakeup_tx_for_reader.send(());
                             break;
                         }
@@ -433,14 +458,25 @@ impl Terminal {
                         let _ = osc133_tx.send(event);
                     }
 
-                    // Advance the vte parser with passthrough bytes.
+                    // Accumulate passthrough bytes and flush when:
+                    // 1. Accumulated data exceeds threshold (heavy output)
+                    // 2. Read returned less than buffer size (likely no more kernel data)
                     if !output.passthrough.is_empty() {
-                        // If inside an OSC 7770 block, copy passthrough to capture buf.
                         if let Some(ref mut cap) = osc7770_capture {
                             cap.extend_from_slice(&output.passthrough);
                         }
+                        passthrough_acc.extend_from_slice(&output.passthrough);
+                    }
+
+                    let should_flush = !passthrough_acc.is_empty()
+                        && (passthrough_acc.len() >= FLUSH_THRESHOLD || n < buf.len());
+
+                    if should_flush {
                         let mut term_guard = term_for_reader.lock();
-                        parser.advance(&mut *term_guard, &output.passthrough);
+                        parser.advance(&mut *term_guard, &passthrough_acc);
+                        drop(term_guard);
+                        passthrough_acc.clear();
+                        let _ = wakeup_tx_for_reader.send(());
                     }
                 }
             })
@@ -690,7 +726,7 @@ impl Terminal {
 
     /// Returns `true` if the child process has exited.
     pub fn has_exited(&self) -> bool {
-        self.exit_code.lock().is_ok_and(|g| g.is_some())
+        self.exit_code.load(Ordering::Acquire) != -1
     }
 
     /// Returns the current cursor row in the viewport (0-based).
