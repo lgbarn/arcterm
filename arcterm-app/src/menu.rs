@@ -36,56 +36,25 @@ impl AppMenu {
         let menu = Menu::new();
         let mut id_map: HashMap<MenuId, KeyAction> = HashMap::new();
 
-        // Helper closure — registers the item's id and returns a reference to
-        // the item so it can be appended immediately.
-        //
-        // We can't return the item itself from a closure and then use it again,
-        // so we use a macro-like pattern: build, register, then append in-line.
+        // Helper closure — builds a MenuItem, registers it in id_map, and
+        // returns it so it can be passed straight to append_items.
+        let mut item = |label: &str, accel: Option<Accelerator>, action: KeyAction| -> MenuItem {
+            let mi = MenuItem::new(label, true, accel);
+            id_map.insert(mi.id().clone(), action);
+            mi
+        };
 
         // ----------------------------------------------------------------
         // Shell menu
         // ----------------------------------------------------------------
         let shell = Submenu::new("Shell", true);
 
-        let new_tab = MenuItem::new(
-            "New Tab",
-            true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyT)),
-        );
-        let split_right = MenuItem::new(
-            "Split Right",
-            true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyD)),
-        );
-        let split_down = MenuItem::new(
-            "Split Down",
-            true,
-            Some(Accelerator::new(
-                Some(Modifiers::SUPER | Modifiers::SHIFT),
-                Code::KeyD,
-            )),
-        );
-        let close_pane = MenuItem::new(
-            "Close Pane",
-            true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyW)),
-        );
-        let close_tab = MenuItem::new(
-            "Close Tab",
-            true,
-            Some(Accelerator::new(
-                Some(Modifiers::SUPER | Modifiers::SHIFT),
-                Code::KeyW,
-            )),
-        );
-        let reset_terminal = MenuItem::new("Reset Terminal", true, None);
-
-        id_map.insert(new_tab.id().clone(), KeyAction::NewTab);
-        id_map.insert(split_right.id().clone(), KeyAction::Split(Axis::Horizontal));
-        id_map.insert(split_down.id().clone(), KeyAction::Split(Axis::Vertical));
-        id_map.insert(close_pane.id().clone(), KeyAction::ClosePane);
-        id_map.insert(close_tab.id().clone(), KeyAction::CloseTab);
-        id_map.insert(reset_terminal.id().clone(), KeyAction::ResetTerminal);
+        let new_tab = item("New Tab", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyT)), KeyAction::NewTab);
+        let split_right = item("Split Right", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyD)), KeyAction::Split(Axis::Horizontal));
+        let split_down = item("Split Down", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyD)), KeyAction::Split(Axis::Vertical));
+        let close_pane = item("Close Pane", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyW)), KeyAction::ClosePane);
+        let close_tab = item("Close Tab", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyW)), KeyAction::CloseTab);
+        let reset_terminal = item("Reset Terminal", None, KeyAction::ResetTerminal);
 
         shell
             .append_items(&[
@@ -105,61 +74,14 @@ impl AppMenu {
         // ----------------------------------------------------------------
         let edit = Submenu::new("Edit", true);
 
-        let copy = MenuItem::new(
-            "Copy",
-            true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyC)),
-        );
-        let paste = MenuItem::new(
-            "Paste",
-            true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyV)),
-        );
-        let select_all = MenuItem::new(
-            "Select All",
-            true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyA)),
-        );
-        let find = MenuItem::new(
-            "Find...",
-            true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyF)),
-        );
-        let find_next = MenuItem::new(
-            "Find Next",
-            true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyG)),
-        );
-        let find_prev = MenuItem::new(
-            "Find Previous",
-            true,
-            Some(Accelerator::new(
-                Some(Modifiers::SUPER | Modifiers::SHIFT),
-                Code::KeyG,
-            )),
-        );
-        let clear_scrollback = MenuItem::new(
-            "Clear Scrollback",
-            true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyK)),
-        );
-        let command_palette = MenuItem::new(
-            "Command Palette",
-            true,
-            Some(Accelerator::new(
-                Some(Modifiers::SUPER | Modifiers::SHIFT),
-                Code::KeyP,
-            )),
-        );
-
-        id_map.insert(copy.id().clone(), KeyAction::Copy);
-        id_map.insert(paste.id().clone(), KeyAction::Paste);
-        id_map.insert(select_all.id().clone(), KeyAction::SelectAll);
-        id_map.insert(find.id().clone(), KeyAction::CrossPaneSearch);
-        id_map.insert(find_next.id().clone(), KeyAction::SearchNext);
-        id_map.insert(find_prev.id().clone(), KeyAction::SearchPrevious);
-        id_map.insert(clear_scrollback.id().clone(), KeyAction::ClearScrollback);
-        id_map.insert(command_palette.id().clone(), KeyAction::OpenPalette);
+        let copy = item("Copy", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyC)), KeyAction::Copy);
+        let paste = item("Paste", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyV)), KeyAction::Paste);
+        let select_all = item("Select All", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyA)), KeyAction::SelectAll);
+        let find = item("Find...", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyF)), KeyAction::CrossPaneSearch);
+        let find_next = item("Find Next", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyG)), KeyAction::SearchNext);
+        let find_prev = item("Find Previous", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyG)), KeyAction::SearchPrevious);
+        let clear_scrollback = item("Clear Scrollback", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyK)), KeyAction::ClearScrollback);
+        let command_palette = item("Command Palette", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyP)), KeyAction::OpenPalette);
 
         edit.append_items(&[
             &copy,
@@ -182,38 +104,12 @@ impl AppMenu {
         // ----------------------------------------------------------------
         let view = Submenu::new("View", true);
 
-        let increase_font = MenuItem::new(
-            "Increase Font Size",
-            true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::Equal)),
-        );
-        let decrease_font = MenuItem::new(
-            "Decrease Font Size",
-            true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::Minus)),
-        );
-        let reset_font = MenuItem::new(
-            "Reset Font Size",
-            true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::Digit0)),
-        );
-        let toggle_fullscreen = MenuItem::new(
-            "Toggle Full Screen",
-            true,
-            Some(Accelerator::new(
-                Some(Modifiers::CONTROL | Modifiers::SUPER),
-                Code::KeyF,
-            )),
-        );
-        let config_overlay = MenuItem::new("Config Overlay", true, None);
-        let plan_status = MenuItem::new("Plan Status", true, None);
-
-        id_map.insert(increase_font.id().clone(), KeyAction::IncreaseFontSize);
-        id_map.insert(decrease_font.id().clone(), KeyAction::DecreaseFontSize);
-        id_map.insert(reset_font.id().clone(), KeyAction::ResetFontSize);
-        id_map.insert(toggle_fullscreen.id().clone(), KeyAction::ToggleFullScreen);
-        id_map.insert(config_overlay.id().clone(), KeyAction::ReviewOverlay);
-        id_map.insert(plan_status.id().clone(), KeyAction::TogglePlanView);
+        let increase_font = item("Increase Font Size", Some(Accelerator::new(Some(Modifiers::SUPER), Code::Equal)), KeyAction::IncreaseFontSize);
+        let decrease_font = item("Decrease Font Size", Some(Accelerator::new(Some(Modifiers::SUPER), Code::Minus)), KeyAction::DecreaseFontSize);
+        let reset_font = item("Reset Font Size", Some(Accelerator::new(Some(Modifiers::SUPER), Code::Digit0)), KeyAction::ResetFontSize);
+        let toggle_fullscreen = item("Toggle Full Screen", Some(Accelerator::new(Some(Modifiers::CONTROL | Modifiers::SUPER), Code::KeyF)), KeyAction::ToggleFullScreen);
+        let config_overlay = item("Config Overlay", None, KeyAction::ReviewOverlay);
+        let plan_status = item("Plan Status", None, KeyAction::TogglePlanView);
 
         view.append_items(&[
             &increase_font,
@@ -232,147 +128,20 @@ impl AppMenu {
         // ----------------------------------------------------------------
         let window = Submenu::new("Window", true);
 
-        let minimize = MenuItem::new(
-            "Minimize",
-            true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyM)),
-        );
-        let zoom_split = MenuItem::new("Zoom Split", true, None);
-
-        let select_above = MenuItem::new(
-            "Select Split Above",
-            true,
-            Some(Accelerator::new(
-                Some(Modifiers::SUPER | Modifiers::ALT),
-                Code::ArrowUp,
-            )),
-        );
-        let select_below = MenuItem::new(
-            "Select Split Below",
-            true,
-            Some(Accelerator::new(
-                Some(Modifiers::SUPER | Modifiers::ALT),
-                Code::ArrowDown,
-            )),
-        );
-        let select_left = MenuItem::new(
-            "Select Split Left",
-            true,
-            Some(Accelerator::new(
-                Some(Modifiers::SUPER | Modifiers::ALT),
-                Code::ArrowLeft,
-            )),
-        );
-        let select_right = MenuItem::new(
-            "Select Split Right",
-            true,
-            Some(Accelerator::new(
-                Some(Modifiers::SUPER | Modifiers::ALT),
-                Code::ArrowRight,
-            )),
-        );
-
-        let equalize = MenuItem::new(
-            "Equalize Splits",
-            true,
-            Some(Accelerator::new(
-                Some(Modifiers::SUPER | Modifiers::CONTROL),
-                Code::Equal,
-            )),
-        );
-
-        let resize_up = MenuItem::new(
-            "Resize Split Up",
-            true,
-            Some(Accelerator::new(
-                Some(Modifiers::SUPER | Modifiers::CONTROL),
-                Code::ArrowUp,
-            )),
-        );
-        let resize_down = MenuItem::new(
-            "Resize Split Down",
-            true,
-            Some(Accelerator::new(
-                Some(Modifiers::SUPER | Modifiers::CONTROL),
-                Code::ArrowDown,
-            )),
-        );
-        let resize_left = MenuItem::new(
-            "Resize Split Left",
-            true,
-            Some(Accelerator::new(
-                Some(Modifiers::SUPER | Modifiers::CONTROL),
-                Code::ArrowLeft,
-            )),
-        );
-        let resize_right = MenuItem::new(
-            "Resize Split Right",
-            true,
-            Some(Accelerator::new(
-                Some(Modifiers::SUPER | Modifiers::CONTROL),
-                Code::ArrowRight,
-            )),
-        );
-
-        let next_tab = MenuItem::new(
-            "Next Tab",
-            true,
-            Some(Accelerator::new(
-                Some(Modifiers::SUPER | Modifiers::SHIFT),
-                Code::BracketRight,
-            )),
-        );
-        let prev_tab = MenuItem::new(
-            "Previous Tab",
-            true,
-            Some(Accelerator::new(
-                Some(Modifiers::SUPER | Modifiers::SHIFT),
-                Code::BracketLeft,
-            )),
-        );
-        let workspace_switcher = MenuItem::new("Workspace Switcher", true, None);
-
-        id_map.insert(minimize.id().clone(), KeyAction::Minimize);
-        id_map.insert(zoom_split.id().clone(), KeyAction::ToggleZoom);
-        id_map.insert(
-            select_above.id().clone(),
-            KeyAction::NavigatePane(Direction::Up),
-        );
-        id_map.insert(
-            select_below.id().clone(),
-            KeyAction::NavigatePane(Direction::Down),
-        );
-        id_map.insert(
-            select_left.id().clone(),
-            KeyAction::NavigatePane(Direction::Left),
-        );
-        id_map.insert(
-            select_right.id().clone(),
-            KeyAction::NavigatePane(Direction::Right),
-        );
-        id_map.insert(equalize.id().clone(), KeyAction::EqualizeSplits);
-        id_map.insert(
-            resize_up.id().clone(),
-            KeyAction::ResizePane(Direction::Up),
-        );
-        id_map.insert(
-            resize_down.id().clone(),
-            KeyAction::ResizePane(Direction::Down),
-        );
-        id_map.insert(
-            resize_left.id().clone(),
-            KeyAction::ResizePane(Direction::Left),
-        );
-        id_map.insert(
-            resize_right.id().clone(),
-            KeyAction::ResizePane(Direction::Right),
-        );
-        id_map.insert(next_tab.id().clone(), KeyAction::NextTab);
-        id_map.insert(prev_tab.id().clone(), KeyAction::PreviousTab);
-        id_map.insert(
-            workspace_switcher.id().clone(),
-            KeyAction::OpenWorkspaceSwitcher,
-        );
+        let minimize = item("Minimize", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyM)), KeyAction::Minimize);
+        let zoom_split = item("Zoom Split", None, KeyAction::ToggleZoom);
+        let select_above = item("Select Split Above", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::ArrowUp)), KeyAction::NavigatePane(Direction::Up));
+        let select_below = item("Select Split Below", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::ArrowDown)), KeyAction::NavigatePane(Direction::Down));
+        let select_left = item("Select Split Left", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::ArrowLeft)), KeyAction::NavigatePane(Direction::Left));
+        let select_right = item("Select Split Right", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::ArrowRight)), KeyAction::NavigatePane(Direction::Right));
+        let equalize = item("Equalize Splits", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::CONTROL), Code::Equal)), KeyAction::EqualizeSplits);
+        let resize_up = item("Resize Split Up", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::CONTROL), Code::ArrowUp)), KeyAction::ResizePane(Direction::Up));
+        let resize_down = item("Resize Split Down", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::CONTROL), Code::ArrowDown)), KeyAction::ResizePane(Direction::Down));
+        let resize_left = item("Resize Split Left", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::CONTROL), Code::ArrowLeft)), KeyAction::ResizePane(Direction::Left));
+        let resize_right = item("Resize Split Right", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::CONTROL), Code::ArrowRight)), KeyAction::ResizePane(Direction::Right));
+        let next_tab = item("Next Tab", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::BracketRight)), KeyAction::NextTab);
+        let prev_tab = item("Previous Tab", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::BracketLeft)), KeyAction::PreviousTab);
+        let workspace_switcher = item("Workspace Switcher", None, KeyAction::OpenWorkspaceSwitcher);
 
         window
             .append_items(&[
@@ -403,20 +172,9 @@ impl AppMenu {
         // ----------------------------------------------------------------
         let help = Submenu::new("Help", true);
 
-        let arcterm_help = MenuItem::new("Arcterm Help", true, None);
-        let debug_info = MenuItem::new(
-            "Show Debug Info",
-            true,
-            Some(Accelerator::new(
-                Some(Modifiers::SUPER | Modifiers::ALT),
-                Code::KeyI,
-            )),
-        );
-        let report_issue = MenuItem::new("Report Issue", true, None);
-
-        id_map.insert(arcterm_help.id().clone(), KeyAction::OpenHelp);
-        id_map.insert(debug_info.id().clone(), KeyAction::ShowDebugInfo);
-        id_map.insert(report_issue.id().clone(), KeyAction::ReportIssue);
+        let arcterm_help = item("Arcterm Help", None, KeyAction::OpenHelp);
+        let debug_info = item("Show Debug Info", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::KeyI)), KeyAction::ShowDebugInfo);
+        let report_issue = item("Report Issue", None, KeyAction::ReportIssue);
 
         help.append_items(&[&arcterm_help, &debug_info, &PredefinedMenuItem::separator(), &report_issue])
             .expect("help menu append_items failed");

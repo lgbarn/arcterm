@@ -692,6 +692,25 @@ enum DispatchOutcome {
 
 impl AppState {
     // -----------------------------------------------------------------------
+    // Pane resource cleanup
+    // -----------------------------------------------------------------------
+
+    /// Remove a pane and all associated per-pane state from every map.
+    ///
+    /// This is the single authoritative removal path.  Call it everywhere a
+    /// pane is torn down so no map is accidentally left with a stale entry.
+    fn remove_pane_resources(&mut self, id: PaneId) {
+        self.panes.remove(&id);
+        self.image_channels.remove(&id);
+        self.nvim_states.remove(&id);
+        self.ai_states.remove(&id);
+        self.pane_contexts.remove(&id);
+        self.auto_detectors.remove(&id);
+        self.structured_blocks.remove(&id);
+        self.cached_snapshots.remove(&id);
+    }
+
+    // -----------------------------------------------------------------------
     // Active-tab helpers
     // -----------------------------------------------------------------------
 
@@ -921,15 +940,8 @@ impl AppState {
 
         // Shut down all current panes and remove pane state.
         let all_ids: Vec<PaneId> = self.panes.keys().copied().collect();
-        for id in &all_ids {
-            self.panes.remove(id);
-            self.image_channels.remove(id);
-            self.auto_detectors.remove(id);
-            self.structured_blocks.remove(id);
-            self.cached_snapshots.remove(id);
-            self.nvim_states.remove(id);
-            self.ai_states.remove(id);
-            self.pane_contexts.remove(id);
+        for id in all_ids {
+            self.remove_pane_resources(id);
         }
         self.last_ai_pane = None;
 
@@ -1198,11 +1210,7 @@ impl AppState {
                     }
                     for id in removed_ids {
                         let lid = id;
-                        self.panes.remove(&lid);
-                        self.image_channels.remove(&lid);
-                        self.nvim_states.remove(&lid);
-                        self.ai_states.remove(&lid);
-                        self.pane_contexts.remove(&lid);
+                        self.remove_pane_resources(lid);
                         if self.last_ai_pane == Some(lid) {
                             self.last_ai_pane = None;
                         }
@@ -1220,11 +1228,7 @@ impl AppState {
                         self.tab_layouts[active] = new_root;
                     }
 
-                    self.panes.remove(&focused);
-                    self.image_channels.remove(&focused);
-                    self.nvim_states.remove(&focused);
-                    self.ai_states.remove(&focused);
-                    self.pane_contexts.remove(&focused);
+                    self.remove_pane_resources(focused);
                     if self.last_ai_pane == Some(focused) {
                         self.last_ai_pane = None;
                     }
@@ -1293,8 +1297,10 @@ impl AppState {
                     }
                     for id in removed_ids {
                         let lid = id;
-                        self.panes.remove(&lid);
-                        self.image_channels.remove(&lid);
+                        self.remove_pane_resources(lid);
+                        if self.last_ai_pane == Some(lid) {
+                            self.last_ai_pane = None;
+                        }
                     }
                     let new_focus = self.tab_manager.active_tab().focus;
                     self.set_focused_pane(new_focus);
@@ -1892,15 +1898,9 @@ impl ApplicationHandler for App {
             // while dispatch_action() needs &mut self.
             let action = state.app_menu.action_for_id(&menu_event.id).cloned();
             if let Some(action) = action {
-                match state.dispatch_action(&action) {
-                    DispatchOutcome::Redraw => {
-                        state.window.request_redraw();
-                    }
-                    DispatchOutcome::Exit => {
-                        event_loop.exit();
-                        return;
-                    }
-                    DispatchOutcome::None => {}
+                execute_key_action(state, event_loop, action);
+                if event_loop.exiting() {
+                    return;
                 }
             }
         }
@@ -2307,13 +2307,7 @@ impl ApplicationHandler for App {
                 state.tab_layouts[active] = new_root;
             }
 
-            state.panes.remove(&id);
-            state.image_channels.remove(&id);
-            state.auto_detectors.remove(&id);
-            state.structured_blocks.remove(&id);
-            state.cached_snapshots.remove(&id);
-            state.ai_states.remove(&id);
-            state.pane_contexts.remove(&id);
+            state.remove_pane_resources(id);
             if state.last_ai_pane == Some(id) {
                 state.last_ai_pane = None;
             }
@@ -3194,9 +3188,16 @@ impl ApplicationHandler for App {
                                 state.window.request_redraw();
                             }
                             OverlayAction::Edit(path) => {
-                                // Close overlay review and spawn .
+                                // Close overlay review and spawn editor.
+                                // Split on whitespace so EDITOR="code --wait" works correctly.
                                 let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".into());
-                                let _ = std::process::Command::new(&editor).arg(&path).spawn();
+                                let parts: Vec<&str> = editor.split_whitespace().collect();
+                                if let Some((&cmd, args)) = parts.split_first() {
+                                    let _ = std::process::Command::new(cmd)
+                                        .args(args)
+                                        .arg(&path)
+                                        .spawn();
+                                }
                                 // overlay_review stays None (taken above)
                                 state.window.request_redraw();
                             }
@@ -3385,18 +3386,8 @@ impl ApplicationHandler for App {
                         }
 
                         other => {
-                            // All other actions are dispatched through the shared
-                            // dispatch_action() method, which is also used by menu events.
-                            match state.dispatch_action(&other) {
-                                DispatchOutcome::Redraw => {
-                                    state.window.request_redraw();
-                                }
-                                DispatchOutcome::Exit => {
-                                    event_loop.exit();
-                                    return;
-                                }
-                                DispatchOutcome::None => {}
-                            }
+                            // All other actions route through the single dispatch helper.
+                            execute_key_action(state, event_loop, other);
                         }
 
                     }
@@ -3417,14 +3408,14 @@ impl ApplicationHandler for App {
 // ---------------------------------------------------------------------------
 
 fn execute_key_action(state: &mut AppState, event_loop: &ActiveEventLoop, action: KeyAction) {
-    // Delegate to the shared dispatcher.  The caller (palette execute path) is
-    // responsible for calling state.window.request_redraw() after this returns
-    // when needed; the redraw call is already present at the call site.
     match state.dispatch_action(&action) {
+        DispatchOutcome::Redraw => {
+            state.window.request_redraw();
+        }
         DispatchOutcome::Exit => {
             event_loop.exit();
         }
-        DispatchOutcome::Redraw | DispatchOutcome::None => {}
+        DispatchOutcome::None => {}
     }
 }
 
