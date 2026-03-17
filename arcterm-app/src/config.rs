@@ -16,6 +16,25 @@ use serde::{Deserialize, Serialize};
 // Public types
 // ---------------------------------------------------------------------------
 
+/// AI assistant configuration (Ollama backend).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct AiConfig {
+    /// Ollama API endpoint URL.
+    pub endpoint: String,
+    /// Model name to use for completions.
+    pub model: String,
+}
+
+impl Default for AiConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: "http://localhost:11434".to_string(),
+            model: "qwen2.5-coder:7b".to_string(),
+        }
+    }
+}
+
 /// Full Arcterm configuration, sourced from `config.toml`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -48,6 +67,9 @@ pub struct ArctermConfig {
     #[serde(default)]
     #[allow(dead_code)] // read by Wave-2 keymap and tab-bar rendering
     pub multiplexer: MultiplexerConfig,
+    /// AI assistant settings (Ollama backend).
+    #[serde(default)]
+    pub ai: AiConfig,
 }
 
 impl Default for ArctermConfig {
@@ -66,6 +88,7 @@ impl Default for ArctermConfig {
             colors: ColorOverrides::default(),
             keybindings: KeybindingConfig::default(),
             multiplexer: MultiplexerConfig::default(),
+            ai: AiConfig::default(),
         }
     }
 }
@@ -775,5 +798,34 @@ mod tests {
             cfg.scrollback_lines > 0,
             "scrollback_lines must be positive"
         );
+    }
+
+    // -- AiConfig defaults and TOML overrides ---------------------------------
+
+    #[test]
+    fn ai_config_defaults() {
+        let cfg = ArctermConfig::default();
+        assert_eq!(cfg.ai.endpoint, "http://localhost:11434");
+        assert_eq!(cfg.ai.model, "qwen2.5-coder:7b");
+    }
+
+    #[test]
+    fn ai_config_toml_overrides() {
+        let toml = r#"
+            [ai]
+            endpoint = "http://localhost:9999"
+            model = "llama3:8b"
+        "#;
+        let cfg: ArctermConfig = toml::from_str(toml).expect("valid TOML");
+        assert_eq!(cfg.ai.endpoint, "http://localhost:9999");
+        assert_eq!(cfg.ai.model, "llama3:8b");
+    }
+
+    #[test]
+    fn ai_config_omitted_uses_defaults() {
+        let toml = r#"font_size = 16.0"#;
+        let cfg: ArctermConfig = toml::from_str(toml).expect("valid TOML");
+        assert_eq!(cfg.ai.endpoint, "http://localhost:11434");
+        assert_eq!(cfg.ai.model, "qwen2.5-coder:7b");
     }
 }
