@@ -128,19 +128,54 @@ fn build_test_snapshot(rows: usize, cols: usize) -> RenderSnapshot {
     let mut cells: Vec<SnapshotCell> = vec![SnapshotCell::default(); rows * cols];
 
     // Row 0: "Hello, Arcterm!" in default colors.
-    write_row(&mut cells, 0, cols, "Hello, Arcterm!", SnapshotColor::Default, false);
+    write_row(
+        &mut cells,
+        0,
+        cols,
+        "Hello, Arcterm!",
+        SnapshotColor::Default,
+        false,
+    );
 
     // Row 1: bright red label.
-    write_row(&mut cells, 1, cols, "  Red text row", SnapshotColor::Indexed(9), false);
+    write_row(
+        &mut cells,
+        1,
+        cols,
+        "  Red text row",
+        SnapshotColor::Indexed(9),
+        false,
+    );
 
     // Row 2: bright green label.
-    write_row(&mut cells, 2, cols, "  Green text row", SnapshotColor::Indexed(10), false);
+    write_row(
+        &mut cells,
+        2,
+        cols,
+        "  Green text row",
+        SnapshotColor::Indexed(10),
+        false,
+    );
 
     // Row 3: bright cyan label.
-    write_row(&mut cells, 3, cols, "  Cyan text row", SnapshotColor::Indexed(14), false);
+    write_row(
+        &mut cells,
+        3,
+        cols,
+        "  Cyan text row",
+        SnapshotColor::Indexed(14),
+        false,
+    );
 
     // Row 4: true-color RGB example (orange).
-    write_row(&mut cells, 4, cols, "  RGB orange text", SnapshotColor::Rgb(255, 165, 0), false);
+    write_row(
+        &mut cells,
+        4,
+        cols,
+        "  RGB orange text",
+        SnapshotColor::Rgb(255, 165, 0),
+        false,
+    );
 
     // Row 5: color cube strip (indices 16–51).
     if rows > 5 {

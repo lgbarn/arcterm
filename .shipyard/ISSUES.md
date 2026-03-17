@@ -365,6 +365,110 @@ Non-blocking findings logged by the review agent. Resolve before the phase close
 - **Description:** The pane exit removal loop captures `let active = state.tab_manager.active` once before iterating `closed_panes`. `state.tab_layouts[active].close(id)` is called for every exited pane, but if the pane belongs to a background tab (a tab other than the one currently being displayed), `close()` returns `None` — the pane is not in the active tab's tree — and the stale `Leaf` node is left in the background tab's layout indefinitely. In the current single-tab-workflow the bug is dormant, but any multi-tab usage where a pane exits while the user is viewing a different tab will produce a permanently stale layout for that background tab.
 - **Remediation:** Add a helper `fn tab_index_for_pane(&self, id: PaneId) -> Option<usize>` on `AppState` that iterates `self.tab_layouts.iter().enumerate()` calling `all_pane_ids()` on each, returning the index of the tab whose layout contains `id`. In the removal loop, call this helper to route `close(id)` to the correct tab index rather than always using `active`.
 
+### REVIEW-T2-A — `AppMenu::new()` panics on submenu construction failure
+
+- **Severity:** Important
+- **Source:** REVIEW Task 2 (menu.rs)
+- **File:** `/Users/lgbarn/Personal/arcterm/arcterm-app/src/menu.rs:100-101, 177-178, 227-228, 398-399, 421-422, 427-428`
+- **Description:** All six `append_items` calls use `.expect("... append_items failed")`. On a platform where `muda` cannot construct the menu bar (unsupported compositor, Wayland without XDG decoration, headless test runner), the process panics with no graceful degradation. Menu construction happens in `resumed()` which should propagate failure back to the event loop rather than aborting.
+- **Remediation:** Change `AppMenu::new()` to return `Result<Self, muda::Error>`, replace all `.expect()` calls with `?`, and update the call site in Task 3 to handle the error with `log::error!` + `event_loop.exit()`, consistent with the pattern established for PTY and GPU init failures.
+
+### REVIEW-T2-B — `id_map` HashMap not pre-allocated
+
+- **Severity:** Important
+- **Source:** REVIEW Task 2 (menu.rs)
+- **File:** `/Users/lgbarn/Personal/arcterm/arcterm-app/src/menu.rs:37`
+- **Description:** `HashMap::new()` is used. The map will receive exactly 34 insertions (6 Shell + 8 Edit + 6 View + 14 Window + 3 Help), causing the default HashMap to rehash twice during construction.
+- **Remediation:** Change to `HashMap::with_capacity(40)` to eliminate all rehash allocations during `AppMenu::new()`.
+
+### REVIEW-T4-A — `execute_key_action` silently discards `DispatchOutcome::Redraw`
+
+- **Severity:** Important
+- **Source:** REVIEW Task 4 (dispatch_action)
+- **File:** `/Users/lgbarn/Personal/arcterm/arcterm-app/src/main.rs:3265-3269`
+- **Description:** `execute_key_action` merges the `Redraw` and `None` arms with `DispatchOutcome::Redraw | DispatchOutcome::None => {}`. The call site at line 2970 issues an unconditional `state.window.request_redraw()` immediately after, which masks the bug for the currently mapped palette actions. However, any future palette action whose `dispatch_action` returns `DispatchOutcome::None` (e.g. a no-op stub) will still trigger an unnecessary redraw, and conversely if a future caller calls `execute_key_action` without the trailing unconditional redraw, a genuine `Redraw` outcome will be silently dropped. The contract is ambiguous: the comment says "caller is responsible for calling request_redraw()" but the function signature gives no indication of this obligation.
+- **Remediation:** Return `DispatchOutcome` from `execute_key_action` and let the call site branch on it explicitly: `if execute_key_action(state, event_loop, key_action) == DispatchOutcome::Redraw { state.window.request_redraw(); }`. Alternatively, handle `Redraw` inside the function and remove the unconditional trailing redraw at the call site, making the function self-contained.
+
+### REVIEW-T4-B — Keyboard handler `other` arm holds an extra implicit borrow risk via `focused_plugin_id`
+
+- **Severity:** Suggestion
+- **Source:** REVIEW Task 4 (dispatch_action)
+- **File:** `/Users/lgbarn/Personal/arcterm/arcterm-app/src/main.rs:3161-3244`
+- **Description:** `focused_plugin_id` is computed by calling a nested function over `state.active_layout()` which borrows `state`. This borrow ends before `match action`, so the borrow checker is satisfied today. However the `find_plugin_id` closure is defined inline inside the `WindowEvent::KeyboardInput` arm each time a key is pressed, adding a non-trivial amount of code to a hot path. This is a readability and potential maintenance burden — future additions to the match arm (particularly any that also borrow `state` immutably) risk confusing the borrow lifetimes.
+- **Remediation:** Hoist `find_plugin_id` to a module-level free function (`fn find_plugin_id(node: &PaneNode, target: PaneId) -> Option<String>`) or add it as an associated function on `PaneNode`. This keeps the hot path clean and makes the helper independently testable.
+
+### REVIEW-T5-A — `ClearScrollback` sends `\x1b[3J` to PTY stdin instead of the terminal emulator
+
+- **Severity:** Important
+- **Source:** REVIEW Task 5 (menu-only action handlers)
+- **File:** `/Users/lgbarn/Personal/arcterm/arcterm-app/src/main.rs:1479`
+- **Description:** `KeyAction::ClearScrollback` calls `terminal.write_input(b"\x1b[3J")`. `write_input` sends bytes to the PTY writer thread — the shell's stdin — not to the terminal emulator's output parser. The shell (bash/zsh) will receive the raw ESC bytes as keyboard input and misinterpret them. The emulator never sees `\x1b[3J` and the scrollback is never cleared. The correct API to clear history is `terminal.with_term_mut(|t| t.grid_mut().clear_history())` which calls `Grid::clear_history()` from alacritty_terminal 0.25.1 directly.
+- **Remediation:** Replace `terminal.write_input(b"\x1b[3J")` with `terminal.with_term_mut(|t| t.grid_mut().clear_history())`. Remove the `write_input` call entirely.
+
+### REVIEW-T5-B — `ResetTerminal` sends `\x1bc` to PTY stdin instead of the terminal emulator
+
+- **Severity:** Important
+- **Source:** REVIEW Task 5 (menu-only action handlers)
+- **File:** `/Users/lgbarn/Personal/arcterm/arcterm-app/src/main.rs:1552`
+- **Description:** `KeyAction::ResetTerminal` calls `terminal.write_input(b"\x1bc")`. Same mechanism as REVIEW-T5-A: `write_input` routes bytes to the shell's stdin. The RIS sequence `\x1bc` will be received by the shell as literal keyboard input (e.g., bash treats `ESC c` as `alt+c` → capitalize-word in readline), not as an emulator reset. The correct approach is to call `terminal.with_term_mut(|t| t.reset_state())` if that API exists, or inject the sequence into the PTY's output/master side. Check the alacritty_terminal `Term` API for a `reset` or `reset_state` method.
+- **Remediation:** Investigate `alacritty_terminal::term::Term::reset_state()` or equivalent in 0.25.1. If available, call `terminal.with_term_mut(|t| t.reset_state())`. If not, expose a `reset()` helper in `Terminal` that locks the term and calls the appropriate reset API directly rather than routing through `write_input`.
+
+### REVIEW-T5-C — `ShowDebugInfo` writes debug text to shell stdin via `write_input`
+
+- **Severity:** Important
+- **Source:** REVIEW Task 5 (menu-only action handlers)
+- **File:** `/Users/lgbarn/Personal/arcterm/arcterm-app/src/main.rs:1571-1581`
+- **Description:** `KeyAction::ShowDebugInfo` calls `terminal.write_input(info.as_bytes())` to "write to terminal". This sends the multi-line debug string as raw input to whatever program is running in the focused pane. In an interactive shell this corrupts the readline buffer; in a running program (nvim, less) it injects bytes as keystrokes. The spec says "writes to terminal" intending the displayed output, not the program's stdin. The `log::info!` call before it already surfaces the information to the log.
+- **Remediation:** Remove the `write_input` call. Either: (a) keep only the `log::info!` for now and note this as a follow-up for a proper overlay, or (b) implement a transient overlay `DebugInfoOverlay` state on `AppState` that is rendered in the next frame and dismissed on any key, consistent with the palette/workspace-switcher overlay pattern already in use. The spec's plan note says "For now just log it. A proper overlay can come later." — the remediation should be to remove the `write_input` call and leave only the log line.
+
+### REVIEW-T5-D — `IncreaseFontSize` has no upper-bound clamp and font change is not propagated to renderer
+
+- **Severity:** Important
+- **Source:** REVIEW Task 5 (menu-only action handlers)
+- **File:** `/Users/lgbarn/Personal/arcterm/arcterm-app/src/main.rs:1484-1487`
+- **Description:** Two related gaps: (1) `IncreaseFontSize` adds 1.0 to `config.font_size` with no upper bound. A user pressing the increase menu item many times can set `font_size` to arbitrarily large values. `DecreaseFontSize` correctly clamps to `min(6.0)` but `IncreaseFontSize` has no symmetric `max`. (2) None of the three font-size handlers call any renderer method to apply the change. `config.font_size` is mutated but the `Renderer` continues using the size it was initialized with. The plan acknowledges `renderer.update_font_size()` does not exist and defers it, but without propagation the font size menu items do nothing visible to the user.
+- **Remediation:** (1) Add `.min(72.0)` clamp to `IncreaseFontSize`: `self.config.font_size = (self.config.font_size + 1.0).min(72.0)`. (2) Add a `Renderer::set_font_size(size: f32)` method in `arcterm-render` that re-creates the `TextAtlas` with the new metrics and re-measures cell size, then call it from all three font-size handlers.
+
+### REVIEW-T5-E — `PaneNode::equalize()` has no unit test
+
+- **Severity:** Suggestion
+- **Source:** REVIEW Task 5 (menu-only action handlers)
+- **File:** `/Users/lgbarn/Personal/arcterm/arcterm-app/src/layout.rs:474-488`
+- **Description:** The `equalize()` method is a new public API with no test coverage. The existing layout test suite in `layout.rs` covers split, close, focus, resize, and rect operations — all methods that `equalize` is peer to. A tree with nested HSplit/VSplit nodes at non-0.5 ratios is the primary test scenario; both the recursive normalization and the leaf/PluginPane base case should be covered.
+- **Remediation:** Add two tests in `layout.rs mod tests`: (1) `equalize_flat_tree_sets_all_ratios_to_half` — build a three-pane HSplit (left=Leaf, right=VSplit(Leaf, Leaf)) with ratios 0.3/0.7, call `equalize()`, assert all ratios are 0.5. (2) `equalize_leaf_is_noop` — call `equalize()` on a `Leaf` node and assert it does not panic.
+
+### ISSUE-027 — CloseTab missing pane-state cleanup (nvim_states, ai_states, pane_contexts)
+- **Severity:** high
+- **Source:** simplifier (phase 15)
+- **Date:** 2026-03-16
+- **File:** `arcterm-app/src/main.rs:1287-1306`
+- **Description:** The `KeyAction::CloseTab` handler removes panes from `self.panes` and `self.image_channels` but does not remove entries from `self.nvim_states`, `self.ai_states`, or `self.pane_contexts`. The `ClosePane` arms both perform all five removals. The gap exists because the three cleanup loops were written independently (copy-paste drift).
+- **Remediation:** Extract a `fn remove_pane_resources(&mut self, id: PaneId)` method that performs all five map removals plus the `last_ai_pane` null-out. Replace all three loop bodies with calls to this method.
+
+### ISSUE-028 — DispatchOutcome match arms copy-pasted at three call sites; palette path silently drops Redraw
+- **Severity:** medium
+- **Source:** simplifier (phase 15)
+- **Date:** 2026-03-16
+- **File:** `arcterm-app/src/main.rs:1895-1904, 3390-3399, 3423-3428`
+- **Description:** The three-arm `DispatchOutcome` match (`Redraw => request_redraw()`, `Exit => exit()`, `None => {}`) is copy-pasted at every `dispatch_action` call site. The palette call site at line 3423 omits `request_redraw()` for the `Redraw` arm, silently dropping the signal. An `execute_key_action` wrapper function exists (line 3419) but is not used at the two main call sites.
+- **Remediation:** Route all call sites through `execute_key_action` (or an equivalent helper that also handles `request_redraw`), eliminating the copy-paste and the dropped-Redraw divergence.
+
+### ISSUE-029 — menu.rs construct-then-insert pattern repeated 27 times with no helper
+- **Severity:** medium
+- **Source:** simplifier (phase 15)
+- **Date:** 2026-03-16
+- **File:** `arcterm-app/src/menu.rs:50-419`
+- **Description:** Every menu item requires three lines: `MenuItem::new`, `id_map.insert(item.id().clone(), ...)`, plus a reference in the `append_items` slice. The `.id().clone()` call and `true` enabled flag appear 27 times each. A comment at line 39 acknowledges the desire for a helper but defers it.
+- **Remediation:** Add a local closure `let mut item = |label, accel, action| -> MenuItem { ... }` inside `AppMenu::new()` that constructs, registers, and returns the item. Each of the 27 call sites becomes a single line.
+
+### ISSUE-030 — SaveWorkspace date arithmetic is an inline opaque algorithm (untestable)
+- **Severity:** medium
+- **Source:** simplifier (phase 15)
+- **Date:** 2026-03-16
+- **File:** `arcterm-app/src/main.rs:1322-1343`
+- **Description:** A 20-line Proleptic Gregorian date algorithm (Hinnant civil-from-days) is inlined inside a `match` arm, making it untestable and unattributed. It is the only date-formatting site in the codebase.
+- **Remediation:** Extract to a `fn session_timestamp_name() -> String` function with a doc comment crediting the algorithm. Consider using `chrono` or `time` if either is already a transitive dependency.
+
 ---
 
 ## Resolved

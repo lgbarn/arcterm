@@ -10,8 +10,8 @@
 use std::collections::HashMap;
 
 use muda::{
-    accelerator::{Accelerator, Code, Modifiers},
     Menu, MenuId, MenuItem, PredefinedMenuItem, Submenu,
+    accelerator::{Accelerator, Code, Modifiers},
 };
 
 use crate::keymap::KeyAction;
@@ -49,14 +49,48 @@ impl AppMenu {
         // ----------------------------------------------------------------
         let shell = Submenu::new("Shell", true);
 
-        let new_window = item("New Window", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyN)), KeyAction::NewWindow);
-        let new_tab = item("New Tab", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyT)), KeyAction::NewTab);
-        let split_right = item("Split Right", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyD)), KeyAction::Split(Axis::Horizontal));
-        let split_down = item("Split Down", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyD)), KeyAction::Split(Axis::Vertical));
-        let close_pane = item("Close Pane", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyW)), KeyAction::ClosePane);
-        let close_tab = item("Close Tab", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyW)), KeyAction::CloseTab);
+        let new_window = item(
+            "New Window",
+            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyN)),
+            KeyAction::NewWindow,
+        );
+        let new_tab = item(
+            "New Tab",
+            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyT)),
+            KeyAction::NewTab,
+        );
+        let split_right = item(
+            "Split Right",
+            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyD)),
+            KeyAction::Split(Axis::Horizontal),
+        );
+        let split_down = item(
+            "Split Down",
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::SHIFT),
+                Code::KeyD,
+            )),
+            KeyAction::Split(Axis::Vertical),
+        );
+        let close_pane = item(
+            "Close Pane",
+            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyW)),
+            KeyAction::ClosePane,
+        );
+        let close_tab = item(
+            "Close Tab",
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::SHIFT),
+                Code::KeyW,
+            )),
+            KeyAction::CloseTab,
+        );
         let reset_terminal = item("Reset Terminal", None, KeyAction::ResetTerminal);
-        let quit = item("Quit Arcterm", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyQ)), KeyAction::Quit);
+        let quit = item(
+            "Quit Arcterm",
+            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyQ)),
+            KeyAction::Quit,
+        );
 
         shell
             .append_items(&[
@@ -80,14 +114,52 @@ impl AppMenu {
         // ----------------------------------------------------------------
         let edit = Submenu::new("Edit", true);
 
-        let copy = item("Copy", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyC)), KeyAction::Copy);
-        let paste = item("Paste", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyV)), KeyAction::Paste);
-        let select_all = item("Select All", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyA)), KeyAction::SelectAll);
-        let find = item("Find...", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyF)), KeyAction::CrossPaneSearch);
-        let find_next = item("Find Next", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyG)), KeyAction::SearchNext);
-        let find_prev = item("Find Previous", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyG)), KeyAction::SearchPrevious);
-        let clear_scrollback = item("Clear Scrollback", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyK)), KeyAction::ClearScrollback);
-        let command_palette = item("Command Palette", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyP)), KeyAction::OpenPalette);
+        let copy = item(
+            "Copy",
+            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyC)),
+            KeyAction::Copy,
+        );
+        let paste = item(
+            "Paste",
+            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyV)),
+            KeyAction::Paste,
+        );
+        let select_all = item(
+            "Select All",
+            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyA)),
+            KeyAction::SelectAll,
+        );
+        let find = item(
+            "Find...",
+            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyF)),
+            KeyAction::CrossPaneSearch,
+        );
+        let find_next = item(
+            "Find Next",
+            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyG)),
+            KeyAction::SearchNext,
+        );
+        let find_prev = item(
+            "Find Previous",
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::SHIFT),
+                Code::KeyG,
+            )),
+            KeyAction::SearchPrevious,
+        );
+        let clear_scrollback = item(
+            "Clear Scrollback",
+            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyK)),
+            KeyAction::ClearScrollback,
+        );
+        let command_palette = item(
+            "Command Palette",
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::SHIFT),
+                Code::KeyP,
+            )),
+            KeyAction::OpenPalette,
+        );
 
         edit.append_items(&[
             &copy,
@@ -110,10 +182,29 @@ impl AppMenu {
         // ----------------------------------------------------------------
         let view = Submenu::new("View", true);
 
-        let increase_font = item("Increase Font Size", Some(Accelerator::new(Some(Modifiers::SUPER), Code::Equal)), KeyAction::IncreaseFontSize);
-        let decrease_font = item("Decrease Font Size", Some(Accelerator::new(Some(Modifiers::SUPER), Code::Minus)), KeyAction::DecreaseFontSize);
-        let reset_font = item("Reset Font Size", Some(Accelerator::new(Some(Modifiers::SUPER), Code::Digit0)), KeyAction::ResetFontSize);
-        let toggle_fullscreen = item("Toggle Full Screen", Some(Accelerator::new(Some(Modifiers::CONTROL | Modifiers::SUPER), Code::KeyF)), KeyAction::ToggleFullScreen);
+        let increase_font = item(
+            "Increase Font Size",
+            Some(Accelerator::new(Some(Modifiers::SUPER), Code::Equal)),
+            KeyAction::IncreaseFontSize,
+        );
+        let decrease_font = item(
+            "Decrease Font Size",
+            Some(Accelerator::new(Some(Modifiers::SUPER), Code::Minus)),
+            KeyAction::DecreaseFontSize,
+        );
+        let reset_font = item(
+            "Reset Font Size",
+            Some(Accelerator::new(Some(Modifiers::SUPER), Code::Digit0)),
+            KeyAction::ResetFontSize,
+        );
+        let toggle_fullscreen = item(
+            "Toggle Full Screen",
+            Some(Accelerator::new(
+                Some(Modifiers::CONTROL | Modifiers::SUPER),
+                Code::KeyF,
+            )),
+            KeyAction::ToggleFullScreen,
+        );
         let config_overlay = item("Config Overlay", None, KeyAction::ReviewOverlay);
         let plan_status = item("Plan Status", None, KeyAction::TogglePlanView);
 
@@ -134,19 +225,100 @@ impl AppMenu {
         // ----------------------------------------------------------------
         let window = Submenu::new("Window", true);
 
-        let minimize = item("Minimize", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyM)), KeyAction::Minimize);
+        let minimize = item(
+            "Minimize",
+            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyM)),
+            KeyAction::Minimize,
+        );
         let zoom_split = item("Zoom Split", None, KeyAction::ToggleZoom);
-        let select_above = item("Select Split Above", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::ArrowUp)), KeyAction::NavigatePane(Direction::Up));
-        let select_below = item("Select Split Below", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::ArrowDown)), KeyAction::NavigatePane(Direction::Down));
-        let select_left = item("Select Split Left", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::ArrowLeft)), KeyAction::NavigatePane(Direction::Left));
-        let select_right = item("Select Split Right", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::ArrowRight)), KeyAction::NavigatePane(Direction::Right));
-        let equalize = item("Equalize Splits", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::CONTROL), Code::Equal)), KeyAction::EqualizeSplits);
-        let resize_up = item("Resize Split Up", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::CONTROL), Code::ArrowUp)), KeyAction::ResizePane(Direction::Up));
-        let resize_down = item("Resize Split Down", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::CONTROL), Code::ArrowDown)), KeyAction::ResizePane(Direction::Down));
-        let resize_left = item("Resize Split Left", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::CONTROL), Code::ArrowLeft)), KeyAction::ResizePane(Direction::Left));
-        let resize_right = item("Resize Split Right", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::CONTROL), Code::ArrowRight)), KeyAction::ResizePane(Direction::Right));
-        let next_tab = item("Next Tab", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::BracketRight)), KeyAction::NextTab);
-        let prev_tab = item("Previous Tab", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::BracketLeft)), KeyAction::PreviousTab);
+        let select_above = item(
+            "Select Split Above",
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::ALT),
+                Code::ArrowUp,
+            )),
+            KeyAction::NavigatePane(Direction::Up),
+        );
+        let select_below = item(
+            "Select Split Below",
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::ALT),
+                Code::ArrowDown,
+            )),
+            KeyAction::NavigatePane(Direction::Down),
+        );
+        let select_left = item(
+            "Select Split Left",
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::ALT),
+                Code::ArrowLeft,
+            )),
+            KeyAction::NavigatePane(Direction::Left),
+        );
+        let select_right = item(
+            "Select Split Right",
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::ALT),
+                Code::ArrowRight,
+            )),
+            KeyAction::NavigatePane(Direction::Right),
+        );
+        let equalize = item(
+            "Equalize Splits",
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::CONTROL),
+                Code::Equal,
+            )),
+            KeyAction::EqualizeSplits,
+        );
+        let resize_up = item(
+            "Resize Split Up",
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::CONTROL),
+                Code::ArrowUp,
+            )),
+            KeyAction::ResizePane(Direction::Up),
+        );
+        let resize_down = item(
+            "Resize Split Down",
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::CONTROL),
+                Code::ArrowDown,
+            )),
+            KeyAction::ResizePane(Direction::Down),
+        );
+        let resize_left = item(
+            "Resize Split Left",
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::CONTROL),
+                Code::ArrowLeft,
+            )),
+            KeyAction::ResizePane(Direction::Left),
+        );
+        let resize_right = item(
+            "Resize Split Right",
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::CONTROL),
+                Code::ArrowRight,
+            )),
+            KeyAction::ResizePane(Direction::Right),
+        );
+        let next_tab = item(
+            "Next Tab",
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::SHIFT),
+                Code::BracketRight,
+            )),
+            KeyAction::NextTab,
+        );
+        let prev_tab = item(
+            "Previous Tab",
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::SHIFT),
+                Code::BracketLeft,
+            )),
+            KeyAction::PreviousTab,
+        );
         let workspace_switcher = item("Workspace Switcher", None, KeyAction::OpenWorkspaceSwitcher);
 
         window
@@ -179,11 +351,23 @@ impl AppMenu {
         let help = Submenu::new("Help", true);
 
         let arcterm_help = item("Arcterm Help", None, KeyAction::OpenHelp);
-        let debug_info = item("Show Debug Info", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::KeyI)), KeyAction::ShowDebugInfo);
+        let debug_info = item(
+            "Show Debug Info",
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::ALT),
+                Code::KeyI,
+            )),
+            KeyAction::ShowDebugInfo,
+        );
         let report_issue = item("Report Issue", None, KeyAction::ReportIssue);
 
-        help.append_items(&[&arcterm_help, &debug_info, &PredefinedMenuItem::separator(), &report_issue])
-            .expect("help menu append_items failed");
+        help.append_items(&[
+            &arcterm_help,
+            &debug_info,
+            &PredefinedMenuItem::separator(),
+            &report_issue,
+        ])
+        .expect("help menu append_items failed");
 
         // ----------------------------------------------------------------
         // Assemble top-level bar

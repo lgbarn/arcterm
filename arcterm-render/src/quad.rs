@@ -84,10 +84,7 @@ pub struct QuadRenderer {
 
 impl QuadRenderer {
     /// Create the pipeline.  Call once at startup.
-    pub fn new(
-        device: &wgpu::Device,
-        surface_format: wgpu::TextureFormat,
-    ) -> Self {
+    pub fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
         // ---- Shader --------------------------------------------------------
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("quad shader"),
@@ -103,20 +100,19 @@ impl QuadRenderer {
         });
 
         // ---- Bind group layout + group -------------------------------------
-        let bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("quad bind group layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("quad bind group layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("quad bind group"),
@@ -128,12 +124,11 @@ impl QuadRenderer {
         });
 
         // ---- Pipeline layout -----------------------------------------------
-        let pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("quad pipeline layout"),
-                bind_group_layouts: &[&bind_group_layout],
-                ..Default::default()
-            });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("quad pipeline layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            ..Default::default()
+        });
 
         // ---- Render pipeline -----------------------------------------------
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -208,20 +203,28 @@ impl QuadRenderer {
             // Two triangles (CW winding, y-down pixel space):
             //   top-left, top-right, bottom-left
             //   top-right, bottom-right, bottom-left
-            let tl = QuadVertex { position: [x,     y    ], color };
-            let tr = QuadVertex { position: [x + w, y    ], color };
-            let bl = QuadVertex { position: [x,     y + h], color };
-            let br = QuadVertex { position: [x + w, y + h], color };
+            let tl = QuadVertex {
+                position: [x, y],
+                color,
+            };
+            let tr = QuadVertex {
+                position: [x + w, y],
+                color,
+            };
+            let bl = QuadVertex {
+                position: [x, y + h],
+                color,
+            };
+            let br = QuadVertex {
+                position: [x + w, y + h],
+                color,
+            };
             vertices.extend_from_slice(&[tl, tr, bl, tr, br, bl]);
         }
 
         self.vertex_count = vertices.len() as u32;
         if !vertices.is_empty() {
-            queue.write_buffer(
-                &self.vertex_buffer,
-                0,
-                bytemuck::cast_slice(&vertices),
-            );
+            queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
         }
     }
 

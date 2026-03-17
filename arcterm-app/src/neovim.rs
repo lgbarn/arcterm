@@ -117,7 +117,10 @@ impl NvimRpcClient {
         let stream = UnixStream::connect(socket_path)?;
         stream.set_read_timeout(Some(Self::TIMEOUT))?;
         stream.set_write_timeout(Some(Self::TIMEOUT))?;
-        Ok(NvimRpcClient { stream, next_msgid: 1 })
+        Ok(NvimRpcClient {
+            stream,
+            next_msgid: 1,
+        })
     }
 
     /// Send a msgpack-RPC request and return the result value.
@@ -153,7 +156,7 @@ impl NvimRpcClient {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "unexpected msgpack-RPC response shape",
-                ))
+                ));
             }
         };
 
@@ -169,7 +172,9 @@ impl NvimRpcClient {
     fn read_value(&mut self) -> io::Result<Value> {
         // rmpv's decode::read_value reads directly from a Read impl.
         // We need a buffered reader to allow multiple read calls.
-        let mut reader = ReadableStream { inner: &mut self.stream };
+        let mut reader = ReadableStream {
+            inner: &mut self.stream,
+        };
         rmpv::decode::read_value(&mut reader)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
     }
@@ -197,10 +202,7 @@ impl NvimRpcClient {
 
     /// Call `nvim_win_get_position(win_id)` and return `(row, col)`.
     pub fn win_get_position(&mut self, win_id: i64) -> io::Result<(i64, i64)> {
-        let val = self.call(
-            "nvim_win_get_position",
-            vec![Value::Integer(win_id.into())],
-        )?;
+        let val = self.call("nvim_win_get_position", vec![Value::Integer(win_id.into())])?;
         match val {
             Value::Array(ref arr) if arr.len() == 2 => {
                 let row = extract_integer(&arr[0], "win_get_position row")?;
@@ -229,7 +231,10 @@ impl<'a> Read for ReadableStream<'a> {
 fn extract_integer(val: &Value, context: &str) -> io::Result<i64> {
     match val {
         Value::Integer(i) => i.as_i64().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, format!("{context}: integer overflow"))
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{context}: integer overflow"),
+            )
         }),
         Value::Ext(_, data) => {
             // Neovim encodes window/buffer handles as msgpack ext type.
@@ -245,7 +250,7 @@ fn extract_integer(val: &Value, context: &str) -> io::Result<i64> {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!("{context}: unexpected ext data length {}", data.len()),
-                    ))
+                    ));
                 }
             };
             Ok(id)
@@ -359,7 +364,10 @@ mod tests {
     #[test]
     fn neovim_state_is_fresh_after_creation() {
         let state = NeovimState::check(None);
-        assert!(state.is_fresh(), "state must be fresh immediately after check()");
+        assert!(
+            state.is_fresh(),
+            "state must be fresh immediately after check()"
+        );
     }
 
     // ── Task 2 tests: msgpack serialization ──────────────────────────────────

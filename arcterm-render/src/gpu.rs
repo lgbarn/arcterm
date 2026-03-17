@@ -51,7 +51,11 @@ impl GpuState {
 
         let size = window.inner_size();
         let caps = surface.get_capabilities(&adapter);
-        let surface_format = caps.formats.first().copied().unwrap_or(wgpu::TextureFormat::Bgra8UnormSrgb);
+        let surface_format = caps
+            .formats
+            .first()
+            .copied()
+            .unwrap_or(wgpu::TextureFormat::Bgra8UnormSrgb);
 
         // VSync: cap frame rate to display refresh rate, preventing tearing and idle GPU spinning.
         let present_mode = wgpu::PresentMode::Fifo;
@@ -62,7 +66,11 @@ impl GpuState {
                 caps.present_modes
             );
         }
-        log::info!("wgpu present mode: {:?} (fifo supported: {})", present_mode, fifo_available);
+        log::info!(
+            "wgpu present mode: {:?} (fifo supported: {})",
+            present_mode,
+            fifo_available
+        );
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,

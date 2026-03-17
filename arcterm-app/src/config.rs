@@ -282,9 +282,8 @@ impl ArctermConfig {
         let mut merged: toml::Value = {
             let path = Self::config_path();
             match std::fs::read_to_string(&path) {
-                Ok(text) if !text.trim().is_empty() => {
-                    toml::from_str(&text).unwrap_or_else(|_| toml::Value::Table(toml::map::Map::new()))
-                }
+                Ok(text) if !text.trim().is_empty() => toml::from_str(&text)
+                    .unwrap_or_else(|_| toml::Value::Table(toml::map::Map::new())),
                 _ => toml::Value::Table(toml::map::Map::new()),
             }
         };
@@ -409,11 +408,10 @@ pub fn watch_config() -> Option<mpsc::Receiver<ArctermConfig>> {
                 }
 
                 // Check that at least one path in the event matches config.toml.
-                let relevant = event.paths.iter().any(|p| {
-                    p.file_name()
-                        .map(|n| n == "config.toml")
-                        .unwrap_or(false)
-                });
+                let relevant = event
+                    .paths
+                    .iter()
+                    .any(|p| p.file_name().map(|n| n == "config.toml").unwrap_or(false));
 
                 if !relevant {
                     continue;
@@ -565,7 +563,10 @@ mod tests {
         assert_eq!(cfg.leader_key, "Ctrl+a", "default leader_key");
         assert_eq!(cfg.leader_timeout_ms, 500, "default leader_timeout_ms");
         assert!(cfg.show_tab_bar, "default show_tab_bar is true");
-        assert!((cfg.border_width - 1.0).abs() < 1e-5, "default border_width");
+        assert!(
+            (cfg.border_width - 1.0).abs() < 1e-5,
+            "default border_width"
+        );
         assert!(cfg.pane_navigation, "default pane_navigation is true");
     }
 
@@ -636,28 +637,40 @@ mod tests {
 
     #[test]
     fn merge_toml_merges_nested_tables() {
-        let mut base: toml::Value = toml::from_str(r#"
+        let mut base: toml::Value = toml::from_str(
+            r#"
             [multiplexer]
             leader_key = "Ctrl+a"
             leader_timeout_ms = 500
-        "#).unwrap();
-        let overlay: toml::Value = toml::from_str(r#"
+        "#,
+        )
+        .unwrap();
+        let overlay: toml::Value = toml::from_str(
+            r#"
             [multiplexer]
             leader_key = "Ctrl+b"
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
         super::merge_toml_values(&mut base, &overlay);
         // overlay wins on the changed key
         assert_eq!(base["multiplexer"]["leader_key"].as_str(), Some("Ctrl+b"));
         // base key absent in overlay is preserved
-        assert_eq!(base["multiplexer"]["leader_timeout_ms"].as_integer(), Some(500));
+        assert_eq!(
+            base["multiplexer"]["leader_timeout_ms"].as_integer(),
+            Some(500)
+        );
     }
 
     #[test]
     fn merge_toml_preserves_base_keys_absent_in_overlay() {
-        let mut base: toml::Value = toml::from_str(r#"
+        let mut base: toml::Value = toml::from_str(
+            r#"
             font_size = 14.0
             color_scheme = "cool-night"
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
         let overlay: toml::Value = toml::from_str(r#"font_size = 16.0"#).unwrap();
         super::merge_toml_values(&mut base, &overlay);
         assert_eq!(base["font_size"].as_float(), Some(16.0));
@@ -683,7 +696,11 @@ mod tests {
     #[test]
     fn flatten_to_string_returns_valid_toml_with_defaults() {
         let result = ArctermConfig::flatten_to_string();
-        assert!(result.is_ok(), "flatten_to_string must succeed: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "flatten_to_string must succeed: {:?}",
+            result
+        );
         let toml_str = result.unwrap();
         // Must contain default values
         assert!(toml_str.contains("font_size"), "must contain font_size key");
@@ -699,7 +716,10 @@ mod tests {
         let toml = r#"scrollback_lines = 999999999999"#;
         let cfg: ArctermConfig = toml::from_str(toml).expect("valid TOML must parse");
         let cfg = cfg.validate();
-        assert_eq!(cfg.scrollback_lines, 1_000_000, "extreme value must be clamped to 1_000_000");
+        assert_eq!(
+            cfg.scrollback_lines, 1_000_000,
+            "extreme value must be clamped to 1_000_000"
+        );
     }
 
     #[test]
@@ -707,7 +727,10 @@ mod tests {
         let toml = r#"scrollback_lines = 500000"#;
         let cfg: ArctermConfig = toml::from_str(toml).expect("valid TOML must parse");
         let cfg = cfg.validate();
-        assert_eq!(cfg.scrollback_lines, 500_000, "value below cap must not be modified");
+        assert_eq!(
+            cfg.scrollback_lines, 500_000,
+            "value below cap must not be modified"
+        );
     }
 
     // -- overlay dir helpers --------------------------------------------------
@@ -716,8 +739,14 @@ mod tests {
     fn overlay_dir_contains_arcterm_overlays() {
         let p = super::overlay_dir();
         let s = p.to_string_lossy();
-        assert!(s.contains("arcterm"), "overlay_dir must contain 'arcterm': {s}");
-        assert!(s.contains("overlays"), "overlay_dir must contain 'overlays': {s}");
+        assert!(
+            s.contains("arcterm"),
+            "overlay_dir must contain 'arcterm': {s}"
+        );
+        assert!(
+            s.contains("overlays"),
+            "overlay_dir must contain 'overlays': {s}"
+        );
     }
 
     #[test]
@@ -742,6 +771,9 @@ mod tests {
         let (cfg, _merged) = ArctermConfig::load_with_overlays();
         // Config should be sane (defaults or whatever is in the real config file).
         assert!(cfg.font_size > 0.0, "font_size must be positive");
-        assert!(cfg.scrollback_lines > 0, "scrollback_lines must be positive");
+        assert!(
+            cfg.scrollback_lines > 0,
+            "scrollback_lines must be positive"
+        );
     }
 }

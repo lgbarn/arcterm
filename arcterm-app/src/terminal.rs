@@ -28,8 +28,8 @@ use std::io::{Read, Write};
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self as std_mpsc};
+use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::sync::FairMutex;
@@ -64,7 +64,10 @@ pub struct ArcTermSize {
 impl ArcTermSize {
     /// Create a new size from `(cols, rows)`.
     pub fn new(columns: usize, screen_lines: usize) -> Self {
-        Self { columns, screen_lines }
+        Self {
+            columns,
+            screen_lines,
+        }
     }
 }
 
@@ -397,7 +400,10 @@ impl Terminal {
                             }
                             // Set exit code to 0 if not already set by ChildExit.
                             let _ = exit_code_for_reader.compare_exchange(
-                                -1, 0, Ordering::AcqRel, Ordering::Relaxed,
+                                -1,
+                                0,
+                                Ordering::AcqRel,
+                                Ordering::Relaxed,
                             );
                             let _ = wakeup_tx_for_reader.send(());
                             break;
@@ -572,7 +578,9 @@ impl Terminal {
                 ws_row: window_size.num_lines,
                 ws_col: window_size.num_cols,
                 ws_xpixel: window_size.cell_width.saturating_mul(window_size.num_cols),
-                ws_ypixel: window_size.cell_height.saturating_mul(window_size.num_lines),
+                ws_ypixel: window_size
+                    .cell_height
+                    .saturating_mul(window_size.num_lines),
             };
             let ret = libc::ioctl(self.pty_master_fd, libc::TIOCSWINSZ, &ws);
             if ret != 0 {
@@ -809,28 +817,26 @@ impl Terminal {
             && let Some((meta, decoded_bytes)) = self.chunk_assembler.receive_chunk(&cmd)
         {
             let tx = self.image_tx.clone();
-            tokio::task::spawn_blocking(move || {
-                match image::load_from_memory(&decoded_bytes) {
-                    Ok(dyn_img) => {
-                        let rgba_img = dyn_img.to_rgba8();
-                        let width = rgba_img.width();
-                        let height = rgba_img.height();
-                        let img = PendingImage {
-                            command: meta,
-                            rgba: rgba_img.into_raw(),
-                            width,
-                            height,
-                        };
-                        if let Err(e) = tx.try_send(img) {
-                            log::warn!("Kitty image channel send failed: {e}");
-                        }
+            tokio::task::spawn_blocking(move || match image::load_from_memory(&decoded_bytes) {
+                Ok(dyn_img) => {
+                    let rgba_img = dyn_img.to_rgba8();
+                    let width = rgba_img.width();
+                    let height = rgba_img.height();
+                    let img = PendingImage {
+                        command: meta,
+                        rgba: rgba_img.into_raw(),
+                        width,
+                        height,
+                    };
+                    if let Err(e) = tx.try_send(img) {
+                        log::warn!("Kitty image channel send failed: {e}");
                     }
-                    Err(e) => {
-                        log::warn!(
-                            "Kitty image decode failed for image_id={}: {e}",
-                            meta.image_id
-                        );
-                    }
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Kitty image decode failed for image_id={}: {e}",
+                        meta.image_id
+                    );
                 }
             });
         }
@@ -1024,7 +1030,10 @@ fn cwd_for_pid(pid: u32) -> Option<PathBuf> {
             return None;
         }
         let cwd_bytes = &buf[cwd_offset..];
-        let nul = cwd_bytes.iter().position(|&b| b == 0).unwrap_or(cwd_bytes.len());
+        let nul = cwd_bytes
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(cwd_bytes.len());
         let cwd_str = std::str::from_utf8(&cwd_bytes[..nul]).ok()?;
         if cwd_str.is_empty() {
             return None;
@@ -1105,7 +1114,10 @@ mod tests {
         assert_eq!(img.rgba.len(), 4, "1 pixel × 4 RGBA bytes");
 
         // Channel should be empty now.
-        assert!(rx.try_recv().is_err(), "channel should be empty after one recv");
+        assert!(
+            rx.try_recv().is_err(),
+            "channel should be empty after one recv"
+        );
     }
 
     /// Test that dispatch_osc7770 accumulates a start/end pair correctly.
@@ -1131,6 +1143,9 @@ mod tests {
             arcterm_render::ContentType::CodeBlock,
             "expected CodeBlock"
         );
-        assert_eq!(block.buffer, "fn hello() {}", "buffer should contain captured text");
+        assert_eq!(
+            block.buffer, "fn hello() {}",
+            "buffer should contain captured text"
+        );
     }
 }

@@ -216,7 +216,11 @@ mod tests {
 
         let ids = mgr.close_tab(1);
         assert_eq!(mgr.tab_count(), 1, "tab count must drop to 1");
-        assert_eq!(ids, vec![p(2)], "returned ids should be the closed tab's pane");
+        assert_eq!(
+            ids,
+            vec![p(2)],
+            "returned ids should be the closed tab's pane"
+        );
     }
 
     #[test]

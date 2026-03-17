@@ -106,19 +106,14 @@ impl PaneContext {
     }
 
     /// Return an `ErrorContext` with an explicit `source_pane` and `cwd`.
-    pub fn error_context_for(
-        &self,
-        pane_id: PaneId,
-        cwd: Option<PathBuf>,
-    ) -> Option<ErrorContext> {
+    pub fn error_context_for(&self, pane_id: PaneId, cwd: Option<PathBuf>) -> Option<ErrorContext> {
         let code = self.last_exit_code?;
         if code == 0 {
             return None;
         }
         let command = self.last_command.clone().unwrap_or_default();
         let tail_start = self.output_ring.len().saturating_sub(20);
-        let output_tail: Vec<String> =
-            self.output_ring.iter().skip(tail_start).cloned().collect();
+        let output_tail: Vec<String> = self.output_ring.iter().skip(tail_start).cloned().collect();
         Some(ErrorContext {
             command,
             exit_code: code,
@@ -339,7 +334,9 @@ mod tests {
         ctx.set_command("make".to_string());
         ctx.set_exit_code(2);
         let id = make_pane_id(42);
-        let ec = ctx.error_context_for(id, None).expect("should have error context");
+        let ec = ctx
+            .error_context_for(id, None)
+            .expect("should have error context");
         assert_eq!(ec.source_pane.0, 42);
         assert_eq!(ec.exit_code, 2);
         assert_eq!(ec.command, "make");
@@ -394,7 +391,10 @@ mod tests {
         // Must contain the output line.
         assert!(s.contains("error[E0308]: type mismatch"));
         // Must end with OSC 7770 end sequence.
-        assert!(s.ends_with("\x1b]7770;end\x07"), "missing end sequence: {s:?}");
+        assert!(
+            s.ends_with("\x1b]7770;end\x07"),
+            "missing end sequence: {s:?}"
+        );
     }
 
     /// format_error_osc7770 with multiple output lines includes all of them.
@@ -403,7 +403,11 @@ mod tests {
         let ctx = ErrorContext {
             command: "make".to_string(),
             exit_code: 2,
-            output_tail: vec!["line A".to_string(), "line B".to_string(), "line C".to_string()],
+            output_tail: vec![
+                "line A".to_string(),
+                "line B".to_string(),
+                "line C".to_string(),
+            ],
             cwd: None,
             source_pane: make_pane_id(1),
         };

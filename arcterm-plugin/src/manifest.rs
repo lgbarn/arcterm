@@ -105,10 +105,7 @@ impl PluginManifest {
             ));
         }
         if self.name.contains("..") {
-            return Err(format!(
-                "plugin name '{}' must not contain '..'",
-                self.name
-            ));
+            return Err(format!("plugin name '{}' must not contain '..'", self.name));
         }
         if self.name.starts_with('.') {
             return Err(format!(
@@ -131,13 +128,22 @@ impl PluginManifest {
             return Err("plugin wasm path must not be empty".to_string());
         }
         if self.wasm.contains("..") {
-            return Err(format!("plugin wasm path '{}' must not contain '..'", self.wasm));
+            return Err(format!(
+                "plugin wasm path '{}' must not contain '..'",
+                self.wasm
+            ));
         }
         if self.wasm.starts_with('/') || self.wasm.starts_with('\\') {
-            return Err(format!("plugin wasm path '{}' must not be an absolute path", self.wasm));
+            return Err(format!(
+                "plugin wasm path '{}' must not be an absolute path",
+                self.wasm
+            ));
         }
         if self.wasm.contains('\\') {
-            return Err(format!("plugin wasm path '{}' must not contain backslashes", self.wasm));
+            return Err(format!(
+                "plugin wasm path '{}' must not contain backslashes",
+                self.wasm
+            ));
         }
         if self.api_version != SUPPORTED_API_VERSION {
             return Err(format!(
@@ -258,7 +264,10 @@ mod tests {
         assert_eq!(manifest.description, "");
 
         let p = &manifest.permissions;
-        assert!(p.filesystem.is_empty(), "filesystem should default to empty");
+        assert!(
+            p.filesystem.is_empty(),
+            "filesystem should default to empty"
+        );
         assert!(!p.network, "network should default to false");
         assert_eq!(p.panes, PaneAccess::None, "panes should default to None");
         assert!(!p.ai, "ai should default to false");
@@ -294,10 +303,7 @@ mod tests {
         "#;
         let manifest = PluginManifest::from_toml(toml).expect("parses fine");
         let err = manifest.validate().expect_err("should fail validation");
-        assert!(
-            err.contains("name"),
-            "error should mention 'name': {err}"
-        );
+        assert!(err.contains("name"), "error should mention 'name': {err}");
     }
 
     // ── (e) build_wasi_ctx with empty filesystem list ────────────────────
@@ -345,32 +351,45 @@ mod tests {
 
     #[test]
     fn validate_rejects_name_with_forward_slash() {
-        let err = make_manifest("../../.config").validate().expect_err("should reject");
-        assert!(err.contains("path separator") || err.contains(".."), "{err}");
+        let err = make_manifest("../../.config")
+            .validate()
+            .expect_err("should reject");
+        assert!(
+            err.contains("path separator") || err.contains(".."),
+            "{err}"
+        );
     }
 
     #[test]
     fn validate_rejects_name_with_double_dot() {
-        let err = make_manifest("foo..bar").validate().expect_err("should reject ..");
+        let err = make_manifest("foo..bar")
+            .validate()
+            .expect_err("should reject ..");
         assert!(err.contains(".."), "{err}");
     }
 
     #[test]
     fn validate_rejects_name_starting_with_dot() {
-        let err = make_manifest(".hidden").validate().expect_err("should reject leading dot");
+        let err = make_manifest(".hidden")
+            .validate()
+            .expect_err("should reject leading dot");
         assert!(err.contains("'.'"), "{err}");
     }
 
     #[test]
     fn validate_rejects_name_with_backslash() {
-        let err = make_manifest("foo\\bar").validate().expect_err("should reject backslash");
+        let err = make_manifest("foo\\bar")
+            .validate()
+            .expect_err("should reject backslash");
         assert!(err.contains("path separator"), "{err}");
     }
 
     #[test]
     fn validate_accepts_safe_name() {
         // A plain alphanumeric name with hyphens is always valid.
-        make_manifest("my-plugin-v2").validate().expect("safe name must pass");
+        make_manifest("my-plugin-v2")
+            .validate()
+            .expect("safe name must pass");
     }
 
     fn make_manifest_wasm(wasm: &str) -> PluginManifest {
@@ -386,13 +405,17 @@ mod tests {
 
     #[test]
     fn validate_wasm_rejects_path_traversal() {
-        let err = make_manifest_wasm("../../evil.wasm").validate().expect_err("should reject ..");
+        let err = make_manifest_wasm("../../evil.wasm")
+            .validate()
+            .expect_err("should reject ..");
         assert!(err.contains(".."), "{err}");
     }
 
     #[test]
     fn validate_wasm_rejects_absolute_unix() {
-        let err = make_manifest_wasm("/etc/evil.wasm").validate().expect_err("should reject absolute path");
+        let err = make_manifest_wasm("/etc/evil.wasm")
+            .validate()
+            .expect_err("should reject absolute path");
         assert!(err.contains("absolute"), "{err}");
     }
 

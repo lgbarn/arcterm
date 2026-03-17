@@ -226,8 +226,7 @@ impl SearchOverlayState {
     /// Returns `true` if enough time has elapsed since the last query change
     /// and the regex is valid — the event loop should trigger an automatic search.
     pub fn should_auto_search(&self) -> bool {
-        self.compiled.is_some()
-            && self.last_query_change.elapsed() >= Duration::from_millis(200)
+        self.compiled.is_some() && self.last_query_change.elapsed() >= Duration::from_millis(200)
     }
 
     // -----------------------------------------------------------------------
@@ -298,7 +297,10 @@ impl SearchOverlayState {
             };
 
             out.push((
-                OverlayQuad { rect: [x, y, w, h], color },
+                OverlayQuad {
+                    rect: [x, y, w, h],
+                    color,
+                },
                 is_current,
             ));
         }
@@ -375,7 +377,10 @@ mod tests {
         let mut s = SearchOverlayState::new();
         s.update_query("(unclosed".to_string());
         assert!(s.compiled.is_none(), "invalid regex must not compile");
-        assert!(s.error_msg.is_some(), "error_msg must be set for invalid regex");
+        assert!(
+            s.error_msg.is_some(),
+            "error_msg must be set for invalid regex"
+        );
     }
 
     #[test]
@@ -401,7 +406,10 @@ mod tests {
         let id1 = make_pane_id();
         let id2 = make_pane_id();
         let panes: Vec<(PaneId, Vec<String>)> = vec![
-            (id1, vec!["no match here".to_string(), "found foo here".to_string()]),
+            (
+                id1,
+                vec!["no match here".to_string(), "found foo here".to_string()],
+            ),
             (id2, vec!["foo at start".to_string(), "nothing".to_string()]),
         ];
         s.execute_search(&panes);
@@ -458,7 +466,10 @@ mod tests {
         let mut s = make_state_with_n_matches(3);
         s.current_match = 2;
         s.next_match();
-        assert_eq!(s.current_match, 0, "next_match must wrap from last to first");
+        assert_eq!(
+            s.current_match, 0,
+            "next_match must wrap from last to first"
+        );
     }
 
     #[test]
@@ -474,7 +485,10 @@ mod tests {
         let mut s = make_state_with_n_matches(3);
         s.current_match = 0;
         s.prev_match();
-        assert_eq!(s.current_match, 2, "prev_match must wrap from first to last");
+        assert_eq!(
+            s.current_match, 2,
+            "prev_match must wrap from first to last"
+        );
     }
 
     #[test]
@@ -501,7 +515,10 @@ mod tests {
         s.execute_search(&[(id, vec![row])]);
         assert_eq!(s.matches.len(), 1);
         let m = &s.matches[0];
-        assert_eq!(m.col_start, 2, "col_start must be char index 2, not byte index 4");
+        assert_eq!(
+            m.col_start, 2,
+            "col_start must be char index 2, not byte index 4"
+        );
         assert_eq!(m.col_end, 7, "col_end must be char index 7");
     }
 
@@ -525,8 +542,7 @@ mod tests {
         let mut s = SearchOverlayState::new();
         s.update_query("foo".to_string());
         // Backdate last_query_change to simulate time passing.
-        s.last_query_change =
-            Instant::now() - Duration::from_millis(201);
+        s.last_query_change = Instant::now() - Duration::from_millis(201);
         assert!(
             s.should_auto_search(),
             "should_auto_search must be true after 200ms"
@@ -557,10 +573,11 @@ mod tests {
         let panes = vec![(id1, vec!["foo".to_string()])];
         s.execute_search(&panes);
         // Asking for id2 — no matches there.
-        let quads = s.match_quads_for_pane(
-            id2, [0.0, 0.0, 800.0, 600.0], 8.0, 16.0, 0, 24, 24,
+        let quads = s.match_quads_for_pane(id2, [0.0, 0.0, 800.0, 600.0], 8.0, 16.0, 0, 24, 24);
+        assert!(
+            quads.is_empty(),
+            "must return empty vec when no matches in pane"
         );
-        assert!(quads.is_empty(), "must return empty vec when no matches in pane");
     }
 
     #[test]
@@ -584,15 +601,27 @@ mod tests {
         let visible_rows = 5;
         let total_rows = 5;
         let quads = s.match_quads_for_pane(
-            id, pane_rect, cell_w, cell_h, scroll_offset, visible_rows, total_rows,
+            id,
+            pane_rect,
+            cell_w,
+            cell_h,
+            scroll_offset,
+            visible_rows,
+            total_rows,
         );
         assert_eq!(quads.len(), 1);
         let (q, is_current) = quads[0];
         assert!(is_current, "first match is the current match");
         // Row 2 in viewport => y = pane_y + 2 * cell_h = 20 + 32 = 52
         assert_eq!(q.rect[0], 10.0, "x must be pane_x + col_start*cell_w");
-        assert!((q.rect[1] - 52.0).abs() < 0.001, "y must be pane_y + row*cell_h");
-        assert!((q.rect[2] - 24.0).abs() < 0.001, "width must be (col_end-col_start)*cell_w");
+        assert!(
+            (q.rect[1] - 52.0).abs() < 0.001,
+            "y must be pane_y + row*cell_h"
+        );
+        assert!(
+            (q.rect[2] - 24.0).abs() < 0.001,
+            "width must be (col_end-col_start)*cell_w"
+        );
         assert!((q.rect[3] - 16.0).abs() < 0.001, "height must be cell_h");
     }
 
@@ -607,9 +636,7 @@ mod tests {
         rows[2] = "x    ".to_string(); // row 2 — outside viewport
         rows[7] = "x    ".to_string(); // row 7 — inside viewport
         s.execute_search(&[(id, rows)]);
-        let quads = s.match_quads_for_pane(
-            id, [0.0, 0.0, 400.0, 80.0], 8.0, 16.0, 0, 5, 10,
-        );
+        let quads = s.match_quads_for_pane(id, [0.0, 0.0, 400.0, 80.0], 8.0, 16.0, 0, 5, 10);
         assert_eq!(quads.len(), 1, "only match at row 7 is in the viewport");
     }
 
@@ -624,7 +651,10 @@ mod tests {
         // desired_start = 10 - 12 = 0 (clamped to 0 via saturating_sub)
         // scroll_offset = 76 - 0 = 76
         let offset = SearchOverlayState::scroll_offset_for_match(10, 100, 24);
-        assert_eq!(offset, 76, "deep scrollback match must produce large scroll_offset");
+        assert_eq!(
+            offset, 76,
+            "deep scrollback match must produce large scroll_offset"
+        );
     }
 
     #[test]
@@ -632,6 +662,9 @@ mod tests {
         // 50 total rows, 24 visible. Visible rows are [26, 50).
         // Match at row 40 (in visible area) — no scroll needed.
         let offset = SearchOverlayState::scroll_offset_for_match(40, 50, 24);
-        assert_eq!(offset, 0, "match in visible area must return scroll_offset = 0");
+        assert_eq!(
+            offset, 0,
+            "match in visible area must return scroll_offset = 0"
+        );
     }
 }

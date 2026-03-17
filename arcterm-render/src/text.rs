@@ -2,8 +2,9 @@
 
 use crate::snapshot::{RenderSnapshot, SnapshotCell, SnapshotColor};
 use glyphon::{
-    Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, Style, SwashCache,
-    TextArea, TextAtlas, TextBounds, TextRenderer as GlyphonTextRenderer, Viewport, Weight,
+    Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, Style,
+    SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer as GlyphonTextRenderer, Viewport,
+    Weight,
 };
 use wgpu::MultisampleState;
 
@@ -150,8 +151,10 @@ impl TextRenderer {
 
         // Grow or shrink the row buffer pool.
         while self.row_buffers.len() < num_rows {
-            let buf =
-                Buffer::new(&mut self.font_system, Metrics::new(self.font_size, self.line_height));
+            let buf = Buffer::new(
+                &mut self.font_system,
+                Metrics::new(self.font_size, self.line_height),
+            );
             self.row_buffers.push(buf);
         }
         self.row_buffers.truncate(num_rows);
@@ -165,7 +168,11 @@ impl TextRenderer {
             let is_cursor_row = row_idx == snapshot.cursor_row;
 
             // Compute a cheap content hash for dirty-row skipping.
-            let cursor_col_opt = if is_cursor_row { Some(snapshot.cursor_col) } else { None };
+            let cursor_col_opt = if is_cursor_row {
+                Some(snapshot.cursor_col)
+            } else {
+                None
+            };
             let row_hash = hash_row(row, row_idx, cursor_col_opt);
 
             if !is_cursor_row && self.row_hashes[row_idx] == row_hash {
@@ -264,7 +271,11 @@ impl TextRenderer {
         // Shape each row.
         for (row_idx, buf) in buf_vec.iter_mut().enumerate() {
             let row = snapshot.row(row_idx);
-            let cursor_col = if row_idx == snapshot.cursor_row { Some(snapshot.cursor_col) } else { None };
+            let cursor_col = if row_idx == snapshot.cursor_row {
+                Some(snapshot.cursor_col)
+            } else {
+                None
+            };
 
             // Dirty-row skip: reuse existing Buffer when content is unchanged.
             let row_hash = hash_row(row, row_idx, cursor_col);
@@ -551,7 +562,7 @@ impl TextRenderer {
         lines: &[PluginStyledLine],
         scale_factor: f32,
     ) {
-        use glyphon::{Attrs, Weight, Style as GlyphonStyle};
+        use glyphon::{Attrs, Style as GlyphonStyle, Weight};
 
         let cell_h = self.cell_size.height;
         let [rect_x, rect_y, rect_w, rect_h] = *pane_rect;
@@ -593,9 +604,7 @@ impl TextRenderer {
                 .map(|(r, g, b)| Color::rgb(r, g, b))
                 .unwrap_or(Color::rgb(200, 200, 200));
 
-            let mut attrs = Attrs::new()
-                .family(Family::Monospace)
-                .color(fg_color);
+            let mut attrs = Attrs::new().family(Family::Monospace).color(fg_color);
 
             if line.bold {
                 attrs = attrs.weight(Weight::BOLD);
@@ -653,10 +662,7 @@ impl TextRenderer {
 ///
 /// `cursor_col` — `Some(col)` when this is the cursor row, `None` otherwise.
 /// A blank cell is one whose character is `' '` (space) or `'\0'` (null).
-pub(crate) fn substitute_cursor_char(
-    row: &[SnapshotCell],
-    cursor_col: Option<usize>,
-) -> Vec<char> {
+pub(crate) fn substitute_cursor_char(row: &[SnapshotCell], cursor_col: Option<usize>) -> Vec<char> {
     row.iter()
         .enumerate()
         .map(|(i, cell)| {
@@ -700,16 +706,18 @@ fn shape_row_into_buffer(
 
     buf.set_rich_text(
         font_system,
-        span_strings.iter().map(|item: &(String, Color, bool, bool)| {
-            let mut attrs = Attrs::new().family(Family::Monospace).color(item.1);
-            if item.2 {
-                attrs = attrs.weight(Weight::BOLD);
-            }
-            if item.3 {
-                attrs = attrs.style(Style::Italic);
-            }
-            (item.0.as_str(), attrs)
-        }),
+        span_strings
+            .iter()
+            .map(|item: &(String, Color, bool, bool)| {
+                let mut attrs = Attrs::new().family(Family::Monospace).color(item.1);
+                if item.2 {
+                    attrs = attrs.weight(Weight::BOLD);
+                }
+                if item.3 {
+                    attrs = attrs.style(Style::Italic);
+                }
+                (item.0.as_str(), attrs)
+            }),
         &Attrs::new().family(Family::Monospace),
         Shaping::Basic,
         None,
@@ -769,11 +777,7 @@ pub fn ansi_color_to_glyphon(color: SnapshotColor, is_fg: bool, palette: &Render
 /// - Each cell's attribute flags (bold, italic, underline, inverse).
 /// - The cursor column (`cursor_col`) when provided (so cursor movement
 ///   always invalidates the row hash).
-pub fn hash_row(
-    row: &[SnapshotCell],
-    row_idx: usize,
-    cursor_col: Option<usize>,
-) -> u64 {
+pub fn hash_row(row: &[SnapshotCell], row_idx: usize, cursor_col: Option<usize>) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
@@ -818,8 +822,8 @@ fn hash_snapshot_color(c: SnapshotColor, h: &mut impl std::hash::Hasher) {
 
 #[cfg(test)]
 mod tests {
-    use crate::snapshot::{SnapshotCell, SnapshotColor};
     use super::{hash_row, substitute_cursor_char};
+    use crate::snapshot::{SnapshotCell, SnapshotColor};
 
     fn default_row(n: usize) -> Vec<SnapshotCell> {
         (0..n).map(|_| SnapshotCell::default()).collect()
@@ -895,7 +899,10 @@ mod tests {
         let row = default_row(5);
         // cursor_col=Some(2) means the cursor sits on column 2 of this row.
         let chars = substitute_cursor_char(&row, Some(2));
-        assert_eq!(chars[2], '\u{2588}', "cursor on blank cell must yield U+2588");
+        assert_eq!(
+            chars[2], '\u{2588}',
+            "cursor on blank cell must yield U+2588"
+        );
         assert_eq!(chars[0], ' ', "non-cursor blank cells must remain space");
         assert_eq!(chars[1], ' ', "non-cursor blank cells must remain space");
         assert_eq!(chars[3], ' ', "non-cursor blank cells must remain space");
@@ -919,6 +926,9 @@ mod tests {
         let mut row = default_row(5);
         row[2].c = 'A';
         let chars = substitute_cursor_char(&row, Some(2));
-        assert_eq!(chars[2], 'A', "cursor on non-blank cell must not substitute");
+        assert_eq!(
+            chars[2], 'A',
+            "cursor on non-blank cell must not substitute"
+        );
     }
 }

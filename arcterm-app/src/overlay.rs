@@ -173,11 +173,7 @@ impl OverlayReviewState {
     ///
     /// Returns `(quads, text_lines)` where `text_lines` are the visible diff
     /// lines starting from `scroll_offset`, plus a header line.
-    pub fn render_quads(
-        &self,
-        window_w: f32,
-        window_h: f32,
-    ) -> (Vec<PaletteQuad>, Vec<String>) {
+    pub fn render_quads(&self, window_w: f32, window_h: f32) -> (Vec<PaletteQuad>, Vec<String>) {
         let mut quads = Vec::new();
         let mut text_lines = Vec::new();
 
@@ -214,7 +210,9 @@ impl OverlayReviewState {
         let cell_h = 16.0_f32; // approximate logical cell height
         let visible_rows = ((panel_h - cell_h * 2.0) / cell_h).max(1.0) as usize;
 
-        let start = self.scroll_offset.min(self.diff_text.len().saturating_sub(1));
+        let start = self
+            .scroll_offset
+            .min(self.diff_text.len().saturating_sub(1));
         let end = (start + visible_rows).min(self.diff_text.len());
 
         for (i, line) in self.diff_text[start..end].iter().enumerate() {
@@ -297,10 +295,17 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let overlay_path = dir.path().join("overlay.toml");
         // Overlay adds a key not present in serialized base.
-        std::fs::write(&overlay_path, "font_size = 20.0\ncolor_scheme = \"dracula\"\n").unwrap();
+        std::fs::write(
+            &overlay_path,
+            "font_size = 20.0\ncolor_scheme = \"dracula\"\n",
+        )
+        .unwrap();
 
         let diff = compute_diff(&base_config, &overlay_path);
-        let added_count = diff.iter().filter(|l| matches!(l, DiffLine::Added(_))).count();
+        let added_count = diff
+            .iter()
+            .filter(|l| matches!(l, DiffLine::Added(_)))
+            .count();
         assert!(added_count > 0, "must have Added lines: {diff:?}");
     }
 
@@ -314,8 +319,14 @@ mod tests {
         std::fs::write(&overlay_path, "font_size = 14.0\n").unwrap();
 
         let diff = compute_diff(&base_config, &overlay_path);
-        let removed_count = diff.iter().filter(|l| matches!(l, DiffLine::Removed(_))).count();
-        assert!(removed_count > 0, "must have Removed lines when overlay has fewer keys: {diff:?}");
+        let removed_count = diff
+            .iter()
+            .filter(|l| matches!(l, DiffLine::Removed(_)))
+            .count();
+        assert!(
+            removed_count > 0,
+            "must have Removed lines when overlay has fewer keys: {diff:?}"
+        );
     }
 
     // -----------------------------------------------------------------------

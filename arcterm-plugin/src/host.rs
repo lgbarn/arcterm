@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use wasmtime::component::ResourceTable;
 use wasmtime::StoreLimitsBuilder;
+use wasmtime::component::ResourceTable;
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::manifest::{PaneAccess, Permissions};

@@ -18,5 +18,5 @@ pub use renderer::{
     render_tab_bar_quads, tab_bar_height,
 };
 pub use snapshot::{RenderSnapshot, SnapshotCell, SnapshotColor, snapshot_from_term};
-pub use text::{ClipRect, PluginStyledLine, TextRenderer};
 pub use structured::{ContentType, HighlightEngine, RenderedLine, StructuredBlock, StyledSpan};
+pub use text::{ClipRect, PluginStyledLine, TextRenderer};

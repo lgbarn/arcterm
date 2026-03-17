@@ -85,10 +85,7 @@ fn prefilter_round_trip_separates_intercepted_and_passthrough() {
 
     // APC payload extracted.
     assert_eq!(out.apc_payloads.len(), 1, "expected 1 APC payload");
-    assert_eq!(
-        out.apc_payloads[0], b"apc-payload",
-        "APC payload mismatch"
-    );
+    assert_eq!(out.apc_payloads[0], b"apc-payload", "APC payload mismatch");
 }
 
 /// Verify that `PreFilter` handles sequences split across multiple `advance`
@@ -112,7 +109,11 @@ fn prefilter_handles_split_sequences() {
 
     let out2 = pf.advance(part2);
     // The sequence completes on the second call.
-    assert_eq!(out2.osc7770_params.len(), 1, "OSC must complete on second advance");
+    assert_eq!(
+        out2.osc7770_params.len(),
+        1,
+        "OSC must complete on second advance"
+    );
     assert_eq!(out2.osc7770_params[0], "start;type=split");
 }
 
@@ -131,8 +132,8 @@ fn write_input_echo_hello_appears_in_grid() {
     use arcterm_render::snapshot_from_term;
     use std::time::{Duration, Instant};
 
-    let (mut terminal, _image_rx) = Terminal::new(80, 24, 9, 18, None, None)
-        .expect("Terminal::new must succeed");
+    let (mut terminal, _image_rx) =
+        Terminal::new(80, 24, 9, 18, None, None).expect("Terminal::new must succeed");
 
     // Write the echo command.
     terminal.write_input(b"echo hello\n");
@@ -147,7 +148,10 @@ fn write_input_echo_hello_appears_in_grid() {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    assert!(got_output, "no wakeup received within 3 s after writing echo command");
+    assert!(
+        got_output,
+        "no wakeup received within 3 s after writing echo command"
+    );
 
     // Snapshot the terminal and look for "hello".
     let snapshot = snapshot_from_term(&*terminal.lock_term());
@@ -155,7 +159,10 @@ fn write_input_echo_hello_appears_in_grid() {
         let row_text: String = snapshot.row(r).iter().map(|c| c.c).collect();
         row_text.contains("hello")
     });
-    assert!(found, "expected 'hello' in terminal grid after echo command");
+    assert!(
+        found,
+        "expected 'hello' in terminal grid after echo command"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -171,8 +178,8 @@ fn write_input_echo_hello_appears_in_grid() {
 fn resize_updates_terminal_dimensions() {
     use arcterm_app::Terminal;
 
-    let (mut terminal, _image_rx) = Terminal::new(80, 24, 9, 18, None, None)
-        .expect("Terminal::new must succeed");
+    let (mut terminal, _image_rx) =
+        Terminal::new(80, 24, 9, 18, None, None).expect("Terminal::new must succeed");
 
     assert_eq!(terminal.cols(), 80);
     assert_eq!(terminal.rows(), 24);
@@ -210,7 +217,8 @@ fn prefilter_osc7770_start_content_end_sequence() {
 
     // Two OSC 7770 completions: start and end.
     assert_eq!(
-        out.osc7770_params.len(), 2,
+        out.osc7770_params.len(),
+        2,
         "expected 2 OSC 7770 params (start + end), got: {:?}",
         out.osc7770_params
     );

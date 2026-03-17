@@ -21,22 +21,16 @@ fn build_cli() -> clap::Command {
              system for extending functionality via WebAssembly.",
         )
         .subcommand(
-            Command::new("open")
-                .about("Open a named workspace")
-                .arg(
-                    Arg::new("name")
-                        .help("Workspace name (without .toml extension)")
-                        .required(true),
-                ),
+            Command::new("open").about("Open a named workspace").arg(
+                Arg::new("name")
+                    .help("Workspace name (without .toml extension)")
+                    .required(true),
+            ),
         )
         .subcommand(
             Command::new("save")
                 .about("Save current session as a workspace")
-                .arg(
-                    Arg::new("name")
-                        .help("Workspace name")
-                        .required(true),
-                ),
+                .arg(Arg::new("name").help("Workspace name").required(true)),
         )
         .subcommand(Command::new("list").about("List available workspaces"))
         .subcommand(
@@ -74,10 +68,9 @@ fn build_cli() -> clap::Command {
         .subcommand(
             Command::new("config")
                 .about("Manage configuration")
-                .subcommand(
-                    Command::new("flatten")
-                        .about("Print the fully resolved configuration (base + accepted overlays) as TOML"),
-                ),
+                .subcommand(Command::new("flatten").about(
+                    "Print the fully resolved configuration (base + accepted overlays) as TOML",
+                )),
         )
 }
 

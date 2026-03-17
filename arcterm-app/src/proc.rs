@@ -51,7 +51,7 @@ pub fn process_comm(_pid: u32) -> Option<String> {
 #[allow(dead_code)]
 #[cfg(target_os = "macos")]
 pub fn process_args(pid: u32) -> Option<Vec<String>> {
-    use libc::{c_int, c_void, CTL_KERN, KERN_PROCARGS2};
+    use libc::{CTL_KERN, KERN_PROCARGS2, c_int, c_void};
 
     // First call: determine required buffer size.
     let mut mib: [c_int; 3] = [CTL_KERN, KERN_PROCARGS2, pid as c_int];

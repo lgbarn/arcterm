@@ -188,7 +188,10 @@ impl WorkspaceFile {
     /// Writes to a `.tmp` sibling first, then renames (POSIX atomic rename).
     pub fn save_to_file(&self, path: &Path) -> io::Result<()> {
         let toml_str = toml::to_string_pretty(self).map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidData, format!("TOML serialize error: {e}"))
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("TOML serialize error: {e}"),
+            )
         })?;
 
         // Ensure parent directory exists.
@@ -244,10 +247,7 @@ pub struct PaneMetadata {
 impl WorkspacePaneNode {
     /// Walk a live `PaneNode` tree and produce a `WorkspacePaneNode` DTO,
     /// looking up per-leaf metadata from `pane_metadata`.
-    pub fn from_pane_tree(
-        tree: &PaneNode,
-        pane_metadata: &HashMap<PaneId, PaneMetadata>,
-    ) -> Self {
+    pub fn from_pane_tree(tree: &PaneNode, pane_metadata: &HashMap<PaneId, PaneMetadata>) -> Self {
         match tree {
             PaneNode::Leaf { pane_id } => {
                 let meta = pane_metadata.get(pane_id);
@@ -291,7 +291,11 @@ impl WorkspacePaneNode {
 
     fn build_pane_node(&self, metadata: &mut Vec<PaneMetadata>) -> PaneNode {
         match self {
-            WorkspacePaneNode::Leaf { command, directory, env } => {
+            WorkspacePaneNode::Leaf {
+                command,
+                directory,
+                env,
+            } => {
                 let id = PaneId::next();
                 metadata.push(PaneMetadata {
                     command: command.clone(),
@@ -336,7 +340,10 @@ pub fn capture_session(
             name: name.to_string(),
             directory: None,
         },
-        window: window_size.map(|(w, h)| WindowState { width: w, height: h }),
+        window: window_size.map(|(w, h)| WindowState {
+            width: w,
+            height: h,
+        }),
         layout,
         environment: HashMap::new(),
     }
@@ -474,7 +481,10 @@ mod tests {
                 name: "dev".to_string(),
                 directory: Some("/Users/dev/projects/myapp".to_string()),
             },
-            window: Some(WindowState { width: 1920, height: 1080 }),
+            window: Some(WindowState {
+                width: 1920,
+                height: 1080,
+            }),
             layout: WorkspacePaneNode::HSplit {
                 ratio: 0.6,
                 left: Box::new(leaf(Some("nvim ."), Some("/Users/dev/projects/myapp"))),
@@ -504,7 +514,10 @@ mod tests {
 
         let ws = WorkspaceFile {
             schema_version: 1,
-            workspace: WorkspaceMeta { name: "env-test".to_string(), directory: None },
+            workspace: WorkspaceMeta {
+                name: "env-test".to_string(),
+                directory: None,
+            },
             window: None,
             layout: leaf(None, None),
             environment: env.clone(),
@@ -612,7 +625,9 @@ type = "leaf"
 
         let ws_node = WorkspacePaneNode::from_pane_tree(&tree, &meta);
         match ws_node {
-            WorkspacePaneNode::Leaf { command, directory, .. } => {
+            WorkspacePaneNode::Leaf {
+                command, directory, ..
+            } => {
                 assert_eq!(command.as_deref(), Some("zsh"));
                 assert_eq!(directory.as_deref(), Some("/home"));
             }
@@ -639,7 +654,11 @@ type = "leaf"
         let mut meta = HashMap::new();
         meta.insert(
             a,
-            PaneMetadata { command: Some("nvim".to_string()), directory: None, env: None },
+            PaneMetadata {
+                command: Some("nvim".to_string()),
+                directory: None,
+                env: None,
+            },
         );
         meta.insert(
             b,
@@ -649,7 +668,14 @@ type = "leaf"
                 env: None,
             },
         );
-        meta.insert(c, PaneMetadata { command: None, directory: None, env: None });
+        meta.insert(
+            c,
+            PaneMetadata {
+                command: None,
+                directory: None,
+                env: None,
+            },
+        );
 
         let ws_node = WorkspacePaneNode::from_pane_tree(&tree, &meta);
 
@@ -692,7 +718,11 @@ type = "leaf"
         }
         let mut seen = std::collections::HashSet::new();
         for id in &ids {
-            assert!(seen.insert(id.0), "PaneIds must be unique, duplicate: {:?}", id);
+            assert!(
+                seen.insert(id.0),
+                "PaneIds must be unique, duplicate: {:?}",
+                id
+            );
         }
     }
 
@@ -707,7 +737,10 @@ type = "leaf"
         let (tree, _meta) = ws_node.to_pane_tree();
         match tree {
             PaneNode::HSplit { ratio, .. } => {
-                assert!((ratio - 0.7).abs() < 1e-5, "ratio must be preserved, got {ratio}");
+                assert!(
+                    (ratio - 0.7).abs() < 1e-5,
+                    "ratio must be preserved, got {ratio}"
+                );
             }
             other => panic!("expected HSplit, got {other:?}"),
         }
@@ -740,15 +773,20 @@ type = "leaf"
         // Structure must match (ratios), PaneId values will differ.
         match (&original, &restored) {
             (
-                PaneNode::HSplit { ratio: r1, right: orig_right, .. },
-                PaneNode::HSplit { ratio: r2, right: rest_right, .. },
+                PaneNode::HSplit {
+                    ratio: r1,
+                    right: orig_right,
+                    ..
+                },
+                PaneNode::HSplit {
+                    ratio: r2,
+                    right: rest_right,
+                    ..
+                },
             ) => {
                 assert!((r1 - r2).abs() < 1e-5, "HSplit ratio must be preserved");
                 match (orig_right.as_ref(), rest_right.as_ref()) {
-                    (
-                        PaneNode::VSplit { ratio: vr1, .. },
-                        PaneNode::VSplit { ratio: vr2, .. },
-                    ) => {
+                    (PaneNode::VSplit { ratio: vr1, .. }, PaneNode::VSplit { ratio: vr2, .. }) => {
                         assert!((vr1 - vr2).abs() < 1e-5, "VSplit ratio must be preserved");
                     }
                     other => panic!("right child structure mismatch: {other:?}"),
@@ -771,7 +809,13 @@ type = "leaf"
 
         assert_eq!(ws.schema_version, 1);
         assert_eq!(ws.workspace.name, "my-project");
-        assert_eq!(ws.window, Some(WindowState { width: 1920, height: 1080 }));
+        assert_eq!(
+            ws.window,
+            Some(WindowState {
+                width: 1920,
+                height: 1080
+            })
+        );
         assert!(matches!(ws.layout, WorkspacePaneNode::Leaf { .. }));
     }
 
@@ -872,7 +916,11 @@ directory = "/tmp"
         let (tree, metadata) = ws2.layout.to_pane_tree();
         let ids = tree.all_pane_ids();
         assert_eq!(ids.len(), 1, "single Leaf must restore to exactly one pane");
-        assert_eq!(metadata.len(), 1, "single Leaf must produce exactly one PaneMetadata");
+        assert_eq!(
+            metadata.len(),
+            1,
+            "single Leaf must produce exactly one PaneMetadata"
+        );
         assert!(
             matches!(tree, crate::layout::PaneNode::Leaf { .. }),
             "restored tree must be a Leaf"
@@ -1046,7 +1094,10 @@ directory = "/tmp"
         let results = list_workspaces_in(&dir);
         let names: Vec<&str> = results.iter().map(|(n, _)| n.as_str()).collect();
 
-        assert!(names.contains(&"alpha"), "alpha.toml must appear in listing");
+        assert!(
+            names.contains(&"alpha"),
+            "alpha.toml must appear in listing"
+        );
         assert!(names.contains(&"beta"), "beta.toml must appear in listing");
         assert!(!names.contains(&"notes"), "notes.txt must be filtered out");
 
@@ -1063,7 +1114,10 @@ directory = "/tmp"
         let results = list_workspaces_in(&dir);
         let names: Vec<&str> = results.iter().map(|(n, _)| n.as_str()).collect();
 
-        assert!(names.contains(&"my-workspace"), "user workspace must appear");
+        assert!(
+            names.contains(&"my-workspace"),
+            "user workspace must appear"
+        );
         assert!(!names.contains(&"_autosave"), "_autosave must be filtered");
         assert!(!names.contains(&"_session"), "_session must be filtered");
 
@@ -1178,7 +1232,8 @@ directory = "/tmp"
         let target = nested.join("session.toml");
 
         let ws = WorkspaceFile::default();
-        ws.save_to_file(&target).expect("save_to_file must create parent dirs");
+        ws.save_to_file(&target)
+            .expect("save_to_file must create parent dirs");
 
         assert!(
             target.exists(),
@@ -1268,7 +1323,11 @@ directory = "/tmp"
 
         let results = discover_workspaces_in(&dir);
         let names: Vec<&str> = results.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(names, vec!["alpha", "mango", "zebra"], "must be sorted alphabetically");
+        assert_eq!(
+            names,
+            vec!["alpha", "mango", "zebra"],
+            "must be sorted alphabetically"
+        );
 
         cleanup_tempdir(&dir);
     }

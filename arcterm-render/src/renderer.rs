@@ -89,12 +89,7 @@ impl Renderer {
     /// user's preference.
     pub fn new(window: Arc<Window>, font_size: f32) -> Result<Self, String> {
         let gpu = GpuState::new(window)?;
-        let text = TextRenderer::new(
-            &gpu.device,
-            &gpu.queue,
-            gpu.surface_format,
-            font_size,
-        );
+        let text = TextRenderer::new(&gpu.device, &gpu.queue, gpu.surface_format, font_size);
         let quads = QuadRenderer::new(&gpu.device, gpu.surface_format);
         let images = ImageQuadRenderer::new(&gpu.device, gpu.surface_format);
         Ok(Self {
@@ -285,9 +280,7 @@ impl Renderer {
         let image_placements: Vec<(&ImageTexture, [f32; 4])> = self
             .image_placements
             .iter()
-            .filter_map(|(id, rect)| {
-                self.image_store.get(id).map(|tex| (tex, *rect))
-            })
+            .filter_map(|(id, rect)| self.image_store.get(id).map(|tex| (tex, *rect)))
             .collect();
 
         // Upload image vertices + uniform to GPU before the render pass.
@@ -301,7 +294,9 @@ impl Renderer {
         }
 
         // Upload text to GPU.
-        let _ = self.text.submit_text_areas(&self.gpu.device, &self.gpu.queue);
+        let _ = self
+            .text
+            .submit_text_areas(&self.gpu.device, &self.gpu.queue);
 
         let (frame, view) = match self.gpu.begin_frame() {
             Ok(pair) => pair,
@@ -319,12 +314,12 @@ impl Renderer {
             }
         };
 
-        let mut encoder =
-            self.gpu
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("arcterm frame encoder"),
-                });
+        let mut encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("arcterm frame encoder"),
+            });
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -365,16 +360,21 @@ impl Renderer {
     ///
     /// Call this from the main loop after draining `terminal.take_pending_images()`.
     pub fn upload_image(&mut self, image_id: u32, rgba: &[u8], width: u32, height: u32) {
-        let texture = self
-            .images
-            .create_texture(&self.gpu.device, &self.gpu.queue, rgba, width, height);
+        let texture =
+            self.images
+                .create_texture(&self.gpu.device, &self.gpu.queue, rgba, width, height);
         self.image_store.insert(image_id, texture);
     }
 
     /// Calculate how many columns × rows fit the window at the given scale.
     ///
     /// Returns `(rows, cols)`.
-    pub fn grid_size_for_window(&self, width: u32, height: u32, scale_factor: f64) -> (usize, usize) {
+    pub fn grid_size_for_window(
+        &self,
+        width: u32,
+        height: u32,
+        scale_factor: f64,
+    ) -> (usize, usize) {
         let sf = scale_factor as f32;
         let cell_w = self.text.cell_size.width * sf;
         let cell_h = self.text.cell_size.height * sf;
@@ -411,8 +411,9 @@ pub fn build_quad_instances_at(
         for col_idx in 0..snapshot.cols {
             let cell = &snapshot.cells[row_idx * snapshot.cols + col_idx];
             let x = offset_x + col_idx as f32 * cell_w;
-            let is_cursor =
-                snapshot.cursor_visible && row_idx == snapshot.cursor_row && col_idx == snapshot.cursor_col;
+            let is_cursor = snapshot.cursor_visible
+                && row_idx == snapshot.cursor_row
+                && col_idx == snapshot.cursor_col;
 
             // Determine effective fg/bg (swapped for reverse attribute).
             let (eff_fg, eff_bg) = if cell.inverse {

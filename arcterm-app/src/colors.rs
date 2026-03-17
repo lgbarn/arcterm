@@ -45,16 +45,16 @@ impl ColorPalette {
     /// `nord`, `tokyo-night`, `gruvbox-dark`, `one-dark`.
     pub fn by_name(name: &str) -> Option<Self> {
         match name {
-            "cool-night"       => Some(Self::cool_night()),
+            "cool-night" => Some(Self::cool_night()),
             "catppuccin-mocha" => Some(Self::catppuccin_mocha()),
-            "dracula"          => Some(Self::dracula()),
-            "solarized-dark"   => Some(Self::solarized_dark()),
-            "solarized-light"  => Some(Self::solarized_light()),
-            "nord"             => Some(Self::nord()),
-            "tokyo-night"      => Some(Self::tokyo_night()),
-            "gruvbox-dark"     => Some(Self::gruvbox_dark()),
-            "one-dark"         => Some(Self::one_dark()),
-            _                  => None,
+            "dracula" => Some(Self::dracula()),
+            "solarized-dark" => Some(Self::solarized_dark()),
+            "solarized-light" => Some(Self::solarized_light()),
+            "nord" => Some(Self::nord()),
+            "tokyo-night" => Some(Self::tokyo_night()),
+            "gruvbox-dark" => Some(Self::gruvbox_dark()),
+            "one-dark" => Some(Self::one_dark()),
+            _ => None,
         }
     }
 
@@ -73,25 +73,25 @@ impl ColorPalette {
             };
         }
 
-        apply!(overrides.black,          self.ansi[0]);
-        apply!(overrides.red,            self.ansi[1]);
-        apply!(overrides.green,          self.ansi[2]);
-        apply!(overrides.yellow,         self.ansi[3]);
-        apply!(overrides.blue,           self.ansi[4]);
-        apply!(overrides.magenta,        self.ansi[5]);
-        apply!(overrides.cyan,           self.ansi[6]);
-        apply!(overrides.white,          self.ansi[7]);
-        apply!(overrides.bright_black,   self.ansi[8]);
-        apply!(overrides.bright_red,     self.ansi[9]);
-        apply!(overrides.bright_green,   self.ansi[10]);
-        apply!(overrides.bright_yellow,  self.ansi[11]);
-        apply!(overrides.bright_blue,    self.ansi[12]);
+        apply!(overrides.black, self.ansi[0]);
+        apply!(overrides.red, self.ansi[1]);
+        apply!(overrides.green, self.ansi[2]);
+        apply!(overrides.yellow, self.ansi[3]);
+        apply!(overrides.blue, self.ansi[4]);
+        apply!(overrides.magenta, self.ansi[5]);
+        apply!(overrides.cyan, self.ansi[6]);
+        apply!(overrides.white, self.ansi[7]);
+        apply!(overrides.bright_black, self.ansi[8]);
+        apply!(overrides.bright_red, self.ansi[9]);
+        apply!(overrides.bright_green, self.ansi[10]);
+        apply!(overrides.bright_yellow, self.ansi[11]);
+        apply!(overrides.bright_blue, self.ansi[12]);
         apply!(overrides.bright_magenta, self.ansi[13]);
-        apply!(overrides.bright_cyan,    self.ansi[14]);
-        apply!(overrides.bright_white,   self.ansi[15]);
-        apply!(overrides.foreground,     self.foreground);
-        apply!(overrides.background,     self.background);
-        apply!(overrides.cursor,         self.cursor);
+        apply!(overrides.bright_cyan, self.ansi[14]);
+        apply!(overrides.bright_white, self.ansi[15]);
+        apply!(overrides.foreground, self.foreground);
+        apply!(overrides.background, self.background);
+        apply!(overrides.cursor, self.cursor);
 
         self
     }
@@ -123,7 +123,7 @@ impl ColorPalette {
         Self {
             foreground: (0xcd, 0xd6, 0xf4), // text
             background: (0x1e, 0x1e, 0x2e), // base
-            cursor:     (0xf5, 0xe0, 0xdc), // rosewater
+            cursor: (0xf5, 0xe0, 0xdc),     // rosewater
             ansi: [
                 (0x45, 0x47, 0x5a), // 0  black      (surface1)
                 (0xf3, 0x8b, 0xa8), // 1  red
@@ -150,7 +150,7 @@ impl ColorPalette {
         Self {
             foreground: (0xf8, 0xf8, 0xf2),
             background: (0x28, 0x2a, 0x36),
-            cursor:     (0xf8, 0xf8, 0xf2),
+            cursor: (0xf8, 0xf8, 0xf2),
             ansi: [
                 (0x21, 0x22, 0x2c), // 0  black
                 (0xff, 0x55, 0x55), // 1  red
@@ -177,7 +177,7 @@ impl ColorPalette {
         Self {
             foreground: (0x83, 0x94, 0x96),
             background: (0x00, 0x2b, 0x36),
-            cursor:     (0x83, 0x94, 0x96),
+            cursor: (0x83, 0x94, 0x96),
             ansi: [
                 (0x07, 0x36, 0x42), // 0  black
                 (0xdc, 0x32, 0x2f), // 1  red
@@ -204,7 +204,7 @@ impl ColorPalette {
         Self {
             foreground: (0x65, 0x7b, 0x83),
             background: (0xfd, 0xf6, 0xe3),
-            cursor:     (0x58, 0x6e, 0x75),
+            cursor: (0x58, 0x6e, 0x75),
             ansi: [
                 (0x07, 0x36, 0x42), // 0  black
                 (0xdc, 0x32, 0x2f), // 1  red
@@ -231,7 +231,7 @@ impl ColorPalette {
         Self {
             foreground: (0xd8, 0xde, 0xe9),
             background: (0x2e, 0x34, 0x40),
-            cursor:     (0xd8, 0xde, 0xe9),
+            cursor: (0xd8, 0xde, 0xe9),
             ansi: [
                 (0x3b, 0x42, 0x52), // 0  black
                 (0xbf, 0x61, 0x6a), // 1  red
@@ -258,7 +258,7 @@ impl ColorPalette {
         Self {
             foreground: (0xc0, 0xca, 0xf5),
             background: (0x1a, 0x1b, 0x26),
-            cursor:     (0xc0, 0xca, 0xf5),
+            cursor: (0xc0, 0xca, 0xf5),
             ansi: [
                 (0x15, 0x17, 0x1b), // 0  black
                 (0xf7, 0x76, 0x8e), // 1  red
@@ -285,7 +285,7 @@ impl ColorPalette {
         Self {
             foreground: (0xeb, 0xdb, 0xb2),
             background: (0x28, 0x28, 0x28),
-            cursor:     (0xeb, 0xdb, 0xb2),
+            cursor: (0xeb, 0xdb, 0xb2),
             ansi: [
                 (0x28, 0x28, 0x28), // 0  black
                 (0xcc, 0x24, 0x1d), // 1  red
@@ -313,7 +313,7 @@ impl ColorPalette {
         Self {
             foreground: (0xcb, 0xe0, 0xf0),
             background: (0x01, 0x14, 0x23),
-            cursor:     (0x47, 0xff, 0x9c),
+            cursor: (0x47, 0xff, 0x9c),
             ansi: [
                 (0x0b, 0x25, 0x3a), // 0  black
                 (0xe8, 0x52, 0x52), // 1  red
@@ -339,7 +339,7 @@ impl ColorPalette {
         Self {
             foreground: (0xab, 0xb2, 0xbf),
             background: (0x28, 0x2c, 0x34),
-            cursor:     (0x52, 0x8b, 0xff),
+            cursor: (0x52, 0x8b, 0xff),
             ansi: [
                 (0x28, 0x2c, 0x34), // 0  black
                 (0xe0, 0x6c, 0x75), // 1  red
@@ -397,7 +397,10 @@ mod tests {
     fn by_name_unknown_returns_none() {
         assert!(ColorPalette::by_name("").is_none());
         assert!(ColorPalette::by_name("unknown-scheme").is_none());
-        assert!(ColorPalette::by_name("Catppuccin-Mocha").is_none(), "case-sensitive");
+        assert!(
+            ColorPalette::by_name("Catppuccin-Mocha").is_none(),
+            "case-sensitive"
+        );
     }
 
     // ── default ──────────────────────────────────────────────────────────────
@@ -447,25 +450,37 @@ mod tests {
         let overrides = ColorOverrides {
             foreground: Some("#ff0000".to_string()),
             background: Some("#00ff00".to_string()),
-            cursor:     Some("#0000ff".to_string()),
+            cursor: Some("#0000ff".to_string()),
             ..Default::default()
         };
         let palette = ColorPalette::default().with_overrides(&overrides);
-        assert_eq!(palette.foreground, (0xff, 0x00, 0x00), "foreground override");
-        assert_eq!(palette.background, (0x00, 0xff, 0x00), "background override");
-        assert_eq!(palette.cursor,     (0x00, 0x00, 0xff), "cursor override");
+        assert_eq!(
+            palette.foreground,
+            (0xff, 0x00, 0x00),
+            "foreground override"
+        );
+        assert_eq!(
+            palette.background,
+            (0x00, 0xff, 0x00),
+            "background override"
+        );
+        assert_eq!(palette.cursor, (0x00, 0x00, 0xff), "cursor override");
     }
 
     #[test]
     fn overrides_apply_ansi_slots() {
         let overrides = ColorOverrides {
-            red:          Some("#ff5555".to_string()),
+            red: Some("#ff5555".to_string()),
             bright_white: Some("#eeeeee".to_string()),
             ..Default::default()
         };
         let palette = ColorPalette::default().with_overrides(&overrides);
         assert_eq!(palette.ansi[1], (0xff, 0x55, 0x55), "ansi[1] red override");
-        assert_eq!(palette.ansi[15], (0xee, 0xee, 0xee), "ansi[15] bright_white override");
+        assert_eq!(
+            palette.ansi[15],
+            (0xee, 0xee, 0xee),
+            "ansi[15] bright_white override"
+        );
     }
 
     #[test]
@@ -473,13 +488,19 @@ mod tests {
         let original = ColorPalette::default();
         let overrides = ColorOverrides {
             foreground: Some("not-a-color".to_string()),
-            red:        Some("#zzzzzz".to_string()),
+            red: Some("#zzzzzz".to_string()),
             ..Default::default()
         };
         let palette = original.clone().with_overrides(&overrides);
         // Invalid entries must not change the palette.
-        assert_eq!(palette.foreground, original.foreground, "bad hex leaves foreground unchanged");
-        assert_eq!(palette.ansi[1], original.ansi[1], "bad hex leaves ansi[1] unchanged");
+        assert_eq!(
+            palette.foreground, original.foreground,
+            "bad hex leaves foreground unchanged"
+        );
+        assert_eq!(
+            palette.ansi[1], original.ansi[1],
+            "bad hex leaves ansi[1] unchanged"
+        );
     }
 
     #[test]
@@ -502,9 +523,9 @@ mod tests {
     #[test]
     fn parse_hex_invalid() {
         assert_eq!(super::parse_hex("1e1e2e"), None, "missing #");
-        assert_eq!(super::parse_hex("#1e1e2"),  None, "too short");
+        assert_eq!(super::parse_hex("#1e1e2"), None, "too short");
         assert_eq!(super::parse_hex("#1e1e2e0"), None, "too long");
         assert_eq!(super::parse_hex("#gggggg"), None, "invalid hex digits");
-        assert_eq!(super::parse_hex(""),         None, "empty string");
+        assert_eq!(super::parse_hex(""), None, "empty string");
     }
 }

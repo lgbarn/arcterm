@@ -34,15 +34,15 @@ impl PaletteAction {
         use crate::keymap::KeyAction;
         match self {
             PaletteAction::SplitHorizontal => KeyAction::Split(Axis::Horizontal),
-            PaletteAction::SplitVertical   => KeyAction::Split(Axis::Vertical),
-            PaletteAction::ClosePane       => KeyAction::ClosePane,
-            PaletteAction::ToggleZoom      => KeyAction::ToggleZoom,
-            PaletteAction::NewTab          => KeyAction::NewTab,
-            PaletteAction::CloseTab        => KeyAction::CloseTab,
-            PaletteAction::NavigateLeft    => KeyAction::NavigatePane(Direction::Left),
-            PaletteAction::NavigateRight   => KeyAction::NavigatePane(Direction::Right),
-            PaletteAction::NavigateUp      => KeyAction::NavigatePane(Direction::Up),
-            PaletteAction::NavigateDown    => KeyAction::NavigatePane(Direction::Down),
+            PaletteAction::SplitVertical => KeyAction::Split(Axis::Vertical),
+            PaletteAction::ClosePane => KeyAction::ClosePane,
+            PaletteAction::ToggleZoom => KeyAction::ToggleZoom,
+            PaletteAction::NewTab => KeyAction::NewTab,
+            PaletteAction::CloseTab => KeyAction::CloseTab,
+            PaletteAction::NavigateLeft => KeyAction::NavigatePane(Direction::Left),
+            PaletteAction::NavigateRight => KeyAction::NavigatePane(Direction::Right),
+            PaletteAction::NavigateUp => KeyAction::NavigatePane(Direction::Up),
+            PaletteAction::NavigateDown => KeyAction::NavigatePane(Direction::Down),
         }
     }
 }
@@ -428,7 +428,11 @@ impl WorkspaceSwitcherState {
     // -----------------------------------------------------------------------
 
     /// Process a winit [`KeyEvent`] and return what happened.
-    pub fn handle_input(&mut self, event: &KeyEvent, modifiers: ModifiersState) -> WorkspaceSwitcherEvent {
+    pub fn handle_input(
+        &mut self,
+        event: &KeyEvent,
+        modifiers: ModifiersState,
+    ) -> WorkspaceSwitcherEvent {
         if event.state != winit::event::ElementState::Pressed {
             return WorkspaceSwitcherEvent::Consumed;
         }
@@ -657,7 +661,11 @@ mod tests {
         let mut palette = PaletteState::new();
         palette.query = "split".to_string();
         palette.update_filter();
-        assert_eq!(palette.filtered.len(), 2, "expected 'Split Horizontal' and 'Split Vertical'");
+        assert_eq!(
+            palette.filtered.len(),
+            2,
+            "expected 'Split Horizontal' and 'Split Vertical'"
+        );
     }
 
     #[test]
@@ -666,7 +674,10 @@ mod tests {
         palette.query = "zoom".to_string();
         palette.update_filter();
         assert_eq!(palette.filtered.len(), 1);
-        assert_eq!(palette.commands[palette.filtered[0]].action, PaletteAction::ToggleZoom);
+        assert_eq!(
+            palette.commands[palette.filtered[0]].action,
+            PaletteAction::ToggleZoom
+        );
     }
 
     #[test]
@@ -706,7 +717,10 @@ mod tests {
         let last = palette.filtered.len() - 1;
         palette.selected = last;
         press_named(&mut palette, NamedKey::ArrowDown);
-        assert_eq!(palette.selected, last, "selection should not exceed last index");
+        assert_eq!(
+            palette.selected, last,
+            "selection should not exceed last index"
+        );
     }
 
     #[test]
@@ -714,7 +728,10 @@ mod tests {
         let mut palette = PaletteState::new();
         // First item is SplitHorizontal.
         let result = press_named(&mut palette, NamedKey::Enter);
-        assert_eq!(result, PaletteEvent::Execute(PaletteAction::SplitHorizontal));
+        assert_eq!(
+            result,
+            PaletteEvent::Execute(PaletteAction::SplitHorizontal)
+        );
     }
 
     #[test]
@@ -731,7 +748,10 @@ mod tests {
         assert_eq!(palette.query, "s");
         // Labels with 's' (case-insensitive): "Split Horizontal", "Split Vertical",
         // "Close Pane" has no 's', "Navigate*" has no 's' — at least 2
-        assert!(palette.filtered.len() >= 2, "at least two commands should contain 's'");
+        assert!(
+            palette.filtered.len() >= 2,
+            "at least two commands should contain 's'"
+        );
     }
 
     #[test]
@@ -753,7 +773,10 @@ mod tests {
         palette.selected = 3;
         palette.query = "split".to_string();
         palette.update_filter();
-        assert!(palette.selected <= 1, "selection must be within filtered range");
+        assert!(
+            palette.selected <= 1,
+            "selection must be within filtered range"
+        );
     }
 
     #[test]
@@ -834,28 +857,49 @@ mod tests {
 
     #[test]
     fn workspace_switcher_all_entries_visible_initially() {
-        let sw = WorkspaceSwitcherState::new(make_entries(&["alpha", "beta", "gamma", "delta", "epsilon"]));
+        let sw = WorkspaceSwitcherState::new(make_entries(&[
+            "alpha", "beta", "gamma", "delta", "epsilon",
+        ]));
         assert_eq!(sw.filtered.len(), 5);
     }
 
     #[test]
     fn workspace_switcher_filter_narrows_list() {
-        let mut sw = WorkspaceSwitcherState::new(make_entries(&["project-alpha", "proj-beta", "other", "myproj"]));
+        let mut sw = WorkspaceSwitcherState::new(make_entries(&[
+            "project-alpha",
+            "proj-beta",
+            "other",
+            "myproj",
+        ]));
         sw_press_char(&mut sw, "p");
         sw_press_char(&mut sw, "r");
         sw_press_char(&mut sw, "o");
         sw_press_char(&mut sw, "j");
-        let names: Vec<&str> = sw.filtered.iter().map(|&i| sw.entries[i].name.as_str()).collect();
-        assert!(names.iter().all(|n| n.contains("proj")), "all filtered entries must contain 'proj': {names:?}");
-        assert!(!names.contains(&"other"), "non-matching entry must be filtered");
+        let names: Vec<&str> = sw
+            .filtered
+            .iter()
+            .map(|&i| sw.entries[i].name.as_str())
+            .collect();
+        assert!(
+            names.iter().all(|n| n.contains("proj")),
+            "all filtered entries must contain 'proj': {names:?}"
+        );
+        assert!(
+            !names.contains(&"other"),
+            "non-matching entry must be filtered"
+        );
     }
 
     #[test]
     fn workspace_switcher_filter_is_case_insensitive() {
-        let mut sw = WorkspaceSwitcherState::new(make_entries(&["project-alpha", "proj-beta", "other"]));
+        let mut sw =
+            WorkspaceSwitcherState::new(make_entries(&["project-alpha", "proj-beta", "other"]));
         sw.query = "PROJ".to_string();
         sw.update_filter();
-        assert!(sw.filtered.len() >= 2, "PROJ must match proj entries case-insensitively");
+        assert!(
+            sw.filtered.len() >= 2,
+            "PROJ must match proj entries case-insensitively"
+        );
         for &i in &sw.filtered {
             assert!(sw.entries[i].name.to_lowercase().contains("proj"));
         }
@@ -918,8 +962,14 @@ mod tests {
 
     #[test]
     fn workspace_switcher_visible_entries_capped_at_ten() {
-        let names: Vec<&str> = vec!["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o"];
+        let names: Vec<&str> = vec![
+            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o",
+        ];
         let sw = WorkspaceSwitcherState::new(make_entries(&names));
-        assert_eq!(sw.visible_entries().len(), 10, "visible_entries must be capped at 10");
+        assert_eq!(
+            sw.visible_entries().len(),
+            10,
+            "visible_entries must be capped at 10"
+        );
     }
 }

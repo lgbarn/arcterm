@@ -16,7 +16,7 @@ use crate::host::arcterm::plugin::types::{
     EventKind as WitEventKind, KeyInputPayload, KeyModifiers, PluginEvent as WitPluginEvent,
     ToolSchema,
 };
-use crate::manifest::{build_wasi_ctx, PaneAccess, PluginManifest};
+use crate::manifest::{PaneAccess, PluginManifest, build_wasi_ctx};
 use crate::runtime::{PluginInstance, PluginRuntime};
 
 // ──────────────────────────────────────────────────────────────────
@@ -63,17 +63,19 @@ impl PluginEvent {
             PluginEvent::PaneClosed(s) => WitPluginEvent::PaneClosed(s.clone()),
             PluginEvent::CommandExecuted(s) => WitPluginEvent::CommandExecuted(s.clone()),
             PluginEvent::WorkspaceSwitched(s) => WitPluginEvent::WorkspaceSwitched(s.clone()),
-            PluginEvent::KeyInput { key_char, key_name, modifiers } => {
-                WitPluginEvent::KeyInput(KeyInputPayload {
-                    key_char: key_char.clone(),
-                    key_name: key_name.clone(),
-                    modifiers: KeyModifiers {
-                        ctrl: modifiers.ctrl,
-                        alt: modifiers.alt,
-                        shift: modifiers.shift,
-                    },
-                })
-            }
+            PluginEvent::KeyInput {
+                key_char,
+                key_name,
+                modifiers,
+            } => WitPluginEvent::KeyInput(KeyInputPayload {
+                key_char: key_char.clone(),
+                key_name: key_name.clone(),
+                modifiers: KeyModifiers {
+                    ctrl: modifiers.ctrl,
+                    alt: modifiers.alt,
+                    shift: modifiers.shift,
+                },
+            }),
         }
     }
 
@@ -248,10 +250,7 @@ impl PluginManager {
 
         let wasm_path = dir.join(&manifest.wasm);
         let wasm_canonical = wasm_path.canonicalize().map_err(|e| {
-            anyhow::anyhow!(
-                "plugin wasm file '{}' not found: {e}",
-                wasm_path.display()
-            )
+            anyhow::anyhow!("plugin wasm file '{}' not found: {e}", wasm_path.display())
         })?;
         let dir_canonical = dir.canonicalize().unwrap_or(dir.to_path_buf());
         if !wasm_canonical.starts_with(&dir_canonical) {
@@ -265,9 +264,12 @@ impl PluginManager {
 
         let wasi_ctx = build_wasi_ctx(&manifest.permissions);
         let permissions = manifest.permissions.clone();
-        let instance = self
-            .runtime
-            .load_plugin_with_wasi(&wasm_bytes, HashMap::new(), wasi_ctx, permissions)?;
+        let instance = self.runtime.load_plugin_with_wasi(
+            &wasm_bytes,
+            HashMap::new(),
+            wasi_ctx,
+            permissions,
+        )?;
 
         let id: PluginId = manifest.name.clone();
         let draw_buffer: DrawBuffer = Arc::new(Mutex::new(Vec::new()));
@@ -284,7 +286,11 @@ impl PluginManager {
 
         self.plugins.insert(
             id.clone(),
-            LoadedPlugin { manifest, draw_buffer, instance },
+            LoadedPlugin {
+                manifest,
+                draw_buffer,
+                instance,
+            },
         );
 
         log::info!("plugin: loaded '{}'", id);
@@ -314,7 +320,13 @@ impl PluginManager {
     pub fn list_installed(&self) -> Vec<(PluginId, String, String)> {
         self.plugins
             .iter()
-            .map(|(id, lp)| (id.clone(), lp.manifest.name.clone(), lp.manifest.version.clone()))
+            .map(|(id, lp)| {
+                (
+                    id.clone(),
+                    lp.manifest.name.clone(),
+                    lp.manifest.version.clone(),
+                )
+            })
             .collect()
     }
 
@@ -375,9 +387,15 @@ impl PluginManager {
     /// special characters in `name` are properly escaped (fixes ISSUE-014).
     pub fn call_tool(&self, name: &str, args_json: &str) -> anyhow::Result<String> {
         for lp in self.plugins.values() {
-            let mut inst = lp.instance.lock()
+            let mut inst = lp
+                .instance
+                .lock()
                 .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
-            let owned = inst.host_data().registered_tools.iter().any(|t| t.name == name);
+            let owned = inst
+                .host_data()
+                .registered_tools
+                .iter()
+                .any(|t| t.name == name);
             if owned {
                 return inst.call_tool_export(name, args_json);
             }
@@ -414,7 +432,9 @@ impl PluginManager {
         alt: bool,
         shift: bool,
     ) -> bool {
-        let Some(lp) = self.plugins.get(id) else { return false };
+        let Some(lp) = self.plugins.get(id) else {
+            return false;
+        };
 
         let event = WitPluginEvent::KeyInput(KeyInputPayload {
             key_char,
@@ -494,7 +514,10 @@ impl PluginManager {
                         continue;
                     }
                     Err(broadcast::error::RecvError::Closed) => {
-                        log::debug!("plugin '{}': event bus closed, stopping listener", plugin_id);
+                        log::debug!(
+                            "plugin '{}': event bus closed, stopping listener",
+                            plugin_id
+                        );
                         break;
                     }
                 };
@@ -609,9 +632,14 @@ wasm        = "plugin.wasm"
         let install_root = tmp.path().join("installed");
         let mgr = PluginManager::new_with_dir(install_root).expect("PluginManager::new_with_dir");
 
-        let err = mgr.copy_plugin_files(&source).expect_err("should fail due to symlink");
+        let err = mgr
+            .copy_plugin_files(&source)
+            .expect_err("should fail due to symlink");
         let msg = format!("{err}");
-        assert!(msg.contains("symlink"), "expected symlink error, got: {msg}");
+        assert!(
+            msg.contains("symlink"),
+            "expected symlink error, got: {msg}"
+        );
     }
 
     // ── (a) copy_plugin_files copies files to plugin_dir ─────────────────
@@ -630,7 +658,9 @@ wasm        = "plugin.wasm"
             PluginManager::new_with_dir(install_root.clone()).expect("PluginManager::new_with_dir");
 
         // Test the file-copy step directly (without wasm loading).
-        let dest = mgr.copy_plugin_files(&source).expect("copy_plugin_files should succeed");
+        let dest = mgr
+            .copy_plugin_files(&source)
+            .expect("copy_plugin_files should succeed");
         assert_eq!(dest, install_root.join("my-plugin"));
 
         // Verify files were copied to the correct location.
@@ -638,7 +668,8 @@ wasm        = "plugin.wasm"
         assert!(dest.join("plugin.wasm").exists(), "plugin.wasm was copied");
 
         // Verify the manifest parses correctly from the copied location.
-        let manifest_text = fs::read_to_string(dest.join("plugin.toml")).expect("read copied manifest");
+        let manifest_text =
+            fs::read_to_string(dest.join("plugin.toml")).expect("read copied manifest");
         let manifest = PluginManifest::from_toml(&manifest_text).expect("parse copied manifest");
         assert_eq!(manifest.name, "my-plugin");
         assert_eq!(manifest.version, "0.1.0");
@@ -690,8 +721,7 @@ wasm        = "plugin.wasm"
     async fn event_broadcast_reaches_subscribers() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let install_root = tmp.path().join("installed");
-        let mgr =
-            PluginManager::new_with_dir(install_root).expect("PluginManager::new_with_dir");
+        let mgr = PluginManager::new_with_dir(install_root).expect("PluginManager::new_with_dir");
 
         // Subscribe two receivers.
         let mut rx1 = mgr.event_sender().subscribe();
@@ -738,8 +768,7 @@ wasm        = "plugin.wasm"
     async fn external_sender_broadcasts_events() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let install_root = tmp.path().join("installed");
-        let mgr =
-            PluginManager::new_with_dir(install_root).expect("PluginManager::new_with_dir");
+        let mgr = PluginManager::new_with_dir(install_root).expect("PluginManager::new_with_dir");
 
         let sender = mgr.event_sender();
         let mut rx = sender.subscribe();
@@ -747,7 +776,9 @@ wasm        = "plugin.wasm"
         // Drop the manager — the sender should still work.
         drop(mgr);
 
-        sender.send(PluginEvent::CommandExecuted("ls -la".to_string())).ok();
+        sender
+            .send(PluginEvent::CommandExecuted("ls -la".to_string()))
+            .ok();
 
         let ev = tokio::time::timeout(Duration::from_millis(200), rx.recv())
             .await
@@ -766,12 +797,13 @@ wasm        = "plugin.wasm"
     fn call_tool_not_found_returns_valid_json() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let install_root = tmp.path().join("installed");
-        let mgr =
-            PluginManager::new_with_dir(install_root).expect("PluginManager::new_with_dir");
+        let mgr = PluginManager::new_with_dir(install_root).expect("PluginManager::new_with_dir");
 
         // A tool name with characters that would break format!()-based JSON assembly.
         let tricky_name = r#"tool"with\"special\chars"#;
-        let result = mgr.call_tool(tricky_name, "{}").expect("call_tool should return Ok");
+        let result = mgr
+            .call_tool(tricky_name, "{}")
+            .expect("call_tool should return Ok");
 
         // The response must be valid JSON regardless of special chars in the name.
         let parsed: serde_json::Value =
@@ -779,12 +811,16 @@ wasm        = "plugin.wasm"
 
         // The "tool" field must round-trip the original name exactly.
         assert_eq!(
-            parsed["tool"].as_str().expect("tool field must be a string"),
+            parsed["tool"]
+                .as_str()
+                .expect("tool field must be a string"),
             tricky_name,
             "tool field must preserve the original name"
         );
         assert_eq!(
-            parsed["error"].as_str().expect("error field must be a string"),
+            parsed["error"]
+                .as_str()
+                .expect("error field must be a string"),
             "tool not found"
         );
     }
@@ -799,12 +835,13 @@ wasm        = "plugin.wasm"
     fn call_tool_single_lock_no_toctou() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let install_root = tmp.path().join("installed");
-        let mgr =
-            PluginManager::new_with_dir(install_root).expect("PluginManager::new_with_dir");
+        let mgr = PluginManager::new_with_dir(install_root).expect("PluginManager::new_with_dir");
 
         // With no plugins loaded, call_tool must return a valid tool-not-found response
         // using a single lock scope (verified by the implementation's structure).
-        let result = mgr.call_tool("any-tool", "{}").expect("call_tool should return Ok");
+        let result = mgr
+            .call_tool("any-tool", "{}")
+            .expect("call_tool should return Ok");
         let parsed: serde_json::Value =
             serde_json::from_str(&result).expect("response must be valid JSON");
         assert_eq!(parsed["error"], "tool not found");
@@ -837,7 +874,9 @@ wasm        = "plugin.wasm"
         let mut mgr =
             PluginManager::new_with_dir(install_root).expect("PluginManager::new_with_dir");
 
-        let err = mgr.load_from_dir(&plugin_dir).expect_err("should fail: wasm file missing");
+        let err = mgr
+            .load_from_dir(&plugin_dir)
+            .expect_err("should fail: wasm file missing");
         let msg = format!("{err}");
         assert!(
             msg.contains("not found"),
@@ -856,7 +895,11 @@ wasm        = "plugin.wasm"
         let mut mgr =
             PluginManager::new_with_dir(install_root).expect("PluginManager::new_with_dir");
         let results = mgr.load_all_installed();
-        assert_eq!(results.len(), 0, "should return empty when directory doesn't exist");
+        assert_eq!(
+            results.len(),
+            0,
+            "should return empty when directory doesn't exist"
+        );
     }
 
     // ── (f) PluginEvent::to_wit() converts correctly ──────────────────────

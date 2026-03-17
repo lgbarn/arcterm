@@ -1,0 +1,22 @@
+FROM rust:1.87-bookworm
+
+RUN apt-get update && apt-get install -y \
+    strace \
+    pkg-config \
+    libfontconfig1-dev \
+    libfreetype6-dev \
+    libexpat1-dev \
+    libvulkan-dev \
+    libwayland-dev \
+    libxkbcommon-dev \
+    libx11-dev \
+    libxrandr-dev \
+    libxi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY . .
+
+RUN cargo build 2>&1
+
+CMD ["bash"]

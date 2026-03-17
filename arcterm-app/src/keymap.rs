@@ -290,10 +290,10 @@ impl KeymapHandler {
                     }
                 } else if let Key::Named(named) = logical_key {
                     match named {
-                        NamedKey::ArrowLeft  => Some(KeyAction::ResizePane(Direction::Left)),
+                        NamedKey::ArrowLeft => Some(KeyAction::ResizePane(Direction::Left)),
                         NamedKey::ArrowRight => Some(KeyAction::ResizePane(Direction::Right)),
-                        NamedKey::ArrowUp    => Some(KeyAction::ResizePane(Direction::Up)),
-                        NamedKey::ArrowDown  => Some(KeyAction::ResizePane(Direction::Down)),
+                        NamedKey::ArrowUp => Some(KeyAction::ResizePane(Direction::Up)),
+                        NamedKey::ArrowDown => Some(KeyAction::ResizePane(Direction::Down)),
                         _ => None,
                     }
                 } else {
@@ -332,7 +332,8 @@ impl KeymapHandler {
         }
 
         // Synthetic path used by tests (no KeyEvent available).
-        let bytes: Option<Vec<u8>> = self.translate_synthetic(logical_key, modifiers, app_cursor_keys);
+        let bytes: Option<Vec<u8>> =
+            self.translate_synthetic(logical_key, modifiers, app_cursor_keys);
         match bytes {
             Some(b) => KeyAction::Forward(b),
             None => KeyAction::Consumed,
@@ -359,19 +360,31 @@ impl KeymapHandler {
             }
             Key::Character(s) => Some(s.as_str().as_bytes().to_vec()),
             Key::Named(named) => match named {
-                NamedKey::Enter     => Some(b"\r".to_vec()),
+                NamedKey::Enter => Some(b"\r".to_vec()),
                 NamedKey::Backspace => Some(vec![0x7f]),
-                NamedKey::Tab       => Some(b"\t".to_vec()),
-                NamedKey::Escape    => Some(b"\x1b".to_vec()),
-                NamedKey::Space     => Some(b" ".to_vec()),
-                NamedKey::ArrowUp =>
-                    Some(if app_cursor_keys { b"\x1bOA".to_vec() } else { b"\x1b[A".to_vec() }),
-                NamedKey::ArrowDown =>
-                    Some(if app_cursor_keys { b"\x1bOB".to_vec() } else { b"\x1b[B".to_vec() }),
-                NamedKey::ArrowRight =>
-                    Some(if app_cursor_keys { b"\x1bOC".to_vec() } else { b"\x1b[C".to_vec() }),
-                NamedKey::ArrowLeft =>
-                    Some(if app_cursor_keys { b"\x1bOD".to_vec() } else { b"\x1b[D".to_vec() }),
+                NamedKey::Tab => Some(b"\t".to_vec()),
+                NamedKey::Escape => Some(b"\x1b".to_vec()),
+                NamedKey::Space => Some(b" ".to_vec()),
+                NamedKey::ArrowUp => Some(if app_cursor_keys {
+                    b"\x1bOA".to_vec()
+                } else {
+                    b"\x1b[A".to_vec()
+                }),
+                NamedKey::ArrowDown => Some(if app_cursor_keys {
+                    b"\x1bOB".to_vec()
+                } else {
+                    b"\x1b[B".to_vec()
+                }),
+                NamedKey::ArrowRight => Some(if app_cursor_keys {
+                    b"\x1bOC".to_vec()
+                } else {
+                    b"\x1b[C".to_vec()
+                }),
+                NamedKey::ArrowLeft => Some(if app_cursor_keys {
+                    b"\x1bOD".to_vec()
+                } else {
+                    b"\x1b[D".to_vec()
+                }),
                 _ => None,
             },
             Key::Dead(_) | Key::Unidentified(_) => None,
@@ -459,25 +472,37 @@ mod tests {
     #[test]
     fn ctrl_h_navigates_left() {
         let mut h = KeymapHandler::new(500);
-        assert_eq!(press(&mut h, char_key("h"), ctrl()), KeyAction::NavigatePane(Direction::Left));
+        assert_eq!(
+            press(&mut h, char_key("h"), ctrl()),
+            KeyAction::NavigatePane(Direction::Left)
+        );
     }
 
     #[test]
     fn ctrl_j_navigates_down() {
         let mut h = KeymapHandler::new(500);
-        assert_eq!(press(&mut h, char_key("j"), ctrl()), KeyAction::NavigatePane(Direction::Down));
+        assert_eq!(
+            press(&mut h, char_key("j"), ctrl()),
+            KeyAction::NavigatePane(Direction::Down)
+        );
     }
 
     #[test]
     fn ctrl_k_navigates_up() {
         let mut h = KeymapHandler::new(500);
-        assert_eq!(press(&mut h, char_key("k"), ctrl()), KeyAction::NavigatePane(Direction::Up));
+        assert_eq!(
+            press(&mut h, char_key("k"), ctrl()),
+            KeyAction::NavigatePane(Direction::Up)
+        );
     }
 
     #[test]
     fn ctrl_l_navigates_right() {
         let mut h = KeymapHandler::new(500);
-        assert_eq!(press(&mut h, char_key("l"), ctrl()), KeyAction::NavigatePane(Direction::Right));
+        assert_eq!(
+            press(&mut h, char_key("l"), ctrl()),
+            KeyAction::NavigatePane(Direction::Right)
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -508,7 +533,10 @@ mod tests {
     fn leader_then_v_splits_vertical() {
         let mut h = KeymapHandler::new(500);
         press(&mut h, char_key("a"), ctrl());
-        assert_eq!(press(&mut h, char_key("v"), no_mods()), KeyAction::Split(Axis::Vertical));
+        assert_eq!(
+            press(&mut h, char_key("v"), no_mods()),
+            KeyAction::Split(Axis::Vertical)
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -519,14 +547,20 @@ mod tests {
     fn leader_then_q_closes_pane() {
         let mut h = KeymapHandler::new(500);
         press(&mut h, char_key("a"), ctrl());
-        assert_eq!(press(&mut h, char_key("q"), no_mods()), KeyAction::ClosePane);
+        assert_eq!(
+            press(&mut h, char_key("q"), no_mods()),
+            KeyAction::ClosePane
+        );
     }
 
     #[test]
     fn leader_then_z_toggles_zoom() {
         let mut h = KeymapHandler::new(500);
         press(&mut h, char_key("a"), ctrl());
-        assert_eq!(press(&mut h, char_key("z"), no_mods()), KeyAction::ToggleZoom);
+        assert_eq!(
+            press(&mut h, char_key("z"), no_mods()),
+            KeyAction::ToggleZoom
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -544,7 +578,10 @@ mod tests {
     fn leader_then_w_opens_workspace_switcher() {
         let mut h = KeymapHandler::new(500);
         press(&mut h, char_key("a"), ctrl());
-        assert_eq!(press(&mut h, char_key("w"), no_mods()), KeyAction::OpenWorkspaceSwitcher);
+        assert_eq!(
+            press(&mut h, char_key("w"), no_mods()),
+            KeyAction::OpenWorkspaceSwitcher
+        );
     }
 
     #[test]
@@ -730,7 +767,10 @@ mod tests {
         press(&mut h, char_key("a"), ctrl());
         let action = press(&mut h, char_key("s"), no_mods());
         assert_eq!(action, KeyAction::SaveWorkspace);
-        assert!(!h.is_leader_pending(), "state must reset to Normal after SaveWorkspace");
+        assert!(
+            !h.is_leader_pending(),
+            "state must reset to Normal after SaveWorkspace"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -743,7 +783,10 @@ mod tests {
         press(&mut h, char_key("a"), ctrl()); // enter leader
         let action = press(&mut h, char_key("a"), no_mods()); // 'a' without ctrl
         assert_eq!(action, KeyAction::JumpToAiPane);
-        assert!(!h.is_leader_pending(), "state must reset to Normal after JumpToAiPane");
+        assert!(
+            !h.is_leader_pending(),
+            "state must reset to Normal after JumpToAiPane"
+        );
     }
 
     #[test]
@@ -752,7 +795,10 @@ mod tests {
         press(&mut h, char_key("a"), ctrl()); // enter leader
         let action = press(&mut h, char_key("p"), no_mods());
         assert_eq!(action, KeyAction::TogglePlanView);
-        assert!(!h.is_leader_pending(), "state must reset to Normal after TogglePlanView");
+        assert!(
+            !h.is_leader_pending(),
+            "state must reset to Normal after TogglePlanView"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -765,7 +811,10 @@ mod tests {
         press(&mut h, char_key("a"), ctrl()); // enter leader
         let action = press(&mut h, char_key("o"), no_mods());
         assert_eq!(action, KeyAction::ReviewOverlay);
-        assert!(!h.is_leader_pending(), "state must reset to Normal after ReviewOverlay");
+        assert!(
+            !h.is_leader_pending(),
+            "state must reset to Normal after ReviewOverlay"
+        );
     }
 
     #[test]
@@ -774,6 +823,9 @@ mod tests {
         press(&mut h, char_key("a"), ctrl()); // enter leader
         let action = press(&mut h, char_key("/"), no_mods());
         assert_eq!(action, KeyAction::CrossPaneSearch);
-        assert!(!h.is_leader_pending(), "state must reset to Normal after CrossPaneSearch");
+        assert!(
+            !h.is_leader_pending(),
+            "state must reset to Normal after CrossPaneSearch"
+        );
     }
 }

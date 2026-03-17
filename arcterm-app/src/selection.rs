@@ -63,7 +63,12 @@ pub fn generate_selection_quads(
         let width = (col_end - col_start) as f32 * cell_w * scale;
         let height = cell_h * scale;
 
-        quads.push(SelectionQuad { x, y, width, height });
+        quads.push(SelectionQuad {
+            x,
+            y,
+            width,
+            height,
+        });
     }
 
     quads
@@ -143,8 +148,7 @@ impl Selection {
             return false;
         }
         let (start, end) = self.normalized();
-        (pos.row, pos.col) >= (start.row, start.col)
-            && (pos.row, pos.col) <= (end.row, end.col)
+        (pos.row, pos.col) >= (start.row, start.col) && (pos.row, pos.col) <= (end.row, end.col)
     }
 
     /// Extract the selected text from `snapshot`.
@@ -199,13 +203,7 @@ impl Selection {
 ///
 /// Physical pixels are divided by scale to get logical coordinates, then
 /// divided by cell dimensions to get the grid column/row.
-pub fn pixel_to_cell(
-    x: f64,
-    y: f64,
-    cell_w: f64,
-    cell_h: f64,
-    scale: f64,
-) -> CellPos {
+pub fn pixel_to_cell(x: f64, y: f64, cell_w: f64, cell_h: f64, scale: f64) -> CellPos {
     let logical_x = x / scale;
     let logical_y = y / scale;
     let col = (logical_x / cell_w).floor() as usize;
@@ -286,8 +284,8 @@ impl Clipboard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arcterm_render::{RenderSnapshot, SnapshotCell, SnapshotColor};
     use alacritty_terminal::vte::ansi::CursorShape;
+    use arcterm_render::{RenderSnapshot, SnapshotCell, SnapshotColor};
 
     // -----------------------------------------------------------------------
     // Helper: build a RenderSnapshot from text rows
@@ -477,7 +475,10 @@ mod tests {
 
     fn make_snapshot_row_cells(s: &str) -> Vec<SnapshotCell> {
         s.chars()
-            .map(|c| SnapshotCell { c, ..SnapshotCell::default() })
+            .map(|c| SnapshotCell {
+                c,
+                ..SnapshotCell::default()
+            })
             .collect()
     }
 
@@ -565,7 +566,10 @@ mod tests {
         let quads = generate_selection_quads(&sel, 24, 80, 8.0, 16.0, 2.0);
         assert_eq!(quads.len(), 1);
         let q = quads[0];
-        assert!((q.width - 32.0).abs() < 1e-3, "width = 2 cells * 8 * 2 = 32");
+        assert!(
+            (q.width - 32.0).abs() < 1e-3,
+            "width = 2 cells * 8 * 2 = 32"
+        );
         assert!((q.height - 32.0).abs() < 1e-3, "height = 16 * 2 = 32");
     }
 

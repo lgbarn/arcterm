@@ -349,15 +349,26 @@ impl ImageQuadRenderer {
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniform));
 
         // Build all vertices for the frame into one contiguous buffer.
-        let mut vertices: Vec<ImageVertex> =
-            Vec::with_capacity(count * Self::VERTS_PER_QUAD);
+        let mut vertices: Vec<ImageVertex> = Vec::with_capacity(count * Self::VERTS_PER_QUAD);
 
         for (_, rect) in placements.iter().take(count) {
             let [x, y, w, h] = *rect;
-            let tl = ImageVertex { position: [x,     y    ], uv: [0.0, 0.0] };
-            let tr = ImageVertex { position: [x + w, y    ], uv: [1.0, 0.0] };
-            let bl = ImageVertex { position: [x,     y + h], uv: [0.0, 1.0] };
-            let br = ImageVertex { position: [x + w, y + h], uv: [1.0, 1.0] };
+            let tl = ImageVertex {
+                position: [x, y],
+                uv: [0.0, 0.0],
+            };
+            let tr = ImageVertex {
+                position: [x + w, y],
+                uv: [1.0, 0.0],
+            };
+            let bl = ImageVertex {
+                position: [x, y + h],
+                uv: [0.0, 1.0],
+            };
+            let br = ImageVertex {
+                position: [x + w, y + h],
+                uv: [1.0, 1.0],
+            };
             vertices.extend_from_slice(&[tl, tr, bl, tr, br, bl]);
         }
 

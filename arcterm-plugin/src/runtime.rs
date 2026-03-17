@@ -6,8 +6,8 @@ use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::p2::add_to_linker_sync;
 
-use crate::host::{ArctermPlugin, PluginHostData};
 use crate::host::arcterm::plugin::types::{PluginEvent as WitPluginEvent, StyledLine};
+use crate::host::{ArctermPlugin, PluginHostData};
 
 /// Process-wide singleton: owns the Engine and a pre-configured Linker.
 pub struct PluginRuntime {
@@ -47,7 +47,11 @@ impl PluginRuntime {
         // Add our custom host import functions to the linker.
         ArctermPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |data| data)?;
 
-        Ok(Self { engine, linker, shutdown })
+        Ok(Self {
+            engine,
+            linker,
+            shutdown,
+        })
     }
 
     /// Compile a WASM component from raw bytes and return a `PluginInstance`.
@@ -148,7 +152,9 @@ impl PluginInstance {
     pub fn call_tool_export(&mut self, name: &str, args_json: &str) -> anyhow::Result<String> {
         // 3000 epochs at 10ms tick interval = 30-second deadline.
         self.store.set_epoch_deadline(3000);
-        let result = self.instance.call_call_tool(&mut self.store, name, args_json)?;
+        let result = self
+            .instance
+            .call_call_tool(&mut self.store, name, args_json)?;
         Ok(result)
     }
 

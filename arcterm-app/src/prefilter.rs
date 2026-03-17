@@ -466,10 +466,7 @@ mod tests {
     #[test]
     fn test_osc133_d_no_exit_code() {
         let out = run(b"\x1b]133;D\x07");
-        assert_eq!(
-            out.osc133_events,
-            vec![Osc133Event::CommandFinished(None)]
-        );
+        assert_eq!(out.osc133_events, vec![Osc133Event::CommandFinished(None)]);
     }
 
     // -------------------------------------------------------------------------

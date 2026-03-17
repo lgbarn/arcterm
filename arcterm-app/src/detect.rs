@@ -180,16 +180,18 @@ fn detect_fenced_code_block(text_rows: &[(usize, String)]) -> Option<DetectionRe
     let open_idx = text_rows.iter().position(|(_, line)| {
         let trimmed = line.trim();
         trimmed.starts_with("```")
-            && trimmed[3..].chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+            && trimmed[3..]
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
     })?;
 
     let (open_row, open_line) = &text_rows[open_idx];
     let lang = open_line.trim()[3..].trim().to_string();
 
     // Find the closing fence: a subsequent line that is exactly ``` (no lang).
-    let close_idx = text_rows[open_idx + 1..].iter().position(|(_, line)| {
-        line.trim() == "```"
-    })?;
+    let close_idx = text_rows[open_idx + 1..]
+        .iter()
+        .position(|(_, line)| line.trim() == "```")?;
     // close_idx is relative to open_idx+1.
     let close_row_tuple = &text_rows[open_idx + 1 + close_idx];
     let close_row = close_row_tuple.0;
@@ -244,10 +246,7 @@ fn detect_diff(text_rows: &[(usize, String)]) -> Option<DetectionResult> {
         let content_start = i + 2 + hunk_pos;
         let mut end_idx = content_start;
         for (j, (_, l)) in text_rows.iter().enumerate().take(n).skip(content_start) {
-            if l.starts_with('+')
-                || l.starts_with('-')
-                || l.starts_with(' ')
-                || l.starts_with("@@")
+            if l.starts_with('+') || l.starts_with('-') || l.starts_with(' ') || l.starts_with("@@")
             {
                 end_idx = j;
             } else {
@@ -255,8 +254,10 @@ fn detect_diff(text_rows: &[(usize, String)]) -> Option<DetectionResult> {
             }
         }
 
-        let content_lines: Vec<&str> =
-            text_rows[i..=end_idx].iter().map(|(_, l)| l.as_str()).collect();
+        let content_lines: Vec<&str> = text_rows[i..=end_idx]
+            .iter()
+            .map(|(_, l)| l.as_str())
+            .collect();
         let content = content_lines.join("\n");
 
         return Some(DetectionResult {
@@ -316,8 +317,10 @@ fn detect_json(text_rows: &[(usize, String)]) -> Option<DetectionResult> {
             continue;
         }
 
-        let block_lines: Vec<&str> =
-            text_rows[i..=end_idx].iter().map(|(_, l)| l.as_str()).collect();
+        let block_lines: Vec<&str> = text_rows[i..=end_idx]
+            .iter()
+            .map(|(_, l)| l.as_str())
+            .collect();
         let block_text = block_lines.join("\n");
 
         // Validate with serde_json.
@@ -349,9 +352,7 @@ fn detect_json(text_rows: &[(usize, String)]) -> Option<DetectionResult> {
 /// non-empty lines.
 fn detect_markdown(text_rows: &[(usize, String)]) -> Option<DetectionResult> {
     // Find the first heading.
-    let heading_idx = text_rows.iter().position(|(_, line)| {
-        is_heading(line)
-    })?;
+    let heading_idx = text_rows.iter().position(|(_, line)| is_heading(line))?;
 
     let (start_row, _) = text_rows[heading_idx];
 
@@ -403,8 +404,8 @@ fn is_heading(line: &str) -> bool {
 
 #[cfg(test)]
 fn rows_from_strings(lines: &[&str]) -> RenderSnapshot {
-    use arcterm_render::{SnapshotCell, SnapshotColor};
     use alacritty_terminal::vte::ansi::CursorShape;
+    use arcterm_render::{SnapshotCell, SnapshotColor};
 
     let num_rows = lines.len();
     let num_cols = lines.iter().map(|l| l.len()).max().unwrap_or(1);
@@ -439,11 +440,7 @@ mod tests {
 
     #[test]
     fn detects_fenced_code_block_with_lang() {
-        let rows = rows_from_strings(&[
-            "```rust",
-            "fn main() {}",
-            "```",
-        ]);
+        let rows = rows_from_strings(&["```rust", "fn main() {}", "```"]);
         let mut det = AutoDetector::new();
         let results = det.scan_rows(&rows, 2);
         assert_eq!(results.len(), 1, "expected one detection");
@@ -458,10 +455,7 @@ mod tests {
     #[test]
     fn no_detection_for_unclosed_code_fence() {
         // Opening ``` without closing: conservative, no detection.
-        let rows = rows_from_strings(&[
-            "```python",
-            "print('hello')",
-        ]);
+        let rows = rows_from_strings(&["```python", "print('hello')"]);
         let mut det = AutoDetector::new();
         let results = det.scan_rows(&rows, 1);
         assert!(results.is_empty(), "unclosed fence must not be detected");
@@ -496,25 +490,20 @@ mod tests {
     #[test]
     fn single_dash_dash_dash_not_detected_as_diff() {
         // A markdown horizontal rule or section separator must not trigger diff.
-        let rows = rows_from_strings(&[
-            "---",
-            "Some text",
-            "More text",
-        ]);
+        let rows = rows_from_strings(&["---", "Some text", "More text"]);
         let mut det = AutoDetector::new();
         let results = det.scan_rows(&rows, 2);
-        assert!(results.is_empty(), "bare '---' must not be detected as diff");
+        assert!(
+            results.is_empty(),
+            "bare '---' must not be detected as diff"
+        );
     }
 
     // --- JSON ---
 
     #[test]
     fn detects_valid_json_object() {
-        let rows = rows_from_strings(&[
-            r#"{"#,
-            r#"  "key": "value""#,
-            r#"}"#,
-        ]);
+        let rows = rows_from_strings(&[r#"{"#, r#"  "key": "value""#, r#"}"#]);
         let mut det = AutoDetector::new();
         let results = det.scan_rows(&rows, 2);
         assert_eq!(results.len(), 1, "expected one JSON detection");
@@ -524,11 +513,7 @@ mod tests {
     #[test]
     fn invalid_json_not_detected() {
         // Shell brace expansion like `{foo}` must not be detected.
-        let rows = rows_from_strings(&[
-            "{foo}",
-            "  bar",
-            "  baz",
-        ]);
+        let rows = rows_from_strings(&["{foo}", "  bar", "  baz"]);
         let mut det = AutoDetector::new();
         let results = det.scan_rows(&rows, 2);
         assert!(results.is_empty(), "invalid JSON must not be detected");
@@ -547,13 +532,7 @@ mod tests {
 
     #[test]
     fn detects_markdown_with_heading_and_body() {
-        let rows = rows_from_strings(&[
-            "# Title",
-            "",
-            "Some paragraph text",
-            "",
-            "## Section",
-        ]);
+        let rows = rows_from_strings(&["# Title", "", "Some paragraph text", "", "## Section"]);
         let mut det = AutoDetector::new();
         let results = det.scan_rows(&rows, 4);
         assert_eq!(results.len(), 1, "expected one markdown detection");
@@ -566,7 +545,10 @@ mod tests {
         let rows = rows_from_strings(&["# Just a title"]);
         let mut det = AutoDetector::new();
         let results = det.scan_rows(&rows, 0);
-        assert!(results.is_empty(), "single heading must not be detected as markdown");
+        assert!(
+            results.is_empty(),
+            "single heading must not be detected as markdown"
+        );
     }
 
     // --- Non-interference: shell output ---
@@ -582,7 +564,10 @@ mod tests {
         ]);
         let mut det = AutoDetector::new();
         let results = det.scan_rows(&rows, 4);
-        assert!(results.is_empty(), "ls output must not trigger any detection");
+        assert!(
+            results.is_empty(),
+            "ls output must not trigger any detection"
+        );
     }
 
     #[test]
@@ -596,22 +581,24 @@ mod tests {
         ]);
         let mut det = AutoDetector::new();
         let results = det.scan_rows(&rows, 4);
-        assert!(results.is_empty(), "shell prompts must not trigger any detection");
+        assert!(
+            results.is_empty(),
+            "shell prompts must not trigger any detection"
+        );
     }
 
     // --- Disabled detector ---
 
     #[test]
     fn disabled_detector_returns_empty() {
-        let rows = rows_from_strings(&[
-            "```rust",
-            "fn main() {}",
-            "```",
-        ]);
+        let rows = rows_from_strings(&["```rust", "fn main() {}", "```"]);
         let mut det = AutoDetector::new();
         det.set_enabled(false);
         let results = det.scan_rows(&rows, 2);
-        assert!(results.is_empty(), "disabled detector must return empty results");
+        assert!(
+            results.is_empty(),
+            "disabled detector must return empty results"
+        );
     }
 }
 
@@ -640,13 +627,7 @@ mod edge_case_tests {
         let mut det = AutoDetector::new();
         det.scan_rows(&rows, 4); // advances to 5
         // Now scan with cursor_row=1 (< last_scanned_row=5): should reset and scan 0..=1
-        let rows2 = rows_from_strings(&[
-            "```rust",
-            "fn foo() {}",
-            "```",
-            "x",
-            "y",
-        ]);
+        let rows2 = rows_from_strings(&["```rust", "fn foo() {}", "```", "x", "y"]);
         det.scan_rows(&rows2, 1); // cursor < last, triggers reset; scans rows 0-1 (no complete block)
         assert_eq!(det.last_scanned_row, 2);
     }
@@ -655,15 +636,15 @@ mod edge_case_tests {
     fn two_blocks_in_different_row_ranges_both_detected() {
         // Code block in rows 0-2, diff in rows 4-8.
         let rows = rows_from_strings(&[
-            "```rust",        // 0
-            "fn foo() {}",    // 1
-            "```",            // 2
-            "plain text",     // 3
-            "--- a/foo.rs",   // 4
-            "+++ b/foo.rs",   // 5
-            "@@ -1 +1 @@",   // 6
-            "-old",           // 7
-            "+new",           // 8
+            "```rust",      // 0
+            "fn foo() {}",  // 1
+            "```",          // 2
+            "plain text",   // 3
+            "--- a/foo.rs", // 4
+            "+++ b/foo.rs", // 5
+            "@@ -1 +1 @@",  // 6
+            "-old",         // 7
+            "+new",         // 8
         ]);
         let mut det = AutoDetector::new();
         let results = det.scan_rows(&rows, 8);
@@ -676,13 +657,13 @@ mod edge_case_tests {
     fn code_block_containing_diff_lines_detected_as_code_block() {
         // A diff inside a code fence: the code block has priority.
         let rows = rows_from_strings(&[
-            "```diff",         // 0
-            "--- a/file.rs",   // 1
-            "+++ b/file.rs",   // 2
-            "@@ -1 +1 @@",    // 3
-            "-old",            // 4
-            "+new",            // 5
-            "```",             // 6
+            "```diff",       // 0
+            "--- a/file.rs", // 1
+            "+++ b/file.rs", // 2
+            "@@ -1 +1 @@",   // 3
+            "-old",          // 4
+            "+new",          // 5
+            "```",           // 6
         ]);
         let mut det = AutoDetector::new();
         let results = det.scan_rows(&rows, 6);

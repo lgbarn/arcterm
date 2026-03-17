@@ -83,7 +83,10 @@ pub fn parse_plan_summary_from_str(text: &str, path: &Path) -> Option<PlanSummar
         // Match `[x]` / `[X]` (completed) and `[ ]` (incomplete).
         let mut search = line;
         while !search.is_empty() {
-            if let Some(rest) = search.strip_prefix("[x]").or_else(|| search.strip_prefix("[X]")) {
+            if let Some(rest) = search
+                .strip_prefix("[x]")
+                .or_else(|| search.strip_prefix("[X]"))
+            {
                 completed += 1;
                 total += 1;
                 search = rest;
@@ -103,7 +106,12 @@ pub fn parse_plan_summary_from_str(text: &str, path: &Path) -> Option<PlanSummar
         return None;
     }
 
-    Some(PlanSummary { phase, completed, total, file_path: path.to_path_buf() })
+    Some(PlanSummary {
+        phase,
+        completed,
+        total,
+        file_path: path.to_path_buf(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -164,7 +172,9 @@ pub fn discover_plan_files(workspace_root: &Path) -> Vec<PathBuf> {
 
 /// Recursively collect `PLAN-*.md` files from `dir` (sorted at each level).
 fn collect_plan_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     let mut items: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
     items.sort();
     for item in items {
@@ -198,20 +208,18 @@ impl PlanStripState {
     /// Build a new [`PlanStripState`] by scanning `workspace_root`.
     pub fn discover(workspace_root: &Path) -> Self {
         let files = discover_plan_files(workspace_root);
-        let summaries: Vec<PlanSummary> = files
-            .iter()
-            .filter_map(|p| parse_plan_summary(p))
-            .collect();
-        Self { summaries, last_updated: Instant::now() }
+        let summaries: Vec<PlanSummary> =
+            files.iter().filter_map(|p| parse_plan_summary(p)).collect();
+        Self {
+            summaries,
+            last_updated: Instant::now(),
+        }
     }
 
     /// Refresh summaries from disk.
     pub fn refresh(&mut self, workspace_root: &Path) {
         let files = discover_plan_files(workspace_root);
-        self.summaries = files
-            .iter()
-            .filter_map(|p| parse_plan_summary(p))
-            .collect();
+        self.summaries = files.iter().filter_map(|p| parse_plan_summary(p)).collect();
         self.last_updated = Instant::now();
     }
 
@@ -253,7 +261,10 @@ pub struct PlanViewState {
 impl PlanViewState {
     /// Create a new [`PlanViewState`] with all summaries listed.
     pub fn new(entries: Vec<PlanSummary>) -> Self {
-        Self { entries, selected: 0 }
+        Self {
+            entries,
+            selected: 0,
+        }
     }
 
     /// Move selection up (wraps to last entry).
@@ -355,14 +366,22 @@ impl PlanViewState {
                     phase,
                     entry.completed,
                     entry.total,
-                    entry.file_path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                    entry
+                        .file_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("?"),
                 )
             } else {
                 format!(
                     "{}/{} tasks — {}",
                     entry.completed,
                     entry.total,
-                    entry.file_path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                    entry
+                        .file_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("?"),
                 )
             };
             items.push(PaletteText {

@@ -131,11 +131,7 @@ impl HighlightEngine {
     ///
     /// `language_hint` is a file extension (e.g. `"rs"`, `"py"`).  If `None`,
     /// syntect attempts first-line detection.  Falls back to plain text.
-    pub fn highlight_code(
-        &self,
-        content: &str,
-        language_hint: Option<&str>,
-    ) -> Vec<RenderedLine> {
+    pub fn highlight_code(&self, content: &str, language_hint: Option<&str>) -> Vec<RenderedLine> {
         if content.is_empty() {
             return Vec::new();
         }
@@ -154,9 +150,7 @@ impl HighlightEngine {
         content
             .lines()
             .map(|line| {
-                let spans_raw = highlighter
-                    .highlight_line(line, ss)
-                    .unwrap_or_default();
+                let spans_raw = highlighter.highlight_line(line, ss).unwrap_or_default();
 
                 let spans = spans_raw
                     .into_iter()
@@ -166,11 +160,7 @@ impl HighlightEngine {
                         }
                         Some(StyledSpan {
                             text: text.to_string(),
-                            color: (
-                                style.foreground.r,
-                                style.foreground.g,
-                                style.foreground.b,
-                            ),
+                            color: (style.foreground.r, style.foreground.g, style.foreground.b),
                             bold: style.font_style.contains(FontStyle::BOLD),
                             italic: style.font_style.contains(FontStyle::ITALIC),
                         })
@@ -224,12 +214,9 @@ impl HighlightEngine {
                     .collect()
             }
             Ok(value) => {
-                let pretty = serde_json::to_string_pretty(&value)
-                    .unwrap_or_else(|_| content.to_string());
-                pretty
-                    .lines()
-                    .map(Self::colorize_json_line)
-                    .collect()
+                let pretty =
+                    serde_json::to_string_pretty(&value).unwrap_or_else(|_| content.to_string());
+                pretty.lines().map(Self::colorize_json_line).collect()
             }
         }
     }
@@ -344,9 +331,7 @@ impl HighlightEngine {
     /// Headings are coloured and bold; fenced code blocks delegate to
     /// `highlight_code` for syntax-highlighted output.
     pub fn highlight_markdown(&self, content: &str) -> Vec<RenderedLine> {
-        use pulldown_cmark::{
-            CodeBlockKind, Event, Options, Parser, Tag, TagEnd, TextMergeStream,
-        };
+        use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd, TextMergeStream};
 
         const H1_COLOR: (u8, u8, u8) = (100, 200, 255);
         const H2_COLOR: (u8, u8, u8) = (140, 200, 220);
@@ -356,7 +341,11 @@ impl HighlightEngine {
 
         #[derive(Clone)]
         enum StackEntry {
-            Normal { color: (u8, u8, u8), bold: bool, italic: bool },
+            Normal {
+                color: (u8, u8, u8),
+                bold: bool,
+                italic: bool,
+            },
             /// Marks an active fenced code block on the stack.
             /// The lang/text are tracked via `code_block_buf`.
             CodeBlock,
@@ -375,16 +364,20 @@ impl HighlightEngine {
         let mut pending_item_prefix = false;
         let mut code_block_buf: Option<(Option<String>, String)> = None; // (lang, text)
 
-        let push_line_fn =
-            |lines: &mut Vec<RenderedLine>, current: &mut Vec<StyledSpan>| {
-                lines.push(RenderedLine {
-                    spans: std::mem::take(current),
-                });
-            };
+        let push_line_fn = |lines: &mut Vec<RenderedLine>, current: &mut Vec<StyledSpan>| {
+            lines.push(RenderedLine {
+                spans: std::mem::take(current),
+            });
+        };
 
         let top_style = |stack: &Vec<StackEntry>| -> ((u8, u8, u8), bool, bool) {
             for entry in stack.iter().rev() {
-                if let StackEntry::Normal { color, bold, italic } = entry {
+                if let StackEntry::Normal {
+                    color,
+                    bold,
+                    italic,
+                } = entry
+                {
                     return (*color, *bold, *italic);
                 }
             }
@@ -402,7 +395,11 @@ impl HighlightEngine {
                         2 => H2_COLOR,
                         _ => H3_COLOR,
                     };
-                    stack.push(StackEntry::Normal { color, bold: true, italic: false });
+                    stack.push(StackEntry::Normal {
+                        color,
+                        bold: true,
+                        italic: false,
+                    });
                 }
                 Event::End(TagEnd::Heading(_)) => {
                     stack.pop();
@@ -420,21 +417,37 @@ impl HighlightEngine {
 
                 Event::Start(Tag::Strong) => {
                     let (color, _, italic) = top_style(&stack);
-                    stack.push(StackEntry::Normal { color, bold: true, italic });
+                    stack.push(StackEntry::Normal {
+                        color,
+                        bold: true,
+                        italic,
+                    });
                 }
-                Event::End(TagEnd::Strong) => { stack.pop(); }
+                Event::End(TagEnd::Strong) => {
+                    stack.pop();
+                }
 
                 Event::Start(Tag::Emphasis) => {
                     let (color, bold, _) = top_style(&stack);
-                    stack.push(StackEntry::Normal { color, bold, italic: true });
+                    stack.push(StackEntry::Normal {
+                        color,
+                        bold,
+                        italic: true,
+                    });
                 }
-                Event::End(TagEnd::Emphasis) => { stack.pop(); }
+                Event::End(TagEnd::Emphasis) => {
+                    stack.pop();
+                }
 
-                Event::Start(Tag::List(_)) => { list_indent += 1; }
+                Event::Start(Tag::List(_)) => {
+                    list_indent += 1;
+                }
                 Event::End(TagEnd::List(_)) => {
                     list_indent = list_indent.saturating_sub(1);
                 }
-                Event::Start(Tag::Item) => { pending_item_prefix = true; }
+                Event::Start(Tag::Item) => {
+                    pending_item_prefix = true;
+                }
                 Event::End(TagEnd::Item) => {
                     if !current.is_empty() {
                         push_line_fn(&mut lines, &mut current);
@@ -499,7 +512,12 @@ impl HighlightEngine {
                     if pending_item_prefix {
                         pending_item_prefix = false;
                         let prefix = format!("{}  - ", "  ".repeat(list_indent.saturating_sub(1)));
-                        current.push(StyledSpan { text: prefix, color, bold, italic });
+                        current.push(StyledSpan {
+                            text: prefix,
+                            color,
+                            bold,
+                            italic,
+                        });
                     }
 
                     for (idx, segment) in text.split('\n').enumerate() {
@@ -592,10 +610,14 @@ mod tests {
         let e = engine();
         let lines = e.highlight_code("fn main() {}", Some("rs"));
         assert!(!lines.is_empty(), "must produce at least one RenderedLine");
-        let any_colored = lines.iter().flat_map(|l| l.spans.iter()).any(|s| {
-            s.color != (0, 0, 0) && s.color != (255, 255, 255)
-        });
-        assert!(any_colored, "syntect must produce at least one non-black/white span for Rust");
+        let any_colored = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .any(|s| s.color != (0, 0, 0) && s.color != (255, 255, 255));
+        assert!(
+            any_colored,
+            "syntect must produce at least one non-black/white span for Rust"
+        );
     }
 
     #[test]
@@ -605,7 +627,11 @@ mod tests {
         // `fn main()` which syntect may not detect via first-line. We fall back to
         // plain text. The important thing is it must not panic and must return lines.
         let lines = e.highlight_code("fn main() {\n    println!(\"hello\");\n}", None);
-        assert_eq!(lines.len(), 3, "must produce one RenderedLine per input line");
+        assert_eq!(
+            lines.len(),
+            3,
+            "must produce one RenderedLine per input line"
+        );
     }
 
     #[test]
@@ -617,7 +643,10 @@ mod tests {
         let colors: Vec<_> = lines[0].spans.iter().map(|s| s.color).collect();
         // Plain text should produce exactly one span per line.
         // The key property: must not panic and must return a line.
-        assert!(!colors.is_empty(), "plain-text fallback must still produce spans");
+        assert!(
+            !colors.is_empty(),
+            "plain-text fallback must still produce spans"
+        );
     }
 
     #[test]
@@ -632,7 +661,11 @@ mod tests {
         let e = engine();
         let src = "fn foo() {}\nfn bar() {}\nfn baz() {}";
         let lines = e.highlight_code(src, Some("rs"));
-        assert_eq!(lines.len(), 3, "must produce one RenderedLine per input line");
+        assert_eq!(
+            lines.len(),
+            3,
+            "must produce one RenderedLine per input line"
+        );
     }
 
     #[test]
@@ -641,10 +674,14 @@ mod tests {
         let src = "def hello():\n    print('world')";
         let lines = e.highlight_code(src, Some("py"));
         assert_eq!(lines.len(), 2);
-        let any_colored = lines.iter().flat_map(|l| l.spans.iter()).any(|s| {
-            s.color != (0, 0, 0) && s.color != (255, 255, 255)
-        });
-        assert!(any_colored, "Python highlighting must produce coloured spans");
+        let any_colored = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .any(|s| s.color != (0, 0, 0) && s.color != (255, 255, 255));
+        assert!(
+            any_colored,
+            "Python highlighting must produce coloured spans"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -656,7 +693,11 @@ mod tests {
         let e = engine();
         let diff = "--- a/file.rs\n+++ b/file.rs\n@@ -1,3 +1,3 @@\n context\n-old\n+new";
         let lines = e.highlight_diff(diff);
-        assert_eq!(lines.len(), 6, "must produce one RenderedLine per diff line");
+        assert_eq!(
+            lines.len(),
+            6,
+            "must produce one RenderedLine per diff line"
+        );
     }
 
     #[test]
@@ -664,8 +705,16 @@ mod tests {
         let e = engine();
         let diff = "--- a/file.rs\n+++ b/file.rs";
         let lines = e.highlight_diff(diff);
-        assert_eq!(lines[0].spans[0].color, (220, 220, 220), "--- line must be bright white");
-        assert_eq!(lines[1].spans[0].color, (220, 220, 220), "+++ line must be bright white");
+        assert_eq!(
+            lines[0].spans[0].color,
+            (220, 220, 220),
+            "--- line must be bright white"
+        );
+        assert_eq!(
+            lines[1].spans[0].color,
+            (220, 220, 220),
+            "+++ line must be bright white"
+        );
     }
 
     #[test]
@@ -673,7 +722,11 @@ mod tests {
         let e = engine();
         let diff = "@@ -1,3 +1,3 @@";
         let lines = e.highlight_diff(diff);
-        assert_eq!(lines[0].spans[0].color, (0, 180, 180), "@@ line must be cyan");
+        assert_eq!(
+            lines[0].spans[0].color,
+            (0, 180, 180),
+            "@@ line must be cyan"
+        );
     }
 
     #[test]
@@ -681,7 +734,11 @@ mod tests {
         let e = engine();
         let diff = "+new line";
         let lines = e.highlight_diff(diff);
-        assert_eq!(lines[0].spans[0].color, (80, 200, 80), "+ line must be green");
+        assert_eq!(
+            lines[0].spans[0].color,
+            (80, 200, 80),
+            "+ line must be green"
+        );
     }
 
     #[test]
@@ -697,7 +754,11 @@ mod tests {
         let e = engine();
         let diff = " context line";
         let lines = e.highlight_diff(diff);
-        assert_eq!(lines[0].spans[0].color, (180, 180, 180), "context line must be gray");
+        assert_eq!(
+            lines[0].spans[0].color,
+            (180, 180, 180),
+            "context line must be gray"
+        );
     }
 
     #[test]
@@ -705,7 +766,11 @@ mod tests {
         let e = engine();
         let diff = "no prefix";
         let lines = e.highlight_diff(diff);
-        assert_eq!(lines[0].spans[0].color, (180, 180, 180), "no-prefix line must be gray");
+        assert_eq!(
+            lines[0].spans[0].color,
+            (180, 180, 180),
+            "no-prefix line must be gray"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -754,7 +819,11 @@ mod tests {
         let lines = e.highlight_json(json);
         let num_span = find_span_with_text(&lines, "1");
         assert!(num_span.is_some(), "must find numeric span '1'");
-        assert_eq!(num_span.unwrap().color, (180, 140, 255), "JSON number must use number color");
+        assert_eq!(
+            num_span.unwrap().color,
+            (180, 140, 255),
+            "JSON number must use number color"
+        );
     }
 
     #[test]
@@ -764,7 +833,11 @@ mod tests {
         let lines = e.highlight_json(json);
         let bool_span = find_span_with_text(&lines, "true");
         assert!(bool_span.is_some(), "must find 'true' span");
-        assert_eq!(bool_span.unwrap().color, (255, 140, 100), "JSON bool must use bool color");
+        assert_eq!(
+            bool_span.unwrap().color,
+            (255, 140, 100),
+            "JSON bool must use bool color"
+        );
     }
 
     #[test]
@@ -774,7 +847,11 @@ mod tests {
         let lines = e.highlight_json(json);
         let null_span = find_span_with_text(&lines, "null");
         assert!(null_span.is_some(), "must find 'null' span");
-        assert_eq!(null_span.unwrap().color, (150, 150, 150), "JSON null must use null color");
+        assert_eq!(
+            null_span.unwrap().color,
+            (150, 150, 150),
+            "JSON null must use null color"
+        );
     }
 
     #[test]
@@ -800,7 +877,10 @@ mod tests {
     fn highlight_json_empty_object_produces_lines() {
         let e = engine();
         let lines = e.highlight_json("{}");
-        assert!(!lines.is_empty(), "empty object must produce at least one RenderedLine");
+        assert!(
+            !lines.is_empty(),
+            "empty object must produce at least one RenderedLine"
+        );
     }
 
     #[test]
@@ -809,7 +889,10 @@ mod tests {
         let json = r#"{"outer": {"inner": 42}}"#;
         let lines = e.highlight_json(json);
         // Pretty-printed nested JSON must produce multiple lines.
-        assert!(lines.len() > 1, "nested JSON must produce multiple RenderedLines");
+        assert!(
+            lines.len() > 1,
+            "nested JSON must produce multiple RenderedLines"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -855,7 +938,10 @@ mod tests {
             .flat_map(|l| l.spans.iter())
             .find(|s| s.text == "italic");
         assert!(italic_span.is_some(), "must find 'italic' span");
-        assert!(italic_span.unwrap().italic, "italic span must have italic=true");
+        assert!(
+            italic_span.unwrap().italic,
+            "italic span must have italic=true"
+        );
     }
 
     #[test]
@@ -881,7 +967,10 @@ mod tests {
         let md = "- item 1\n- item 2";
         let lines = e.highlight_markdown(md);
         // At least one line must start with a bullet prefix.
-        let has_bullet = lines.iter().flat_map(|l| l.spans.iter()).any(|s| s.text.contains("- "));
+        let has_bullet = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .any(|s| s.text.contains("- "));
         assert!(has_bullet, "list items must include bullet prefix");
     }
 
@@ -891,10 +980,14 @@ mod tests {
         let md = "```rust\nfn main() {}\n```";
         let lines = e.highlight_markdown(md);
         // The fenced block must produce colored spans (not plain gray).
-        let any_colored = lines.iter().flat_map(|l| l.spans.iter()).any(|s| {
-            s.color != (200, 200, 200) && !s.text.trim().is_empty()
-        });
-        assert!(any_colored, "fenced code block must delegate to highlight_code and produce colors");
+        let any_colored = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .any(|s| s.color != (200, 200, 200) && !s.text.trim().is_empty());
+        assert!(
+            any_colored,
+            "fenced code block must delegate to highlight_code and produce colors"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -937,7 +1030,13 @@ mod tests {
     fn render_block_dispatches_markdown() {
         let e = engine();
         let lines = e.render_block(ContentType::Markdown, "# Hello", &[]);
-        let found = lines.iter().flat_map(|l| l.spans.iter()).any(|s| s.text.contains("Hello"));
-        assert!(found, "render_block with Markdown must produce heading spans");
+        let found = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .any(|s| s.text.contains("Hello"));
+        assert!(
+            found,
+            "render_block with Markdown must produce heading spans"
+        );
     }
 }

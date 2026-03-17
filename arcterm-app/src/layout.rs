@@ -37,10 +37,7 @@ pub struct PixelRect {
 impl PixelRect {
     /// Returns `true` if the point `(px, py)` lies inside this rectangle.
     pub fn contains(&self, px: f32, py: f32) -> bool {
-        px >= self.x
-            && px < self.x + self.width
-            && py >= self.y
-            && py < self.y + self.height
+        px >= self.x && px < self.x + self.width && py >= self.y && py < self.y + self.height
     }
 
     /// Centre x coordinate.
@@ -221,9 +218,7 @@ impl PaneNode {
 
     fn collect_ids(&self, out: &mut Vec<PaneId>) {
         match self {
-            PaneNode::Leaf { pane_id } | PaneNode::PluginPane { pane_id, .. } => {
-                out.push(*pane_id)
-            }
+            PaneNode::Leaf { pane_id } | PaneNode::PluginPane { pane_id, .. } => out.push(*pane_id),
             PaneNode::HSplit { left, right, .. } => {
                 left.collect_ids(out);
                 right.collect_ids(out);
@@ -494,14 +489,18 @@ impl PaneNode {
     pub fn resize_split(&mut self, target: PaneId, delta: f32) -> bool {
         match self {
             PaneNode::Leaf { .. } | PaneNode::PluginPane { .. } => false,
-            PaneNode::HSplit { ratio, left, right, .. } => {
+            PaneNode::HSplit {
+                ratio, left, right, ..
+            } => {
                 if left.find_leaf(target) || right.find_leaf(target) {
                     *ratio = (*ratio + delta).clamp(0.05, 0.95);
                     return true;
                 }
                 left.resize_split(target, delta) || right.resize_split(target, delta)
             }
-            PaneNode::VSplit { ratio, top, bottom, .. } => {
+            PaneNode::VSplit {
+                ratio, top, bottom, ..
+            } => {
                 if top.find_leaf(target) || bottom.find_leaf(target) {
                     *ratio = (*ratio + delta).clamp(0.05, 0.95);
                     return true;
@@ -523,7 +522,12 @@ impl PaneNode {
         pane_id: PaneId,
         available: PixelRect,
     ) -> HashMap<PaneId, PixelRect> {
-        let zero = PixelRect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 };
+        let zero = PixelRect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        };
         self.all_pane_ids()
             .into_iter()
             .map(|id| {
@@ -620,10 +624,22 @@ impl PaneNode {
                     height: rect.height,
                 };
                 left.collect_border_quads(
-                    left_rect, border_px, focused, normal_color, focus_color, rects, out,
+                    left_rect,
+                    border_px,
+                    focused,
+                    normal_color,
+                    focus_color,
+                    rects,
+                    out,
                 );
                 right.collect_border_quads(
-                    right_rect, border_px, focused, normal_color, focus_color, rects, out,
+                    right_rect,
+                    border_px,
+                    focused,
+                    normal_color,
+                    focus_color,
+                    rects,
+                    out,
                 );
             }
             PaneNode::VSplit { ratio, top, bottom } => {
@@ -662,10 +678,22 @@ impl PaneNode {
                     height: bot_h,
                 };
                 top.collect_border_quads(
-                    top_rect, border_px, focused, normal_color, focus_color, rects, out,
+                    top_rect,
+                    border_px,
+                    focused,
+                    normal_color,
+                    focus_color,
+                    rects,
+                    out,
                 );
                 bottom.collect_border_quads(
-                    bot_rect, border_px, focused, normal_color, focus_color, rects, out,
+                    bot_rect,
+                    border_px,
+                    focused,
+                    normal_color,
+                    focus_color,
+                    rects,
+                    out,
                 );
             }
         }
@@ -681,7 +709,12 @@ mod tests {
     use super::*;
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> PixelRect {
-        PixelRect { x, y, width: w, height: h }
+        PixelRect {
+            x,
+            y,
+            width: w,
+            height: h,
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -828,7 +861,10 @@ mod tests {
         let rects = tree.compute_rects(available, 2.0);
 
         // From left pane, go right → b
-        assert_eq!(tree.focus_in_direction(a, Direction::Right, &rects), Some(b));
+        assert_eq!(
+            tree.focus_in_direction(a, Direction::Right, &rects),
+            Some(b)
+        );
         // From right pane, go left → a
         assert_eq!(tree.focus_in_direction(b, Direction::Left, &rects), Some(a));
     }
@@ -891,9 +927,15 @@ mod tests {
         let rects = tree.compute_rects(available, 2.0);
 
         // a(top-left) → right → c(top-right)
-        assert_eq!(tree.focus_in_direction(a, Direction::Right, &rects), Some(c));
+        assert_eq!(
+            tree.focus_in_direction(a, Direction::Right, &rects),
+            Some(c)
+        );
         // b(bottom-left) → right → d(bottom-right)
-        assert_eq!(tree.focus_in_direction(b, Direction::Right, &rects), Some(d));
+        assert_eq!(
+            tree.focus_in_direction(b, Direction::Right, &rects),
+            Some(d)
+        );
         // a → down → b
         assert_eq!(tree.focus_in_direction(a, Direction::Down, &rects), Some(b));
         // c → down → d
@@ -987,13 +1029,8 @@ mod tests {
             }),
         };
         let available = rect(0.0, 0.0, 1000.0, 800.0);
-        let quads = tree.compute_border_quads(
-            available,
-            2.0,
-            a,
-            [80, 80, 80, 255],
-            [255, 200, 0, 255],
-        );
+        let quads =
+            tree.compute_border_quads(available, 2.0, a, [80, 80, 80, 255], [255, 200, 0, 255]);
         assert_eq!(quads.len(), 2);
     }
 
@@ -1007,13 +1044,8 @@ mod tests {
             right: Box::new(PaneNode::Leaf { pane_id: b }),
         };
         let available = rect(0.0, 0.0, 1000.0, 800.0);
-        let quads = tree.compute_border_quads(
-            available,
-            4.0,
-            a,
-            [80, 80, 80, 255],
-            [255, 200, 0, 255],
-        );
+        let quads =
+            tree.compute_border_quads(available, 4.0, a, [80, 80, 80, 255], [255, 200, 0, 255]);
         assert_eq!(quads.len(), 1);
         let q = quads[0];
         // Border width is 4px

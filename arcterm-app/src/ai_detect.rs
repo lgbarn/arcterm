@@ -93,7 +93,10 @@ impl AiAgentState {
     /// If `pid` is `None`, returns a state with `kind: None`.
     pub fn check(pid: Option<u32>) -> Self {
         let kind = pid.and_then(detect_ai_agent);
-        AiAgentState { kind, last_check: Instant::now() }
+        AiAgentState {
+            kind,
+            last_check: Instant::now(),
+        }
     }
 
     /// Returns `true` if the cached data is still within the TTL window.
@@ -128,7 +131,10 @@ mod tests {
     #[test]
     fn ai_agent_state_is_fresh_after_creation() {
         let state = AiAgentState::check(None);
-        assert!(state.is_fresh(), "state must be fresh immediately after check()");
+        assert!(
+            state.is_fresh(),
+            "state must be fresh immediately after check()"
+        );
     }
 
     /// match_ai_name correctly maps "claude" to ClaudeCode.

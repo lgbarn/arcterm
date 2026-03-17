@@ -182,6 +182,7 @@ mod input;
 mod keymap;
 mod kitty_types;
 mod layout;
+mod menu;
 mod neovim;
 mod osc7770;
 mod overlay;
@@ -193,7 +194,6 @@ mod search;
 mod selection;
 mod tab;
 mod terminal;
-mod menu;
 mod workspace;
 
 use std::collections::HashMap;
@@ -205,15 +205,17 @@ use winit::event_loop::ControlFlow;
 use std::time::Instant as TraceInstant;
 
 use arcterm_render::{
-    ContentType, HighlightEngine, OverlayQuad, PaneRenderInfo, PluginPaneRenderInfo, PluginStyledLine,
-    RenderPalette, RenderSnapshot, Renderer, StructuredBlock,
+    ContentType, HighlightEngine, OverlayQuad, PaneRenderInfo, PluginPaneRenderInfo,
+    PluginStyledLine, RenderPalette, RenderSnapshot, Renderer, StructuredBlock,
 };
-use keymap::{KeyAction, KeymapHandler};
-use palette::{PaletteState, WorkspaceSwitcherState};
-use layout::{Axis, Direction, PaneId, PaneNode, PixelRect};
-use selection::{generate_selection_quads, pixel_to_cell, Clipboard, Selection, SelectionMode, SelectionQuad};
-use tab::TabManager;
 use detect::AutoDetector;
+use keymap::{KeyAction, KeymapHandler};
+use layout::{Axis, Direction, PaneId, PaneNode, PixelRect};
+use palette::{PaletteState, WorkspaceSwitcherState};
+use selection::{
+    Clipboard, Selection, SelectionMode, SelectionQuad, generate_selection_quads, pixel_to_cell,
+};
+use tab::TabManager;
 use terminal::{PendingImage, Terminal};
 use tokio::sync::mpsc;
 use winit::{
@@ -346,12 +348,11 @@ type PaneBundle = (
 fn spawn_default_pane(cfg: &config::ArctermConfig, initial_size: (usize, usize)) -> PaneBundle {
     let first_id = PaneId::next();
     let (rows, cols) = initial_size;
-    let (terminal, image_rx) =
-        Terminal::new(cols, rows, 8, 16, cfg.shell.clone(), None)
-            .unwrap_or_else(|e| {
-                log::error!("Failed to create PTY session: {e}");
-                std::process::exit(1);
-            });
+    let (terminal, image_rx) = Terminal::new(cols, rows, 8, 16, cfg.shell.clone(), None)
+        .unwrap_or_else(|e| {
+            log::error!("Failed to create PTY session: {e}");
+            std::process::exit(1);
+        });
 
     let mut panes = HashMap::new();
     panes.insert(first_id, terminal);
@@ -367,7 +368,14 @@ fn spawn_default_pane(cfg: &config::ArctermConfig, initial_size: (usize, usize))
     let mut structured_blocks_map: HashMap<PaneId, Vec<StructuredBlock>> = HashMap::new();
     structured_blocks_map.insert(first_id, Vec::new());
 
-    (panes, image_channels, tab_manager, tab_layouts, auto_detectors, structured_blocks_map)
+    (
+        panes,
+        image_channels,
+        tab_manager,
+        tab_layouts,
+        auto_detectors,
+        structured_blocks_map,
+    )
 }
 
 fn main() {
@@ -409,83 +417,77 @@ fn main() {
                 }
             }
         }
-        Some(CliCommand::Plugin { subcommand }) => {
-            match subcommand {
-                PluginSubcommand::Install { path } => {
-                    let mut mgr = arcterm_plugin::manager::PluginManager::new()
-                        .unwrap_or_else(|e| {
-                            eprintln!("arcterm: failed to initialize plugin manager: {e}");
-                            std::process::exit(1);
-                        });
-                    match mgr.install(&path) {
-                        Ok(id) => println!("Plugin installed with id {id}"),
-                        Err(e) => {
-                            eprintln!("arcterm: plugin install failed: {e}");
-                            std::process::exit(1);
-                        }
-                    }
-                    return;
-                }
-                PluginSubcommand::List => {
-                    let mgr = arcterm_plugin::manager::PluginManager::new()
-                        .unwrap_or_else(|e| {
-                            eprintln!("arcterm: failed to initialize plugin manager: {e}");
-                            std::process::exit(1);
-                        });
-                    let plugins = mgr.list_installed();
-                    if plugins.is_empty() {
-                        println!("No plugins installed.");
-                    } else {
-                        let header = format!("{:<20} {:<10} ID", "NAME", "VERSION");
-                        println!("{header}");
-                        for (id, name, version) in plugins {
-                            println!("{name:<20} {version:<10} {id}");
-                        }
-                    }
-                    return;
-                }
-                PluginSubcommand::Remove { name } => {
-                    let plugin_dir = dirs::config_dir()
-                        .unwrap_or_else(|| std::path::PathBuf::from("."))
-                        .join("arcterm")
-                        .join("plugins")
-                        .join(&name);
-                    if plugin_dir.exists() {
-                        match std::fs::remove_dir_all(&plugin_dir) {
-                            Ok(_) => println!("Plugin '{name}' removed."),
-                            Err(e) => {
-                                eprintln!("arcterm: failed to remove plugin '{name}': {e}");
-                                std::process::exit(1);
-                            }
-                        }
-                    } else {
-                        eprintln!("arcterm: plugin '{name}' not found.");
+        Some(CliCommand::Plugin { subcommand }) => match subcommand {
+            PluginSubcommand::Install { path } => {
+                let mut mgr = arcterm_plugin::manager::PluginManager::new().unwrap_or_else(|e| {
+                    eprintln!("arcterm: failed to initialize plugin manager: {e}");
+                    std::process::exit(1);
+                });
+                match mgr.install(&path) {
+                    Ok(id) => println!("Plugin installed with id {id}"),
+                    Err(e) => {
+                        eprintln!("arcterm: plugin install failed: {e}");
                         std::process::exit(1);
                     }
-                    return;
                 }
-                PluginSubcommand::Dev { path } => {
-                    dev_plugin = Some(path);
-                    None
-                }
+                return;
             }
-        }
-        Some(CliCommand::Config { subcommand }) => {
-            match subcommand {
-                ConfigSubcommand::Flatten => {
-                    match config::ArctermConfig::flatten_to_string() {
-                        Ok(s) => {
-                            print!("{s}");
-                        }
+            PluginSubcommand::List => {
+                let mgr = arcterm_plugin::manager::PluginManager::new().unwrap_or_else(|e| {
+                    eprintln!("arcterm: failed to initialize plugin manager: {e}");
+                    std::process::exit(1);
+                });
+                let plugins = mgr.list_installed();
+                if plugins.is_empty() {
+                    println!("No plugins installed.");
+                } else {
+                    let header = format!("{:<20} {:<10} ID", "NAME", "VERSION");
+                    println!("{header}");
+                    for (id, name, version) in plugins {
+                        println!("{name:<20} {version:<10} {id}");
+                    }
+                }
+                return;
+            }
+            PluginSubcommand::Remove { name } => {
+                let plugin_dir = dirs::config_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join("arcterm")
+                    .join("plugins")
+                    .join(&name);
+                if plugin_dir.exists() {
+                    match std::fs::remove_dir_all(&plugin_dir) {
+                        Ok(_) => println!("Plugin '{name}' removed."),
                         Err(e) => {
-                            eprintln!("arcterm: config flatten failed: {e}");
+                            eprintln!("arcterm: failed to remove plugin '{name}': {e}");
                             std::process::exit(1);
                         }
                     }
-                    return;
+                } else {
+                    eprintln!("arcterm: plugin '{name}' not found.");
+                    std::process::exit(1);
                 }
+                return;
             }
-        }
+            PluginSubcommand::Dev { path } => {
+                dev_plugin = Some(path);
+                None
+            }
+        },
+        Some(CliCommand::Config { subcommand }) => match subcommand {
+            ConfigSubcommand::Flatten => {
+                match config::ArctermConfig::flatten_to_string() {
+                    Ok(s) => {
+                        print!("{s}");
+                    }
+                    Err(e) => {
+                        eprintln!("arcterm: config flatten failed: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                return;
+            }
+        },
         None => {
             // Auto-restore from last session if it exists.
             let session_path = workspace::workspaces_dir().join("_last_session.toml");
@@ -500,9 +502,7 @@ fn main() {
                         Some(ws)
                     }
                     Err(e) => {
-                        log::warn!(
-                            "Could not parse _last_session.toml, starting fresh: {e}"
-                        );
+                        log::warn!("Could not parse _last_session.toml, starting fresh: {e}");
                         None
                     }
                 }
@@ -599,7 +599,6 @@ struct AppState {
     selection_quads: Vec<SelectionQuad>,
 
     // ---- performance / control flow ----
-
     /// Cached terminal snapshots from `about_to_wait`, reused in `RedrawRequested`
     /// to avoid taking a second snapshot per pane per frame.
     cached_snapshots: HashMap<PaneId, RenderSnapshot>,
@@ -764,7 +763,11 @@ impl AppState {
             let directory = terminal.cwd().and_then(|p| p.to_str().map(str::to_string));
             pane_metadata.insert(
                 *id,
-                workspace::PaneMetadata { command: None, directory, env: None },
+                workspace::PaneMetadata {
+                    command: None,
+                    directory,
+                    env: None,
+                },
             );
         }
 
@@ -811,7 +814,12 @@ impl AppState {
             0.0
         };
 
-        PixelRect { x: 0.0, y: tab_h, width: w, height: h - tab_h - strip_h }
+        PixelRect {
+            x: 0.0,
+            y: tab_h,
+            width: w,
+            height: h - tab_h - strip_h,
+        }
     }
 
     /// Compute pixel rects for all panes in the active tab.
@@ -820,7 +828,8 @@ impl AppState {
         let tab = self.tab_manager.active_tab();
 
         if let Some(zoomed_id) = tab.zoomed {
-            self.active_layout().compute_zoomed_rect(zoomed_id, available)
+            self.active_layout()
+                .compute_zoomed_rect(zoomed_id, available)
         } else {
             self.active_layout().compute_rects(available, BORDER_PX)
         }
@@ -865,7 +874,11 @@ impl AppState {
     /// Used by workspace restore to recreate panes in their saved directories.
     /// Pass `cwd = None` to inherit the process's current working directory.
     /// `size` is `(rows, cols)`.
-    fn spawn_pane_with_cwd(&mut self, size: (usize, usize), cwd: Option<&std::path::Path>) -> PaneId {
+    fn spawn_pane_with_cwd(
+        &mut self,
+        size: (usize, usize),
+        cwd: Option<&std::path::Path>,
+    ) -> PaneId {
         let id = PaneId::next();
         let (rows, cols) = size;
         let (cell_w, cell_h) = self.cell_dims();
@@ -875,8 +888,10 @@ impl AppState {
                 self.image_channels.insert(id, image_rx);
                 self.auto_detectors.insert(id, AutoDetector::new());
                 self.structured_blocks.insert(id, Vec::new());
-                self.ai_states.insert(id, ai_detect::AiAgentState::check(None));
-                self.pane_contexts.insert(id, context::PaneContext::new(200));
+                self.ai_states
+                    .insert(id, ai_detect::AiAgentState::check(None));
+                self.pane_contexts
+                    .insert(id, context::PaneContext::new(200));
             }
             Err(e) => {
                 log::error!("Failed to create PTY for pane {:?}: {e}", id);
@@ -885,9 +900,10 @@ impl AppState {
 
         // Notify plugins that a new pane was opened.
         if let Some(ref tx) = self.plugin_event_tx {
-            let _ = tx.send(arcterm_plugin::manager::PluginEvent::PaneOpened(
-                format!("{:?}", id),
-            ));
+            let _ = tx.send(arcterm_plugin::manager::PluginEvent::PaneOpened(format!(
+                "{:?}",
+                id
+            )));
         }
 
         id
@@ -944,7 +960,14 @@ impl AppState {
         for (id, meta) in leaf_ids.iter().zip(leaf_metadata.iter()) {
             let cwd: Option<std::path::PathBuf> =
                 meta.directory.as_deref().map(std::path::PathBuf::from);
-            match Terminal::new(init_cols, init_rows, cell_w, cell_h, self.config.shell.clone(), cwd.as_deref()) {
+            match Terminal::new(
+                init_cols,
+                init_rows,
+                cell_w,
+                cell_h,
+                self.config.shell.clone(),
+                cwd.as_deref(),
+            ) {
                 Ok((terminal, image_rx)) => {
                     // Inject workspace-level environment variables.
                     for (key, val) in &ws.environment {
@@ -969,8 +992,10 @@ impl AppState {
             }
             self.auto_detectors.insert(*id, AutoDetector::new());
             self.structured_blocks.insert(*id, Vec::new());
-            self.ai_states.insert(*id, ai_detect::AiAgentState::check(None));
-            self.pane_contexts.insert(*id, context::PaneContext::new(200));
+            self.ai_states
+                .insert(*id, ai_detect::AiAgentState::check(None));
+            self.pane_contexts
+                .insert(*id, context::PaneContext::new(200));
         }
 
         let focus_id = leaf_ids.first().copied().unwrap_or_else(PaneId::next);
@@ -995,7 +1020,8 @@ impl AppState {
             leaf_count
         );
 
-        self.window.set_title(&format!("Arcterm — {}", ws.workspace.name));
+        self.window
+            .set_title(&format!("Arcterm — {}", ws.workspace.name));
     }
 
     // -----------------------------------------------------------------------
@@ -1017,10 +1043,7 @@ impl AppState {
                 // ── Neovim-aware pane crossing ────────────────────────────
                 // 1. Retrieve (or refresh) the cached Neovim state for the
                 //    focused pane.
-                let child_pid = self
-                    .panes
-                    .get(&focused_id)
-                    .and_then(|t| t.child_pid());
+                let child_pid = self.panes.get(&focused_id).and_then(|t| t.child_pid());
 
                 let nvim_state = {
                     let needs_refresh = self
@@ -1048,13 +1071,12 @@ impl AppState {
                                     match neovim::has_nvim_neighbor(&mut client, *dir) {
                                         Ok(true) => {
                                             let ctrl_byte: &[u8] = match dir {
-                                                Direction::Left  => &[0x08], // Ctrl+h
-                                                Direction::Down  => &[0x0A], // Ctrl+j
-                                                Direction::Up    => &[0x0B], // Ctrl+k
+                                                Direction::Left => &[0x08],  // Ctrl+h
+                                                Direction::Down => &[0x0A],  // Ctrl+j
+                                                Direction::Up => &[0x0B],    // Ctrl+k
                                                 Direction::Right => &[0x0C], // Ctrl+l
                                             };
-                                            if let Some(terminal) =
-                                                self.panes.get_mut(&focused_id)
+                                            if let Some(terminal) = self.panes.get_mut(&focused_id)
                                             {
                                                 terminal.write_input(ctrl_byte);
                                             }
@@ -1493,7 +1515,8 @@ impl AppState {
                 if self.window.fullscreen().is_some() {
                     self.window.set_fullscreen(None);
                 } else {
-                    self.window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+                    self.window
+                        .set_fullscreen(Some(Fullscreen::Borderless(None)));
                 }
                 DispatchOutcome::Redraw
             }
@@ -1525,8 +1548,7 @@ impl AppState {
             KeyAction::PreviousTab => {
                 let count = self.tab_manager.tabs.len();
                 if count > 1 {
-                    self.tab_manager.active =
-                        (self.tab_manager.active + count - 1) % count;
+                    self.tab_manager.active = (self.tab_manager.active + count - 1) % count;
                     let new_focus = self.tab_manager.active_tab().focus;
                     self.set_focused_pane(new_focus);
                     self.selection.clear();
@@ -1638,11 +1660,8 @@ impl ApplicationHandler for App {
 
         // Compute initial grid size for a full-window single pane.
         let win_size = window.inner_size();
-        let initial_size = renderer.grid_size_for_window(
-            win_size.width,
-            win_size.height,
-            window.scale_factor(),
-        );
+        let initial_size =
+            renderer.grid_size_for_window(win_size.width, win_size.height, window.scale_factor());
 
         let keymap = KeymapHandler::new(cfg.multiplexer.leader_timeout_ms);
 
@@ -1657,95 +1676,102 @@ impl ApplicationHandler for App {
         // of `_last_session.toml`), restore panes from the workspace layout.
         // Otherwise spawn a single default pane.
         // ---------------------------------------------------------------
-        let (panes, image_channels, tab_manager, tab_layouts, auto_detectors, structured_blocks_map) =
-            if let Some(ref ws) = self.initial_workspace {
-                let ws_layout = &ws.layout;
+        let (
+            panes,
+            image_channels,
+            tab_manager,
+            tab_layouts,
+            auto_detectors,
+            structured_blocks_map,
+        ) = if let Some(ref ws) = self.initial_workspace {
+            let ws_layout = &ws.layout;
 
-                // Validate: if the workspace has no leaves, fall back to
-                // a single fresh pane to avoid an empty-pane state.
-                let leaf_count = count_leaves(ws_layout);
-                if leaf_count == 0 {
-                    log::warn!(
-                        "Workspace '{}' has no panes; starting with a single fresh pane",
-                        ws.workspace.name
-                    );
-                    spawn_default_pane(&cfg, initial_size)
-                } else {
-                    // Produce a fresh PaneNode tree with new PaneIds, plus per-leaf metadata.
-                    let (pane_tree, leaf_metadata) = ws_layout.to_pane_tree();
-
-                    let mut panes = HashMap::new();
-                    let mut image_channels = HashMap::new();
-                    let mut auto_detectors = HashMap::new();
-                    let mut structured_blocks_map: HashMap<PaneId, Vec<StructuredBlock>> =
-                        HashMap::new();
-
-                    // Collect all leaf PaneIds from the restored tree in
-                    // the same traversal order as `to_pane_tree()`.
-                    let leaf_ids = pane_tree.all_pane_ids();
-
-                    // Spawn a terminal for each leaf, using the saved CWD.
-                    for (id, meta) in leaf_ids.iter().zip(leaf_metadata.iter()) {
-                        let cwd: Option<std::path::PathBuf> =
-                            meta.directory.as_deref().map(std::path::PathBuf::from);
-                        let (init_rows, init_cols) = initial_size;
-                        match Terminal::new(
-                            init_cols,
-                            init_rows,
-                            8,
-                            16,
-                            cfg.shell.clone(),
-                            cwd.as_deref(),
-                        ) {
-                            Ok((terminal, image_rx)) => {
-                                // Inject workspace-level environment variables.
-                                for (key, val) in &ws.environment {
-                                    terminal.write_input(
-                                        format!("export {key}={val}\n").as_bytes(),
-                                    );
-                                }
-                                // Inject per-pane environment overrides.
-                                if let Some(env) = &meta.env {
-                                    for (key, val) in env {
-                                        terminal.write_input(
-                                            format!("export {key}={val}\n").as_bytes(),
-                                        );
-                                    }
-                                }
-                                // If a command was saved, replay it.
-                                if let Some(cmd) = &meta.command {
-                                    terminal.write_input(format!("{cmd}\n").as_bytes());
-                                }
-                                panes.insert(*id, terminal);
-                                image_channels.insert(*id, image_rx);
-                            }
-                            Err(e) => {
-                                log::error!(
-                                    "Failed to create PTY for restored pane {:?}: {e}",
-                                    id
-                                );
-                            }
-                        }
-                        auto_detectors.insert(*id, AutoDetector::new());
-                        structured_blocks_map.insert(*id, Vec::new());
-                    }
-
-                    // Use the first leaf as focus for the tab.
-                    let focus_id = leaf_ids.first().copied().unwrap_or_else(PaneId::next);
-                    let tab_manager = TabManager::new(focus_id);
-                    let tab_layouts = vec![pane_tree];
-
-                    log::info!(
-                        "Restored workspace '{}' with {} pane(s)",
-                        ws.workspace.name,
-                        leaf_count
-                    );
-
-                    (panes, image_channels, tab_manager, tab_layouts, auto_detectors, structured_blocks_map)
-                }
-            } else {
+            // Validate: if the workspace has no leaves, fall back to
+            // a single fresh pane to avoid an empty-pane state.
+            let leaf_count = count_leaves(ws_layout);
+            if leaf_count == 0 {
+                log::warn!(
+                    "Workspace '{}' has no panes; starting with a single fresh pane",
+                    ws.workspace.name
+                );
                 spawn_default_pane(&cfg, initial_size)
-            };
+            } else {
+                // Produce a fresh PaneNode tree with new PaneIds, plus per-leaf metadata.
+                let (pane_tree, leaf_metadata) = ws_layout.to_pane_tree();
+
+                let mut panes = HashMap::new();
+                let mut image_channels = HashMap::new();
+                let mut auto_detectors = HashMap::new();
+                let mut structured_blocks_map: HashMap<PaneId, Vec<StructuredBlock>> =
+                    HashMap::new();
+
+                // Collect all leaf PaneIds from the restored tree in
+                // the same traversal order as `to_pane_tree()`.
+                let leaf_ids = pane_tree.all_pane_ids();
+
+                // Spawn a terminal for each leaf, using the saved CWD.
+                for (id, meta) in leaf_ids.iter().zip(leaf_metadata.iter()) {
+                    let cwd: Option<std::path::PathBuf> =
+                        meta.directory.as_deref().map(std::path::PathBuf::from);
+                    let (init_rows, init_cols) = initial_size;
+                    match Terminal::new(
+                        init_cols,
+                        init_rows,
+                        8,
+                        16,
+                        cfg.shell.clone(),
+                        cwd.as_deref(),
+                    ) {
+                        Ok((terminal, image_rx)) => {
+                            // Inject workspace-level environment variables.
+                            for (key, val) in &ws.environment {
+                                terminal.write_input(format!("export {key}={val}\n").as_bytes());
+                            }
+                            // Inject per-pane environment overrides.
+                            if let Some(env) = &meta.env {
+                                for (key, val) in env {
+                                    terminal
+                                        .write_input(format!("export {key}={val}\n").as_bytes());
+                                }
+                            }
+                            // If a command was saved, replay it.
+                            if let Some(cmd) = &meta.command {
+                                terminal.write_input(format!("{cmd}\n").as_bytes());
+                            }
+                            panes.insert(*id, terminal);
+                            image_channels.insert(*id, image_rx);
+                        }
+                        Err(e) => {
+                            log::error!("Failed to create PTY for restored pane {:?}: {e}", id);
+                        }
+                    }
+                    auto_detectors.insert(*id, AutoDetector::new());
+                    structured_blocks_map.insert(*id, Vec::new());
+                }
+
+                // Use the first leaf as focus for the tab.
+                let focus_id = leaf_ids.first().copied().unwrap_or_else(PaneId::next);
+                let tab_manager = TabManager::new(focus_id);
+                let tab_layouts = vec![pane_tree];
+
+                log::info!(
+                    "Restored workspace '{}' with {} pane(s)",
+                    ws.workspace.name,
+                    leaf_count
+                );
+
+                (
+                    panes,
+                    image_channels,
+                    tab_manager,
+                    tab_layouts,
+                    auto_detectors,
+                    structured_blocks_map,
+                )
+            }
+        } else {
+            spawn_default_pane(&cfg, initial_size)
+        };
 
         // Set window title to include workspace name when restoring.
         if let Some(ref ws) = self.initial_workspace {
@@ -1760,7 +1786,9 @@ impl ApplicationHandler for App {
         // `fps_frame_count == 1` and `plugins_loaded == false`.
         // ---------------------------------------------------------------
         let plugin_manager: Option<arcterm_plugin::manager::PluginManager> = None;
-        let plugin_event_tx: Option<tokio::sync::broadcast::Sender<arcterm_plugin::manager::PluginEvent>> = None;
+        let plugin_event_tx: Option<
+            tokio::sync::broadcast::Sender<arcterm_plugin::manager::PluginEvent>,
+        > = None;
 
         // Pre-populate ai_states and pane_contexts for all initial panes.
         let mut ai_states: HashMap<PaneId, ai_detect::AiAgentState> = HashMap::new();
@@ -1776,12 +1804,16 @@ impl ApplicationHandler for App {
         // Scan the workspace root for plan files and start a file-system
         // watcher for `.shipyard/`, `PLAN.md`, and `TODO.md`.
         // ---------------------------------------------------------------
-        let workspace_root = std::env::current_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let workspace_root =
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
         let plan_strip = {
             let strip = plan::PlanStripState::discover(&workspace_root);
-            if strip.summaries.is_empty() { None } else { Some(strip) }
+            if strip.summaries.is_empty() {
+                None
+            } else {
+                Some(strip)
+            }
         };
 
         let (plan_watcher, plan_watcher_rx) = {
@@ -2174,9 +2206,10 @@ impl ApplicationHandler for App {
                     if !exit_codes.is_empty() {
                         let last_code = *exit_codes.last().unwrap();
                         {
-                            let ctx = state.pane_contexts.entry(id).or_insert_with(|| {
-                                context::PaneContext::new(200)
-                            });
+                            let ctx = state
+                                .pane_contexts
+                                .entry(id)
+                                .or_insert_with(|| context::PaneContext::new(200));
                             ctx.set_exit_code(last_code);
                         }
                         if last_code != 0 && state.last_ai_pane.is_some() {
@@ -2193,7 +2226,9 @@ impl ApplicationHandler for App {
 
                 // Drain MCP tool-list queries and write responses back to PTY.
                 {
-                    let tool_queries = state.panes.get_mut(&id)
+                    let tool_queries = state
+                        .panes
+                        .get_mut(&id)
                         .map(|t| t.take_tool_queries())
                         .unwrap_or_default();
 
@@ -2201,14 +2236,17 @@ impl ApplicationHandler for App {
                         && let Some(ref mgr) = state.plugin_manager
                     {
                         let tools = mgr.list_tools();
-                        let entries: Vec<String> = tools.iter().map(|t| {
-                            format!(
-                                "{{\"name\":{},\"description\":{},\"inputSchema\":{}}}",
-                                serde_json::Value::String(t.name.clone()),
-                                serde_json::Value::String(t.description.clone()),
-                                t.input_schema.as_str(),
-                            )
-                        }).collect();
+                        let entries: Vec<String> = tools
+                            .iter()
+                            .map(|t| {
+                                format!(
+                                    "{{\"name\":{},\"description\":{},\"inputSchema\":{}}}",
+                                    serde_json::Value::String(t.name.clone()),
+                                    serde_json::Value::String(t.description.clone()),
+                                    t.input_schema.as_str(),
+                                )
+                            })
+                            .collect();
                         let json = format!("[{}]", entries.join(","));
                         use base64::Engine as _;
                         let b64 = base64::engine::general_purpose::STANDARD.encode(json.as_bytes());
@@ -2221,7 +2259,9 @@ impl ApplicationHandler for App {
 
                 // Drain MCP tool calls and write results back to PTY.
                 {
-                    let tool_calls = state.panes.get_mut(&id)
+                    let tool_calls = state
+                        .panes
+                        .get_mut(&id)
                         .map(|t| t.take_tool_calls())
                         .unwrap_or_default();
 
@@ -2233,7 +2273,8 @@ impl ApplicationHandler for App {
                             "{\"error\":\"plugin manager unavailable\"}".to_string()
                         };
                         use base64::Engine as _;
-                        let b64 = base64::engine::general_purpose::STANDARD.encode(result_json.as_bytes());
+                        let b64 = base64::engine::general_purpose::STANDARD
+                            .encode(result_json.as_bytes());
                         let response = format!("\x1b]7770;tools/result;result={}\x07", b64);
                         if let Some(terminal) = state.panes.get_mut(&id) {
                             terminal.write_input(response.as_bytes());
@@ -2243,7 +2284,9 @@ impl ApplicationHandler for App {
 
                 // Drain cross-pane context queries.
                 {
-                    let queries = state.panes.get_mut(&id)
+                    let queries = state
+                        .panes
+                        .get_mut(&id)
                         .map(|t| t.take_context_queries())
                         .unwrap_or_default();
 
@@ -2296,9 +2339,10 @@ impl ApplicationHandler for App {
 
             // Notify plugins that a pane was closed.
             if let Some(ref tx) = state.plugin_event_tx {
-                let _ = tx.send(arcterm_plugin::manager::PluginEvent::PaneClosed(
-                    format!("{:?}", id),
-                ));
+                let _ = tx.send(arcterm_plugin::manager::PluginEvent::PaneClosed(format!(
+                    "{:?}",
+                    id
+                )));
             }
         }
 
@@ -2431,7 +2475,8 @@ impl ApplicationHandler for App {
 
                         let delta = if is_right_edge {
                             // Dragging the right edge: moving right increases ratio.
-                            let available_w = rects.values().map(|r| r.width).sum::<f32>() + rects.len() as f32 * BORDER_PX;
+                            let available_w = rects.values().map(|r| r.width).sum::<f32>()
+                                + rects.len() as f32 * BORDER_PX;
                             if available_w > 0.0 {
                                 // Compute fraction of new position vs total width.
                                 let new_ratio = (px - drag_rect.x) / (available_w - BORDER_PX);
@@ -2468,7 +2513,11 @@ impl ApplicationHandler for App {
             // -----------------------------------------------------------------
             // Mouse button press/release — click-to-focus, selection, border drag.
             // -----------------------------------------------------------------
-            WindowEvent::MouseInput { state: btn_state, button, .. } => {
+            WindowEvent::MouseInput {
+                state: btn_state,
+                button,
+                ..
+            } => {
                 if button == MouseButton::Left {
                     match btn_state {
                         ElementState::Pressed => {
@@ -2480,7 +2529,9 @@ impl ApplicationHandler for App {
 
                             // --- Tab bar click ---
                             let sf = state.window.scale_factor() as f32;
-                            let tab_h = if state.config.multiplexer.show_tab_bar && state.tab_manager.tab_count() > 1 {
+                            let tab_h = if state.config.multiplexer.show_tab_bar
+                                && state.tab_manager.tab_count() > 1
+                            {
                                 arcterm_render::tab_bar_height(&state.renderer.text.cell_size, sf)
                             } else {
                                 0.0
@@ -2550,7 +2601,11 @@ impl ApplicationHandler for App {
 
                             // --- Click-to-focus ---
                             let clicked_pane = rects.iter().find_map(|(&id, rect)| {
-                                if rect.contains(pxf, pyf) { Some(id) } else { None }
+                                if rect.contains(pxf, pyf) {
+                                    Some(id)
+                                } else {
+                                    None
+                                }
                             });
 
                             if let Some(new_focus) = clicked_pane {
@@ -2571,7 +2626,8 @@ impl ApplicationHandler for App {
                                 let multi = state
                                     .last_click_time
                                     .map(|prev| {
-                                        now.duration_since(prev) < Duration::from_millis(MULTI_CLICK_INTERVAL_MS)
+                                        now.duration_since(prev)
+                                            < Duration::from_millis(MULTI_CLICK_INTERVAL_MS)
                                     })
                                     .unwrap_or(false);
 
@@ -2617,8 +2673,8 @@ impl ApplicationHandler for App {
                     let focused = state.focused_pane();
                     if let Some(terminal) = state.panes.get_mut(&focused) {
                         let current = terminal.scroll_offset() as i32;
-                        let new_offset = (current - lines * SCROLL_LINES_PER_TICK as i32)
-                            .max(0) as usize;
+                        let new_offset =
+                            (current - lines * SCROLL_LINES_PER_TICK as i32).max(0) as usize;
                         terminal.set_scroll_offset(new_offset);
                         state.window.request_redraw();
                     }
@@ -2634,7 +2690,12 @@ impl ApplicationHandler for App {
                 let fps_elapsed = state.fps_last_log.elapsed();
                 if fps_elapsed >= Duration::from_secs(5) {
                     let fps = state.fps_frame_count as f64 / fps_elapsed.as_secs_f64();
-                    log::debug!("fps: {:.1} ({} frames in {:.1}s)", fps, state.fps_frame_count, fps_elapsed.as_secs_f64());
+                    log::debug!(
+                        "fps: {:.1} ({} frames in {:.1}s)",
+                        fps,
+                        state.fps_frame_count,
+                        fps_elapsed.as_secs_f64()
+                    );
                     state.fps_frame_count = 0;
                     state.fps_last_log = Instant::now();
                 }
@@ -2726,7 +2787,8 @@ impl ApplicationHandler for App {
                 // Normal multi-pane render.
                 // Reuse cached snapshots from about_to_wait when available;
                 // fall back to a fresh snapshot for panes that had no PTY wakeup.
-                let mut pane_frames: Vec<(PaneId, PixelRect, arcterm_render::RenderSnapshot)> = Vec::new();
+                let mut pane_frames: Vec<(PaneId, PixelRect, arcterm_render::RenderSnapshot)> =
+                    Vec::new();
                 for (id, rect) in &rects {
                     if rect.width <= 0.0 || rect.height <= 0.0 {
                         continue;
@@ -2757,7 +2819,10 @@ impl ApplicationHandler for App {
                 let empty_blocks: Vec<StructuredBlock> = Vec::new();
 
                 for (pane_id, rect, _) in &pane_frames {
-                    let blocks = state.structured_blocks.get(pane_id).unwrap_or(&empty_blocks);
+                    let blocks = state
+                        .structured_blocks
+                        .get(pane_id)
+                        .unwrap_or(&empty_blocks);
                     let pw = rect.width;
                     let py = rect.y;
                     let px = rect.x;
@@ -2777,7 +2842,10 @@ impl ApplicationHandler for App {
                 }
 
                 for (pane_id, rect, snapshot) in &pane_frames {
-                    let blocks = state.structured_blocks.get(pane_id).unwrap_or(&empty_blocks);
+                    let blocks = state
+                        .structured_blocks
+                        .get(pane_id)
+                        .unwrap_or(&empty_blocks);
                     pane_infos.push(PaneRenderInfo {
                         snapshot,
                         rect: [rect.x, rect.y, rect.width, rect.height],
@@ -2848,7 +2916,11 @@ impl ApplicationHandler for App {
                     // Text label.
                     let text = strip.strip_text();
                     if !text.is_empty() {
-                        palette_text.push((text, 8.0 * sf, strip_y + (cell_h - state.renderer.text.cell_size.height * sf) / 2.0));
+                        palette_text.push((
+                            text,
+                            8.0 * sf,
+                            strip_y + (cell_h - state.renderer.text.cell_size.height * sf) / 2.0,
+                        ));
                     }
                 }
 
@@ -2871,11 +2943,7 @@ impl ApplicationHandler for App {
                     let panel_x = (win_w - (win_w * 0.80).max(400.0)) / 2.0 + cell_w;
                     let panel_y = (win_h - (win_h * 0.80).max(300.0)) / 2.0;
                     for (i, line) in review_texts.iter().enumerate() {
-                        palette_text.push((
-                            line.clone(),
-                            panel_x,
-                            panel_y + cell_h * i as f32,
-                        ));
+                        palette_text.push((line.clone(), panel_x, panel_y + cell_h * i as f32));
                     }
                 }
 
@@ -2921,7 +2989,12 @@ impl ApplicationHandler for App {
                             format!("/{}", so.query)
                         }
                     } else {
-                        format!("/{} — {}/{} matches", so.query, so.current_match + 1, so.matches.len())
+                        format!(
+                            "/{} — {}/{} matches",
+                            so.query,
+                            so.current_match + 1,
+                            so.matches.len()
+                        )
                     };
                     palette_text.push((match_info, 8.0 * sf, (bar_h - cell_h) / 2.0));
 
@@ -3030,7 +3103,9 @@ impl ApplicationHandler for App {
                                         match cb.paste() {
                                             Ok(text) => {
                                                 let focused = state.focused_pane();
-                                                if let Some(terminal) = state.panes.get_mut(&focused) {
+                                                if let Some(terminal) =
+                                                    state.panes.get_mut(&focused)
+                                                {
                                                     let bracketed = terminal.bracketed_paste();
                                                     if bracketed {
                                                         let mut payload = b"\x1b[200~".to_vec();
@@ -3118,9 +3193,8 @@ impl ApplicationHandler for App {
                         match action {
                             OverlayAction::Accept => {
                                 let src = review.current_path().to_path_buf();
-                                let dst = config::accepted_dir().join(
-                                    src.file_name().unwrap_or_default(),
-                                );
+                                let dst = config::accepted_dir()
+                                    .join(src.file_name().unwrap_or_default());
                                 if let Err(e) = std::fs::create_dir_all(config::accepted_dir()) {
                                     log::warn!("overlay: cannot create accepted dir: {e}");
                                 }
@@ -3172,7 +3246,8 @@ impl ApplicationHandler for App {
                             OverlayAction::Edit(path) => {
                                 // Close overlay review and spawn editor.
                                 // Split on whitespace so EDITOR="code --wait" works correctly.
-                                let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".into());
+                                let editor =
+                                    std::env::var("EDITOR").unwrap_or_else(|_| "vi".into());
                                 let parts: Vec<&str> = editor.split_whitespace().collect();
                                 if let Some((&cmd, args)) = parts.split_first() {
                                     let _ = std::process::Command::new(cmd)
@@ -3191,7 +3266,10 @@ impl ApplicationHandler for App {
                                 let total = review.pending_files.len();
                                 let next_idx = (review.current_index + 1).min(total - 1);
                                 let base_cfg = state.config.clone();
-                                let diff = overlay::compute_diff(&base_cfg, &review.pending_files[next_idx]);
+                                let diff = overlay::compute_diff(
+                                    &base_cfg,
+                                    &review.pending_files[next_idx],
+                                );
                                 review.current_index = next_idx;
                                 review.diff_text = diff;
                                 review.scroll_offset = 0;
@@ -3201,7 +3279,10 @@ impl ApplicationHandler for App {
                             OverlayAction::PrevFile => {
                                 let prev_idx = review.current_index.saturating_sub(1);
                                 let base_cfg = state.config.clone();
-                                let diff = overlay::compute_diff(&base_cfg, &review.pending_files[prev_idx]);
+                                let diff = overlay::compute_diff(
+                                    &base_cfg,
+                                    &review.pending_files[prev_idx],
+                                );
                                 review.current_index = prev_idx;
                                 review.diff_text = diff;
                                 review.scroll_offset = 0;
@@ -3305,17 +3386,19 @@ impl ApplicationHandler for App {
                         fn find_plugin_id(node: &PaneNode, target: PaneId) -> Option<String> {
                             match node {
                                 PaneNode::PluginPane { pane_id, plugin_id } => {
-                                    if *pane_id == target { Some(plugin_id.clone()) } else { None }
+                                    if *pane_id == target {
+                                        Some(plugin_id.clone())
+                                    } else {
+                                        None
+                                    }
                                 }
                                 PaneNode::Leaf { .. } => None,
                                 PaneNode::HSplit { left, right, .. } => {
                                     find_plugin_id(left, target)
                                         .or_else(|| find_plugin_id(right, target))
                                 }
-                                PaneNode::VSplit { top, bottom, .. } => {
-                                    find_plugin_id(top, target)
-                                        .or_else(|| find_plugin_id(bottom, target))
-                                }
+                                PaneNode::VSplit { top, bottom, .. } => find_plugin_id(top, target)
+                                    .or_else(|| find_plugin_id(bottom, target)),
                             }
                         }
                         find_plugin_id(state.active_layout(), focused_id)
@@ -3371,7 +3454,6 @@ impl ApplicationHandler for App {
                             // All other actions route through the single dispatch helper.
                             execute_key_action(state, event_loop, other);
                         }
-
                     }
                 }
             }
@@ -3447,7 +3529,9 @@ fn collect_plugin_panes(
 ) {
     match node {
         PaneNode::PluginPane { pane_id, plugin_id } => {
-            let Some(&rect) = rects.get(pane_id) else { return };
+            let Some(&rect) = rects.get(pane_id) else {
+                return;
+            };
             if rect.width <= 0.0 || rect.height <= 0.0 {
                 return;
             }
@@ -3498,7 +3582,7 @@ fn palette_from_config(cfg: &config::ArctermConfig) -> RenderPalette {
     RenderPalette {
         foreground: app_palette.foreground,
         background: app_palette.background,
-        cursor:     app_palette.cursor,
-        ansi:       app_palette.ansi,
+        cursor: app_palette.cursor,
+        ansi: app_palette.ansi,
     }
 }
