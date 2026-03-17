@@ -1414,6 +1414,14 @@ impl AppState {
                 DispatchOutcome::None
             }
 
+            KeyAction::NewWindow => {
+                // Spawn a new arcterm process (same binary, fresh window).
+                if let Ok(exe) = std::env::current_exe() {
+                    let _ = std::process::Command::new(exe).spawn();
+                }
+                DispatchOutcome::None
+            }
+
             KeyAction::Copy => {
                 let focused = focused_id;
                 if let Some(terminal) = self.panes.get(&focused) {

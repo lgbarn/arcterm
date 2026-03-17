@@ -72,6 +72,8 @@ pub enum KeyAction {
     /// Open cross-pane search (Leader+/).
     CrossPaneSearch,
     // ---- Menu-only actions (no leader-key binding) ----
+    /// Spawn a new arcterm window as a separate OS process (Cmd+N).
+    NewWindow,
     /// Copy selected text to clipboard (Cmd+C).
     Copy,
     /// Paste from clipboard (Cmd+V).

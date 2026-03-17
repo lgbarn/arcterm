@@ -49,6 +49,7 @@ impl AppMenu {
         // ----------------------------------------------------------------
         let shell = Submenu::new("Shell", true);
 
+        let new_window = item("New Window", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyN)), KeyAction::NewWindow);
         let new_tab = item("New Tab", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyT)), KeyAction::NewTab);
         let split_right = item("Split Right", Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyD)), KeyAction::Split(Axis::Horizontal));
         let split_down = item("Split Down", Some(Accelerator::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyD)), KeyAction::Split(Axis::Vertical));
@@ -58,7 +59,9 @@ impl AppMenu {
 
         shell
             .append_items(&[
+                &new_window,
                 &new_tab,
+                &PredefinedMenuItem::separator(),
                 &split_right,
                 &split_down,
                 &PredefinedMenuItem::separator(),
