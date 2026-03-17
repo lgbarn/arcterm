@@ -584,6 +584,15 @@ struct AppState {
     /// If Some, we are dragging the border that contains this pane to resize.
     drag_pane: Option<PaneId>,
 
+    // ---- deferred resize ----
+    /// Pending window resize received from `WindowEvent::Resized`.
+    ///
+    /// Multiple `Resized` events arriving between frames (e.g. during a rapid
+    /// window drag) overwrite this field; only the last value is applied in
+    /// `about_to_wait`, coalescing all intermediate sizes into a single resize
+    /// per frame.
+    pending_resize: Option<winit::dpi::PhysicalSize<u32>>,
+
     // ---- selection rendering ----
     selection_quads: Vec<SelectionQuad>,
 
@@ -1230,6 +1239,7 @@ impl ApplicationHandler for App {
             last_click_time: None,
             click_count: 0,
             drag_pane: None,
+            pending_resize: None,
             selection_quads: Vec::new(),
 
             fps_last_log: Instant::now(),
@@ -1696,6 +1706,22 @@ impl ApplicationHandler for App {
             }
         }
 
+        // Apply deferred window resize (coalesced from `WindowEvent::Resized`).
+        // Multiple resize events between frames overwrite `pending_resize`; only
+        // the last size is processed here, once per frame.
+        if let Some(size) = state.pending_resize.take() {
+            state.renderer.resize(size.width, size.height);
+            let rects = state.compute_pane_rects();
+            let (cell_w, cell_h) = state.cell_dims();
+            for (id, rect) in &rects {
+                let (new_rows, new_cols) = state.grid_size_for_rect(*rect);
+                if let Some(terminal) = state.panes.get_mut(id) {
+                    terminal.resize(new_cols, new_rows, cell_w, cell_h);
+                }
+            }
+            state.window.request_redraw();
+        }
+
         if got_data {
             // Clear selection and scroll-to-live on the focused pane only.
             let focused = state.focused_pane();
@@ -1759,21 +1785,13 @@ impl ApplicationHandler for App {
             // Window resize — recompute rects and resize all panes.
             // -----------------------------------------------------------------
             WindowEvent::Resized(size) => {
-                if size.width == 0 || size.height == 0 {
-                    return;
+                if size.width > 0 && size.height > 0 {
+                    // Defer the actual resize work to `about_to_wait` so that
+                    // multiple `Resized` events arriving in a single frame (e.g.
+                    // during a rapid window drag) are coalesced into one resize.
+                    state.pending_resize = Some(size);
+                    state.window.request_redraw();
                 }
-                state.renderer.resize(size.width, size.height);
-
-                // Resize every pane to its new rect.
-                let rects = state.compute_pane_rects();
-                let (cell_w, cell_h) = state.cell_dims();
-                for (id, rect) in &rects {
-                    let (new_rows, new_cols) = state.grid_size_for_rect(*rect);
-                    if let Some(terminal) = state.panes.get_mut(id) {
-                        terminal.resize(new_cols, new_rows, cell_w, cell_h);
-                    }
-                }
-                state.window.request_redraw();
             }
 
             // -----------------------------------------------------------------
