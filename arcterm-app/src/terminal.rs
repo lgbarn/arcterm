@@ -285,6 +285,9 @@ impl Terminal {
         // Clone before wakeup_tx is moved into ArcTermEventListener so the reader
         // thread can send a final wakeup on EOF or error.
         let wakeup_tx_for_reader = wakeup_tx.clone();
+        // Clone exit_code for the reader thread — it sets exit on EOF since we
+        // bypass alacritty's EventLoop which normally fires ChildExit.
+        let exit_code_for_reader = Arc::clone(&exit_code);
         // Bounded sync channel for write-back to PTY (16 slots = enough for DSR/DA bursts).
         let (write_tx, write_rx) = std_mpsc::sync_channel::<Cow<'static, [u8]>>(16);
 
@@ -375,8 +378,15 @@ impl Terminal {
                 loop {
                     let n = match reader.read(&mut buf) {
                         Ok(0) => {
-                            // PTY closed (shell exited).
+                            // PTY closed (shell exited). Set exit code so
+                            // has_exited() returns true — ChildExit never
+                            // fires because we bypass alacritty's EventLoop.
                             log::debug!("PTY reader: EOF");
+                            if let Ok(mut guard) = exit_code_for_reader.lock() {
+                                if guard.is_none() {
+                                    *guard = Some(0);
+                                }
+                            }
                             let _ = wakeup_tx_for_reader.send(());
                             break;
                         }
