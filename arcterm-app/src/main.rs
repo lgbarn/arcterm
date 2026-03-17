@@ -193,6 +193,7 @@ mod search;
 mod selection;
 mod tab;
 mod terminal;
+mod menu;
 mod workspace;
 
 use std::collections::HashMap;

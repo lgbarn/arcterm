@@ -37,7 +37,7 @@ pub enum KeymapState {
 }
 
 /// Action produced by [`KeymapHandler::handle_key`].
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum KeyAction {
     /// Forward raw bytes to the PTY.
     Forward(Vec<u8>),
