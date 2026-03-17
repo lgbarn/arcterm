@@ -395,6 +395,18 @@ impl PaneNode {
     ///
     /// Callers must detect the "last pane" case by checking `all_pane_ids().len() == 1`
     /// before calling `close`, and refuse the close in that situation.
+    ///
+    /// # Batch-removal safety
+    ///
+    /// Safe to call multiple times in a batch (e.g. when several panes exit
+    /// simultaneously).  If the target is not present in this tree — because it
+    /// was already removed, belongs to a different tab, or the root is a lone
+    /// leaf — the method returns `None` without mutating any state.
+    ///
+    /// **Two-pane split example:** given root `HSplit(A, B)`, removing A yields
+    /// root `Leaf(B)`.  A subsequent call to `close(B)` on the new root hits the
+    /// `Leaf` arm and returns `None`.  The caller detects `panes.is_empty()` and
+    /// exits; no panic, no stale nodes.
     pub fn close(&mut self, target: PaneId) -> Option<PaneNode> {
         match self {
             PaneNode::Leaf { .. } | PaneNode::PluginPane { .. } => {
