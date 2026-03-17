@@ -591,7 +591,7 @@ struct AppState {
     selection_quads: Vec<SelectionQuad>,
 
     // ---- performance / control flow ----
-    idle_cycles: u32,
+
     fps_last_log: Instant,
     fps_frame_count: u32,
 
@@ -1236,7 +1236,7 @@ impl ApplicationHandler for App {
             click_count: 0,
             drag_pane: None,
             selection_quads: Vec::new(),
-            idle_cycles: 0,
+
             fps_last_log: Instant::now(),
             fps_frame_count: 0,
             palette_mode: None,
@@ -1696,7 +1696,7 @@ impl ApplicationHandler for App {
                 terminal.set_scroll_offset(0);
             }
             state.window.request_redraw();
-            state.idle_cycles = 0;
+
             event_loop.set_control_flow(ControlFlow::Poll);
         } else {
             // No new data — switch to Wait immediately so the event loop
