@@ -1,7 +1,7 @@
 {
   "phase": 16,
-  "status": "complete",
-  "position": "Phase 16 build complete — Local LLM Integration (Ollama)",
-  "message": "All 3 waves built, reviewed, security-hardened, and simplified. 397 tests pass.",
-  "updated_at": "2026-03-17T16:00:00Z"
+  "status": "shipped",
+  "position": "Phase 16 shipped — Local LLM Integration (Ollama)",
+  "message": "Tagged v0.2.1-phase16. 15 commits, 397 tests, 3 security fixes, 5 simplifications.",
+  "updated_at": "2026-03-17T17:00:00Z"
 }
