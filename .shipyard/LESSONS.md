@@ -83,3 +83,28 @@
 - Batch related optimizations into phases by impact level — highest impact first ensures early wins
 
 ---
+
+## [2026-03-17] Phase 16: Local LLM Integration
+
+### What Went Well
+- Reusing existing overlay patterns (search, palette) made the command overlay fast to build
+- Auto-injecting sibling context on AI pane open gives immediate value without user action
+- TDD caught regressions early across all 3 waves
+- Brainstorming skill produced a clean design that translated directly into executable plans
+
+### Surprises / Discoveries
+- Security audit caught a passive attack chain (terminal output → LLM prompt → PTY injection) that wasn't obvious during design — always audit LLM integration points for indirect injection
+- The existing `strip_ansi()` function was already available but not applied at trust boundaries — reuse existing sanitization utilities at every boundary
+- `futures-util` was needed for reqwest streaming `.next()` — not in original dependency plan
+
+### Pitfalls to Avoid
+- Builder agents duplicated OllamaClient construction across spawn sites — always extract shared construction into helpers before wiring
+- Pane cleanup was scattered across 4 close paths — consolidate cleanup into a single authoritative method (remove_pane_resources pattern)
+- Anonymous string literals for system prompts get buried in spawn closures — always use named constants for prompts
+
+### Process Improvements
+- Run security audit on any feature that bridges untrusted input (network, terminal output) to privileged actions (PTY writes, shell commands)
+- When integrating async HTTP clients, plan for streaming dependencies (futures-util) upfront
+- Simplification review after multi-wave builds catches cross-task duplication that per-task reviews miss
+
+---
