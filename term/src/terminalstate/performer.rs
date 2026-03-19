@@ -911,8 +911,12 @@ impl<'a> Performer<'a> {
             }
 
             OperatingSystemCommand::FinalTermSemanticPrompt(
-                FinalTermSemanticPrompt::CommandStatus { .. },
-            ) => {}
+                FinalTermSemanticPrompt::CommandStatus { status, .. },
+            ) => {
+                if let Some(handler) = self.alert_handler.as_mut() {
+                    handler.alert(Alert::CommandComplete { status });
+                }
+            }
 
             OperatingSystemCommand::SystemNotification(message) => {
                 if let Some(handler) = self.alert_handler.as_mut() {

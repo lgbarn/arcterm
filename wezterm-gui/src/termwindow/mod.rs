@@ -1209,7 +1209,7 @@ impl TermWindow {
                         | Alert::WindowTitleChanged(_)
                         | Alert::TabTitleChanged(_)
                         | Alert::IconTitleChanged(_)
-                        | Alert::Progress(_),
+                        | Alert::Progress(_) | Alert::CommandComplete { .. },
                     ..
                 } => {
                     self.update_title();
@@ -1462,7 +1462,8 @@ impl TermWindow {
                     | Alert::IconTitleChanged(_)
                     | Alert::Progress(_)
                     | Alert::SetUserVar { .. }
-                    | Alert::Bell,
+                    | Alert::Bell
+                    | Alert::CommandComplete { .. },
             }
             | MuxNotification::PaneFocused(pane_id)
             | MuxNotification::PaneRemoved(pane_id)

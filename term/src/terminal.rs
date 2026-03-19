@@ -71,6 +71,10 @@ pub enum Alert {
     OutputSinceFocusLost,
     /// A change to the progress bar state
     Progress(Progress),
+    /// A command completed with an exit status (via OSC 133;D)
+    CommandComplete {
+        status: i32,
+    },
 }
 
 pub trait AlertHandler: Send + Sync {
