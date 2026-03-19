@@ -14,6 +14,29 @@ cargo test --all               # Run all tests
 cargo fmt --all                # Format code
 ```
 
+## Running with AI Features
+
+AI features require Ollama running locally. Quick setup:
+
+```bash
+# Install Ollama: https://ollama.com/download
+ollama pull qwen2.5-coder:7b   # Default model
+ollama serve                   # Start server (if not already running as a service)
+cargo run --bin wezterm-gui    # Launch ArcTerm
+```
+
+See `docs/local-llm-setup.md` for full Ollama setup and Claude API alternative.
+
+## Configuration
+
+ArcTerm loads config from (in priority order):
+1. `~/.arcterm.lua`
+2. `$XDG_CONFIG_HOME/arcterm/arcterm.lua`
+3. `~/.wezterm.lua` (fallback, with a deprecation notice)
+4. `$XDG_CONFIG_HOME/wezterm/wezterm.lua` (fallback)
+
+Prefer `arcterm.lua` for new setups. Existing `wezterm.lua` files continue to work.
+
 ## Architecture
 
 This is a Rust workspace. Key crates:
@@ -24,6 +47,12 @@ This is a Rust workspace. Key crates:
 - `mux/` — Multiplexer (tabs, panes, sessions)
 - `termwiz/` — Terminal capabilities and wizardry library
 - `window/` — Cross-platform windowing abstraction
+
+### ArcTerm-Specific Crates
+
+- `arcterm-wasm-plugin/` — WASM plugin system using wasmtime Component Model with capability-based sandboxing. Plugins are `.wasm` files declared in `arcterm.lua`.
+- `arcterm-ai/` — LLM backend abstraction (Ollama, Claude API), pane context extraction, system prompts, destructive command detection, and inline suggestion logic.
+- `arcterm-structured-output/` — OSC 7770 escape sequence parser and renderer. Converts JSON payloads into syntax-highlighted terminal output (code, JSON trees, diffs, images).
 
 ## Upstream Relationship
 
@@ -43,12 +72,10 @@ User-facing strings changed from "WezTerm" to "ArcTerm":
 
 Internal crate names (`wezterm-gui`, `wezterm-font`, etc.) are NOT renamed to keep upstream merges clean.
 
-## Planned ArcTerm Extensions
+## ArcTerm Features
 
-1. **WASM Plugin System** — `arcterm-wasm-plugin` crate (capability-based sandbox)
-2. **AI Integration** — `arcterm-ai` crate (Ollama/Claude, cross-pane context)
-3. **Structured Output** — OSC 7770 protocol for rich content rendering
-
-## Active Feature Branch
-
-- `001-rebrand-completion` — Completing the WezTerm → ArcTerm rebrand across all user-visible surfaces, CI pipelines, and platform assets
+1. **Rebrand** — WezTerm → ArcTerm across all user-visible surfaces; internal crate names preserved for upstream merge hygiene.
+2. **WASM Plugin System** — `arcterm-wasm-plugin` crate; wasmtime v36 Component Model; capability strings like `"fs:read:/home/user"` declared per-plugin in config; `terminal:read` granted by default.
+3. **AI Integration** — `arcterm-ai` crate; Ollama (default: `qwen2.5-coder:7b`) and Claude API backends; interactive AI pane (`OpenAiPane` action) and command overlay (`ToggleCommandOverlay` action); cross-pane context via scrollback and CWD.
+4. **Inline AI Suggestions** — ghost-text command completions using `arcterm-ai`; debounced 300ms after keystroke; accept with Tab, dismiss with Escape; requires OSC 133 shell integration or heuristic fallback.
+5. **Structured Output** — `arcterm-structured-output` crate; OSC 7770 escape sequence; renders code (syntax-highlighted via syntect), JSON trees, diffs, and images natively in the terminal.

@@ -100,8 +100,9 @@ fi
 
 ## Limits
 
-- Maximum payload size: 10MB (configurable in ArcTerm settings)
-- Payloads exceeding the limit are silently discarded with a log warning
+- Maximum payload size: 1MB default (`DEFAULT_MAX_PAYLOAD_SIZE` in `arcterm-structured-output`)
+- Payloads exceeding the limit are discarded with a log warning (not silently — check `ARCTERM_LOG` output)
+- The limit can be raised in ArcTerm settings, but note that each payload byte can produce up to ~6 terminal actions in the worst case (memory amplification)
 
 ## Compatibility
 
