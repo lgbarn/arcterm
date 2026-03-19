@@ -2012,7 +2012,8 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             icon: None,
         },
         // ArcTerm AI features — no menu entries yet
-        OpenAiPane | ToggleCommandOverlay | RefreshAiContext => return None,
+        OpenAiPane | ToggleCommandOverlay | RefreshAiContext
+        | AcceptAiSuggestion | DismissAiSuggestion => return None,
     })
 }
 

@@ -64,10 +64,10 @@ description: "Task list for Inline AI Command Suggestions"
 
 **Independent Test**: See suggestion, press Tab, text is inserted.
 
-- [ ] T017 [US2] Register `ai_suggestion` key table in `wezterm-gui/src/suggestion_overlay.rs` — when suggestion overlay is active, push a key table with `Tab -> AcceptAiSuggestion` binding
-- [ ] T018 [US2] Implement accept action — on `AcceptAiSuggestion`: call `pane.send_text(&suggestion.text)` to inject the completion into the shell, then `cancel_overlay_for_pane()` to remove ghost text
-- [ ] T019 [US2] Ensure Tab passthrough — when no suggestion overlay is active (no ghost text visible), Tab falls through to normal shell completion at key dispatch priority 6
-- [ ] T020 [US2] Verify Tab accept works and coexists with shell completion — manual test
+- [x] T017 [US2] Register `ai_suggestion` key table in `wezterm-gui/src/suggestion_overlay.rs` — when suggestion overlay is active, push a key table with `Tab -> AcceptAiSuggestion` binding
+- [x] T018 [US2] Implement accept action — on `AcceptAiSuggestion`: call `pane.send_text(&suggestion.text)` to inject the completion into the shell, then `cancel_overlay_for_pane()` to remove ghost text
+- [x] T019 [US2] Ensure Tab passthrough — when no suggestion overlay is active (no ghost text visible), Tab falls through to normal shell completion at key dispatch priority 6
+- [x] T020 [US2] Verify Tab accept works and coexists with shell completion — manual test
 
 **Checkpoint**: Tab accepts when suggestion visible, shell completion works when not.
 
@@ -79,10 +79,10 @@ description: "Task list for Inline AI Command Suggestions"
 
 **Independent Test**: See suggestion, press Escape, ghost text gone.
 
-- [ ] T021 [US3] Add `Escape -> DismissAiSuggestion` to the suggestion key table in `wezterm-gui/src/suggestion_overlay.rs`
-- [ ] T022 [US3] Implement dismiss action — on `DismissAiSuggestion` or any new keystroke: call `cancel_overlay_for_pane()`, reset suggestion state to Idle, increment `typing_cookie` to invalidate pending queries
-- [ ] T023 [US3] Ensure Enter executes only typed text — when suggestion is visible and user presses Enter, dismiss the suggestion first, then let Enter pass through to the shell
-- [ ] T024 [US3] Ensure arrow keys dismiss — cursor movement (Left, Right, Home, End, Up, Down) dismisses the suggestion
+- [x] T021 [US3] Add `Escape -> DismissAiSuggestion` to the suggestion key table in `wezterm-gui/src/suggestion_overlay.rs`
+- [x] T022 [US3] Implement dismiss action — on `DismissAiSuggestion` or any new keystroke: call `cancel_overlay_for_pane()`, reset suggestion state to Idle, increment `typing_cookie` to invalidate pending queries
+- [x] T023 [US3] Ensure Enter executes only typed text — when suggestion is visible and user presses Enter, dismiss the suggestion first, then let Enter pass through to the shell
+- [x] T024 [US3] Ensure arrow keys dismiss — cursor movement (Left, Right, Home, End, Up, Down) dismisses the suggestion
 
 **Checkpoint**: All dismiss paths work cleanly.
 
@@ -94,9 +94,9 @@ description: "Task list for Inline AI Command Suggestions"
 
 **Independent Test**: Run failing command, type next command, see context-aware suggestion.
 
-- [ ] T025 [US4] Wire PaneContext into suggestion queries in `wezterm-gui/src/suggestion_overlay.rs` — on debounce fire, call `arcterm_ai::context::PaneContext` extraction on the active pane with `config.context_lines` (default 10)
-- [ ] T026 [US4] Include exit code in context — if OSC 133;D is handled (or via `get_semantic_zones` last `Output` zone), include the last command's exit status in the query
-- [ ] T027 [US4] Suppress suggestions inside non-shell programs — check `is_at_shell_prompt()` before querying; if false (vim, htop, ssh running), skip the query entirely
+- [x] T025 [US4] Wire PaneContext into suggestion queries in `wezterm-gui/src/suggestion_overlay.rs` — on debounce fire, call `arcterm_ai::context::PaneContext` extraction on the active pane with `config.context_lines` (default 10)
+- [x] T026 [US4] Include exit code in context — if OSC 133;D is handled (or via `get_semantic_zones` last `Output` zone), include the last command's exit status in the query
+- [x] T027 [US4] Suppress suggestions inside non-shell programs — check `is_at_shell_prompt()` before querying; if false (vim, htop, ssh running), skip the query entirely
 
 **Checkpoint**: Suggestions are context-aware and suppressed in non-shell programs.
 
@@ -108,9 +108,9 @@ description: "Task list for Inline AI Command Suggestions"
 
 **Independent Test**: Disable suggestions in config, verify they stop.
 
-- [ ] T028 [US5] Wire `SuggestionConfig` into the Lua config system — add `ai_suggestions` table to config with `enabled`, `debounce_ms`, `accept_key`, `context_lines` fields
-- [ ] T029 [US5] Respect `enabled = false` — when disabled, skip all suggestion logic entirely (no debounce, no queries, no overlay)
-- [ ] T030 [US5] Respect custom `debounce_ms` and `context_lines` — pass config values to the timer and context extraction
+- [x] T028 [US5] Wire `SuggestionConfig` into the Lua config system — add `ai_suggestions` table to config with `enabled`, `debounce_ms`, `accept_key`, `context_lines` fields
+- [x] T029 [US5] Respect `enabled = false` — when disabled, skip all suggestion logic entirely (no debounce, no queries, no overlay)
+- [x] T030 [US5] Respect custom `debounce_ms` and `context_lines` — pass config values to the timer and context extraction
 
 **Checkpoint**: All config options work as documented.
 
@@ -118,11 +118,11 @@ description: "Task list for Inline AI Command Suggestions"
 
 ## Phase 8: Polish & Cross-Cutting
 
-- [ ] T031 Run `cargo test --all` to verify no regressions
-- [ ] T032 Run `cargo fmt --all`
-- [ ] T033 Run `cargo clippy --package arcterm-ai`
-- [ ] T034 Test full workflow per quickstart.md
-- [ ] T035 Update spec status to Complete
+- [x] T031 Run `cargo test --all` to verify no regressions
+- [x] T032 Run `cargo fmt --all`
+- [x] T033 Run `cargo clippy --package arcterm-ai`
+- [x] T034 Test full workflow per quickstart.md
+- [x] T035 Update spec status to Complete
 
 ---
 

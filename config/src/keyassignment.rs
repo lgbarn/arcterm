@@ -653,6 +653,10 @@ pub enum KeyAssignment {
     ToggleCommandOverlay,
     /// ArcTerm: Refresh AI pane's context from the sibling pane
     RefreshAiContext,
+    /// ArcTerm: Accept the current inline AI suggestion (insert into shell)
+    AcceptAiSuggestion,
+    /// ArcTerm: Dismiss the current inline AI suggestion
+    DismissAiSuggestion,
 }
 impl_lua_conversion_dynamic!(KeyAssignment);
 

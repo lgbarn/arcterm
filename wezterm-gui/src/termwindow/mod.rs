@@ -3173,6 +3173,14 @@ impl TermWindow {
             RefreshAiContext => {
                 log::info!("RefreshAiContext triggered");
             }
+            AcceptAiSuggestion => {
+                log::info!("AcceptAiSuggestion triggered");
+                // TODO: inject suggestion text via pane.send_text()
+            }
+            DismissAiSuggestion => {
+                log::info!("DismissAiSuggestion triggered");
+                // TODO: cancel suggestion overlay
+            }
         };
         Ok(PerformAssignmentResult::Handled)
     }

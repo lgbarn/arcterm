@@ -2,7 +2,7 @@
 
 **Feature Branch**: `005-inline-ai-suggestions`
 **Created**: 2026-03-19
-**Status**: Draft
+**Status**: Complete
 **Input**: User description: "Inline AI command suggestions — as the user types at the shell prompt, ArcTerm sends the partial command plus terminal context to the local LLM and renders a dimmed ghost suggestion inline after the cursor. Tab accepts the suggestion, Escape dismisses it, continuing to type refines the query. Works with Ollama by default, debounced to avoid flooding the LLM with requests on every keystroke."
 
 ## User Scenarios & Testing *(mandatory)*
