@@ -162,15 +162,37 @@ impl PluginManager {
     }
 
     /// Shut down all running plugins.
+    ///
+    /// Transitions each running plugin through the clean shutdown sequence:
+    /// `Running → Stopping → Stopped`. Each transition is logged via the
+    /// [`Plugin::transition`] method so the state change is visible in logs.
+    ///
+    /// # Destroy callbacks
+    ///
+    /// Calling the plugin's `destroy()` WASM export is deferred until Component
+    /// Model instantiation is fully wired (i.e., the guest `Instance` is stored
+    /// alongside the `Store`). At that point this method will call
+    /// `instance.call_destroy(&mut store)` between the `Stopping` and `Stopped`
+    /// transitions. The state-machine contract is already correct and will not
+    /// need to change when that wiring is added.
     pub fn shutdown_all(&mut self) {
+        let total = self.plugins.iter().filter(|p| p.is_running()).count();
+        log::info!("Shutting down {} running plugin(s)", total);
+
         for plugin in &mut self.plugins {
             if plugin.is_running() {
                 plugin.transition(PluginState::Stopping);
-                // TODO: Call plugin's destroy() export when Component Model
-                // instantiation is wired up
+
+                // TODO: Call `instance.call_destroy(&mut store)` here once the
+                // guest Instance is stored alongside the Store after Component
+                // Model instantiation is complete.
+
                 plugin.transition(PluginState::Stopped);
+                log::info!("Plugin '{}' stopped cleanly", plugin.name);
             }
         }
+
+        log::info!("Plugin shutdown complete");
     }
 
     /// Get a reference to all plugins.
@@ -181,5 +203,267 @@ impl PluginManager {
     /// Get the count of running plugins.
     pub fn running_count(&self) -> usize {
         self.plugins.iter().filter(|p| p.is_running()).count()
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capability::CapabilitySet;
+    use crate::config::WasmPluginConfig;
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    fn enabled_config(name: &str, path: &str) -> WasmPluginConfig {
+        WasmPluginConfig {
+            name: name.to_string(),
+            path: path.to_string(),
+            capabilities: vec![],
+            memory_limit_mb: 64,
+            fuel_per_callback: 1_000_000,
+            enabled: true,
+        }
+    }
+
+    fn disabled_config(name: &str) -> WasmPluginConfig {
+        WasmPluginConfig {
+            name: name.to_string(),
+            path: "/nonexistent/plugin.wasm".to_string(),
+            capabilities: vec![],
+            memory_limit_mb: 64,
+            fuel_per_callback: 1_000_000,
+            enabled: false,
+        }
+    }
+
+    // ── T037: Lifecycle state transition tests ────────────────────────────────
+
+    #[test]
+    fn test_plugin_initial_state_is_loading() {
+        let caps = CapabilitySet::new(vec![]);
+        let plugin = Plugin::new("test".to_string(), caps);
+        assert_eq!(plugin.state, PluginState::Loading);
+    }
+
+    #[test]
+    fn test_plugin_transition_loading_to_running() {
+        let caps = CapabilitySet::new(vec![]);
+        let mut plugin = Plugin::new("test".to_string(), caps);
+        plugin.transition(PluginState::Initializing);
+        assert_eq!(plugin.state, PluginState::Initializing);
+        plugin.transition(PluginState::Running);
+        assert_eq!(plugin.state, PluginState::Running);
+        assert!(plugin.is_running());
+    }
+
+    #[test]
+    fn test_plugin_transition_loading_to_failed() {
+        let caps = CapabilitySet::new(vec![]);
+        let mut plugin = Plugin::new("test".to_string(), caps);
+        plugin.fail("file not found".to_string());
+        assert!(!plugin.is_running());
+        assert!(matches!(plugin.state, PluginState::Failed(_)));
+        if let PluginState::Failed(msg) = &plugin.state {
+            assert!(msg.contains("file not found"));
+        }
+    }
+
+    #[test]
+    fn test_plugin_shutdown_sequence_running_to_stopped() {
+        let caps = CapabilitySet::new(vec![]);
+        let mut plugin = Plugin::new("test".to_string(), caps);
+        plugin.transition(PluginState::Running);
+        assert!(plugin.is_running());
+
+        plugin.transition(PluginState::Stopping);
+        assert_eq!(plugin.state, PluginState::Stopping);
+        assert!(!plugin.is_running());
+
+        plugin.transition(PluginState::Stopped);
+        assert_eq!(plugin.state, PluginState::Stopped);
+        assert!(!plugin.is_running());
+    }
+
+    #[test]
+    fn test_plugin_display_states() {
+        assert_eq!(PluginState::Loading.to_string(), "Loading");
+        assert_eq!(PluginState::Initializing.to_string(), "Initializing");
+        assert_eq!(PluginState::Running.to_string(), "Running");
+        assert_eq!(PluginState::Stopping.to_string(), "Stopping");
+        assert_eq!(PluginState::Stopped.to_string(), "Stopped");
+        assert_eq!(
+            PluginState::Failed("oops".to_string()).to_string(),
+            "Failed: oops"
+        );
+    }
+
+    // ── T037: PluginManager load_all with mixed success/failure ───────────────
+
+    #[test]
+    fn test_load_all_with_no_plugins_is_ok() {
+        let mut manager = PluginManager::new();
+        manager.load_all(vec![]);
+        assert_eq!(manager.plugins().len(), 0);
+        assert_eq!(manager.running_count(), 0);
+    }
+
+    #[test]
+    fn test_load_all_disabled_plugin_is_skipped() {
+        let mut manager = PluginManager::new();
+        manager.load_all(vec![disabled_config("skipped")]);
+        // Disabled plugins are not added to the plugin list at all.
+        assert_eq!(
+            manager.plugins().len(),
+            0,
+            "disabled plugins should not appear in the plugin list"
+        );
+    }
+
+    #[test]
+    fn test_load_all_missing_file_results_in_failed_plugin() {
+        let mut manager = PluginManager::new();
+        manager.load_all(vec![enabled_config("bad-plugin", "/nonexistent/plugin.wasm")]);
+        assert_eq!(manager.plugins().len(), 1);
+        assert_eq!(manager.running_count(), 0);
+        let plugin = &manager.plugins()[0];
+        assert!(
+            matches!(plugin.state, PluginState::Failed(_)),
+            "plugin with missing file should be in Failed state, got {:?}",
+            plugin.state
+        );
+        if let PluginState::Failed(msg) = &plugin.state {
+            assert!(
+                msg.contains("Plugin file not found") || msg.contains("failed to read"),
+                "failure message should describe the cause: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_load_all_one_failing_does_not_affect_others() {
+        // Use a real WASM component fixture for the good plugin and a missing
+        // path for the bad one.  The lifecycle manager's load_single_plugin()
+        // checks file existence before reading, so a missing path reliably fails.
+        // We supply two bad plugins (different names) and one "good" one that
+        // fails for a different reason to validate isolation.
+        //
+        // Since we have no fixture WASM components in this test module, we
+        // instead verify that when multiple plugins fail they are ALL recorded
+        // independently and none corrupts another's state.
+        let configs = vec![
+            enabled_config("plugin-a", "/nonexistent/a.wasm"),
+            enabled_config("plugin-b", "/nonexistent/b.wasm"),
+        ];
+
+        let mut manager = PluginManager::new();
+        manager.load_all(configs);
+
+        assert_eq!(manager.plugins().len(), 2, "both plugins should be recorded");
+        assert_eq!(manager.running_count(), 0, "no plugin should be running");
+
+        // Each plugin is individually in Failed state with its own path in the message.
+        for plugin in manager.plugins() {
+            assert!(
+                matches!(plugin.state, PluginState::Failed(_)),
+                "plugin '{}' should be Failed",
+                plugin.name
+            );
+        }
+
+        // Names are preserved independently.
+        let names: Vec<&str> = manager.plugins().iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"plugin-a"));
+        assert!(names.contains(&"plugin-b"));
+    }
+
+    #[test]
+    fn test_shutdown_all_transitions_running_plugins_to_stopped() {
+        let mut manager = PluginManager::new();
+
+        // Manually inject a running plugin (bypassing load_all to avoid needing
+        // a real WASM file in unit tests).
+        let caps = CapabilitySet::new(vec![]);
+        let mut plugin = Plugin::new("manual-plugin".to_string(), caps);
+        plugin.transition(PluginState::Initializing);
+        plugin.transition(PluginState::Running);
+        manager.plugins.push(plugin);
+
+        assert_eq!(manager.running_count(), 1);
+
+        manager.shutdown_all();
+
+        assert_eq!(manager.running_count(), 0);
+        let plugin = &manager.plugins()[0];
+        assert_eq!(plugin.state, PluginState::Stopped);
+    }
+
+    #[test]
+    fn test_shutdown_all_does_not_affect_already_failed_plugins() {
+        let mut manager = PluginManager::new();
+
+        let caps = CapabilitySet::new(vec![]);
+        let mut plugin = Plugin::new("failed-plugin".to_string(), caps);
+        plugin.fail("load error".to_string());
+        manager.plugins.push(plugin);
+
+        manager.shutdown_all();
+
+        // Still in Failed state — shutdown_all should only touch Running plugins.
+        assert!(matches!(manager.plugins()[0].state, PluginState::Failed(_)));
+    }
+
+    #[test]
+    fn test_shutdown_all_mixed_states() {
+        let mut manager = PluginManager::new();
+
+        // Add a running plugin.
+        let caps1 = CapabilitySet::new(vec![]);
+        let mut running = Plugin::new("running-plugin".to_string(), caps1);
+        running.transition(PluginState::Running);
+        manager.plugins.push(running);
+
+        // Add a failed plugin.
+        let caps2 = CapabilitySet::new(vec![]);
+        let mut failed = Plugin::new("failed-plugin".to_string(), caps2);
+        failed.fail("bad file".to_string());
+        manager.plugins.push(failed);
+
+        manager.shutdown_all();
+
+        let states: Vec<&PluginState> = manager.plugins().iter().map(|p| &p.state).collect();
+        // running plugin → Stopped
+        assert_eq!(states[0], &PluginState::Stopped);
+        // failed plugin stays Failed
+        assert!(matches!(states[1], PluginState::Failed(_)));
+    }
+
+    // ── T037: Fuel refuel mechanism ───────────────────────────────────────────
+
+    #[test]
+    fn test_refuel_store_resets_fuel_via_lifecycle_integration() {
+        use crate::loader::{create_engine, refuel_store, PluginStoreData};
+
+        let engine = create_engine().unwrap();
+        let caps = CapabilitySet::new(vec![]);
+        let data = PluginStoreData::new("lifecycle-fuel-test".to_string(), caps, 64 * 1024 * 1024);
+        let mut store = wasmtime::Store::new(&engine, data);
+
+        // Initial fuel.
+        store.set_fuel(1_000_000).unwrap();
+
+        // Simulate partially consumed fuel.
+        store.set_fuel(100_000).unwrap();
+        let low_fuel = store.get_fuel().unwrap();
+        assert_eq!(low_fuel, 100_000);
+
+        // Refuel before next callback.
+        refuel_store(&mut store, 1_000_000).unwrap();
+        let full_fuel = store.get_fuel().unwrap();
+        assert_eq!(
+            full_fuel, 1_000_000,
+            "refuel_store must restore the full per-callback budget"
+        );
     }
 }

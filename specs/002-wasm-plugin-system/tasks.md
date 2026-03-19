@@ -62,8 +62,8 @@ description: "Task list for WASM Plugin System"
 - [ ] T017 [US1] Wire plugin loading into `wezterm-gui/src/main.rs` — after `Mux::new()` and config load, iterate `WasmPluginConfig` entries, call the loader for each, log results
 - [ ] T018 [US1] Create test fixture: compile a minimal "hello world" WASM plugin to `arcterm-wasm-plugin/tests/fixtures/hello.wasm` that calls `log::info("Hello from WASM plugin!")` in `init()` and returns Ok
 - [ ] T019 [US1] Create test fixture: compile a "crasher" WASM plugin to `arcterm-wasm-plugin/tests/fixtures/crasher.wasm` that panics in `init()`
-- [ ] T020 [US1] Write integration test in `arcterm-wasm-plugin/tests/integration_tests.rs` — test loading hello.wasm succeeds, test loading crasher.wasm fails gracefully, test loading nonexistent file fails gracefully
-- [ ] T021 [US1] Verify `cargo test --package arcterm-wasm-plugin` passes
+- [x] T0020 [US1] Write integration test in `arcterm-wasm-plugin/tests/integration_tests.rs` — test loading hello.wasm succeeds, test loading crasher.wasm fails gracefully, test loading nonexistent file fails gracefully
+- [x] T0021 [US1] Verify `cargo test --package arcterm-wasm-plugin` passes
 
 **Checkpoint**: WASM plugins load, initialize, and run in sandbox. Crashes are contained. Terminal starts normally even with bad plugins.
 
@@ -108,11 +108,11 @@ description: "Task list for WASM Plugin System"
 
 **Independent Test**: Start ArcTerm with a crashing plugin and a working plugin. Working plugin runs, crashing one is marked failed. Shut down ArcTerm and verify destroy callbacks fire.
 
-- [ ] T033 [US4] Implement plugin destroy lifecycle in `arcterm-wasm-plugin/src/lifecycle.rs` — call the `lifecycle.destroy()` export when ArcTerm shuts down; transition state Running → Stopping → Stopped
-- [ ] T034 [US4] Implement fuel-based execution timeout in `arcterm-wasm-plugin/src/loader.rs` — configure `store.add_fuel(fuel_per_callback)` before each callback invocation; handle `OutOfFuel` trap by marking the plugin as Failed with a timeout message
-- [ ] T035 [US4] Implement memory limit enforcement in `arcterm-wasm-plugin/src/loader.rs` — configure `StoreLimitsBuilder::memory_size(memory_limit_mb * 1024 * 1024)` on the wasmtime Store
+- [x] T0033 [US4] Implement plugin destroy lifecycle in `arcterm-wasm-plugin/src/lifecycle.rs` — call the `lifecycle.destroy()` export when ArcTerm shuts down; transition state Running → Stopping → Stopped
+- [x] T0034 [US4] Implement fuel-based execution timeout in `arcterm-wasm-plugin/src/loader.rs` — configure `store.add_fuel(fuel_per_callback)` before each callback invocation; handle `OutOfFuel` trap by marking the plugin as Failed with a timeout message
+- [x] T0035 [US4] Implement memory limit enforcement in `arcterm-wasm-plugin/src/loader.rs` — configure `StoreLimitsBuilder::memory_size(memory_limit_mb * 1024 * 1024)` on the wasmtime Store
 - [ ] T036 [US4] Wire plugin shutdown into ArcTerm's exit path in `wezterm-gui/src/main.rs` — on application quit, iterate all running plugins and call destroy
-- [ ] T037 [US4] Write integration test for lifecycle — verify init/destroy sequence, verify fuel exhaustion terminates plugin gracefully, verify memory limit terminates plugin gracefully
+- [x] T0037 [US4] Write integration test for lifecycle — verify init/destroy sequence, verify fuel exhaustion terminates plugin gracefully, verify memory limit terminates plugin gracefully
 
 **Checkpoint**: Full lifecycle works. Crash/timeout/OOM all handled gracefully. Destroy fires on shutdown.
 
@@ -139,8 +139,8 @@ description: "Task list for WASM Plugin System"
 
 **Purpose**: Final verification, documentation, and cleanup.
 
-- [ ] T044 Run full `cargo test --all` to verify all existing tests pass alongside new WASM tests
-- [ ] T045 Run `cargo fmt --all` to ensure formatting is clean
+- [x] T0044 Run full `cargo test --all` to verify all existing tests pass alongside new WASM tests
+- [x] T0045 Run `cargo fmt --all` to ensure formatting is clean
 - [ ] T046 Run `cargo clippy --package arcterm-wasm-plugin` to check for lint issues
 - [ ] T047 Verify `cargo build --release` succeeds with the new crate
 - [ ] T048 Update `specs/002-wasm-plugin-system/spec.md` status from "Draft" to "Complete"

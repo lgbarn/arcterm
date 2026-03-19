@@ -182,6 +182,37 @@ pub fn load_plugin(engine: &Engine, config: &WasmPluginConfig) -> anyhow::Result
     })
 }
 
+// ── Fuel management ───────────────────────────────────────────────────────────
+
+/// Reset a plugin store's fuel budget before each callback invocation.
+///
+/// Per-callback fuel budgets prevent a plugin from accumulating unlimited
+/// execution time across many events. Call this function immediately before
+/// dispatching any guest export (e.g., `on_key_down`, `on_tab_created`).
+///
+/// # Why this matters
+///
+/// `wasmtime::Store::set_fuel` replaces the current fuel level — it does not
+/// add to it. A plugin that consumes 900 000 of its 1 000 000-unit budget in
+/// callback A would only have 100 000 units left for callback B without a
+/// refuel. By calling `refuel_store` before every dispatch the host guarantees
+/// a consistent, per-callback cap regardless of prior consumption.
+///
+/// # Errors
+///
+/// Returns `Err` if the engine was not configured with `consume_fuel(true)`.
+/// In practice every store created by [`load_plugin`] uses an engine produced
+/// by [`create_engine`], which always enables fuel, so this should not fail in
+/// normal usage.
+pub fn refuel_store(
+    store: &mut wasmtime::Store<PluginStoreData>,
+    fuel: u64,
+) -> anyhow::Result<()> {
+    store
+        .set_fuel(fuel)
+        .with_context(|| format!("refuel_store: failed to set fuel to {fuel}"))
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -249,6 +280,50 @@ mod tests {
         assert!(data.memory_growing(0, limit_bytes, None).unwrap());
         // Beyond limit: denied
         assert!(!data.memory_growing(0, limit_bytes + 1, None).unwrap());
+    }
+
+    #[test]
+    fn test_refuel_store_resets_fuel_to_given_value() {
+        // Create an engine and a bare store (no WASM loading needed).
+        let engine = create_engine().unwrap();
+        let caps = CapabilitySet::new(vec![]);
+        let data = PluginStoreData::new("refuel-test".to_string(), caps, 64 * 1024 * 1024);
+        let mut store = wasmtime::Store::new(&engine, data);
+
+        // Set an initial budget and verify it was applied.
+        store.set_fuel(1_000_000).unwrap();
+        let (fuel_before, _) = store.get_fuel().map(|f| (f, true)).unwrap();
+        assert_eq!(fuel_before, 1_000_000, "initial fuel should be 1_000_000");
+
+        // Simulate fuel consumption by setting a lower value (wasmtime does
+        // not expose a direct consume-N API at the store level outside of
+        // guest execution, so we approximate by setting a lower value).
+        store.set_fuel(500_000).unwrap();
+        let (fuel_after_consume, _) = store.get_fuel().map(|f| (f, true)).unwrap();
+        assert_eq!(fuel_after_consume, 500_000, "fuel after simulate-consume");
+
+        // Refuel restores the full budget.
+        refuel_store(&mut store, 1_000_000).unwrap();
+        let (fuel_after_refuel, _) = store.get_fuel().map(|f| (f, true)).unwrap();
+        assert_eq!(fuel_after_refuel, 1_000_000, "fuel should be reset to full budget after refuel");
+    }
+
+    #[test]
+    fn test_refuel_store_to_different_budgets() {
+        // Verify that refuel_store respects arbitrary fuel values, not a
+        // hardcoded constant.
+        let engine = create_engine().unwrap();
+        let caps = CapabilitySet::new(vec![]);
+        let data = PluginStoreData::new("refuel-test2".to_string(), caps, 64 * 1024 * 1024);
+        let mut store = wasmtime::Store::new(&engine, data);
+
+        refuel_store(&mut store, 42_000).unwrap();
+        let (fuel, _) = store.get_fuel().map(|f| (f, true)).unwrap();
+        assert_eq!(fuel, 42_000);
+
+        refuel_store(&mut store, 999).unwrap();
+        let (fuel2, _) = store.get_fuel().map(|f| (f, true)).unwrap();
+        assert_eq!(fuel2, 999);
     }
 
     #[test]
