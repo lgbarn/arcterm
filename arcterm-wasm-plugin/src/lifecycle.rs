@@ -46,12 +46,7 @@ impl Plugin {
 
     /// Transition to a new state. Logs the transition.
     pub fn transition(&mut self, new_state: PluginState) {
-        log::info!(
-            "Plugin '{}': {} → {}",
-            self.name,
-            self.state,
-            new_state
-        );
+        log::info!("Plugin '{}': {} → {}", self.name, self.state, new_state);
         self.state = new_state;
     }
 

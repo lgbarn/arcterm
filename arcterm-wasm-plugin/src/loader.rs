@@ -28,11 +28,19 @@ pub struct PluginStoreData {
 }
 
 impl PluginStoreData {
-    pub(crate) fn new(name: String, capabilities: CapabilitySet, memory_limit_bytes: usize) -> Self {
+    pub(crate) fn new(
+        name: String,
+        capabilities: CapabilitySet,
+        memory_limit_bytes: usize,
+    ) -> Self {
         let limiter = StoreLimitsBuilder::new()
             .memory_size(memory_limit_bytes)
             .build();
-        Self { capabilities, name, limiter }
+        Self {
+            capabilities,
+            name,
+            limiter,
+        }
     }
 }
 
@@ -151,14 +159,12 @@ pub fn load_plugin(engine: &Engine, config: &WasmPluginConfig) -> anyhow::Result
     store.limiter(|data| data as &mut dyn ResourceLimiter);
 
     // 5. Set the initial fuel budget.
-    store
-        .set_fuel(config.fuel_per_callback)
-        .with_context(|| {
-            format!(
-                "Plugin '{}': failed to set fuel budget {}",
-                config.name, config.fuel_per_callback
-            )
-        })?;
+    store.set_fuel(config.fuel_per_callback).with_context(|| {
+        format!(
+            "Plugin '{}': failed to set fuel budget {}",
+            config.name, config.fuel_per_callback
+        )
+    })?;
 
     log::info!(
         "Plugin '{}': loaded from '{}' (memory_limit={}MB, fuel={})",

@@ -41,7 +41,10 @@ impl Capability {
     pub fn parse(s: &str) -> anyhow::Result<Self> {
         let parts: Vec<&str> = s.splitn(3, ':').collect();
         if parts.len() < 2 {
-            anyhow::bail!("Invalid capability format: '{}'. Expected '<resource>:<operation>[:<target>]'", s);
+            anyhow::bail!(
+                "Invalid capability format: '{}'. Expected '<resource>:<operation>[:<target>]'",
+                s
+            );
         }
 
         let (resource, operation) = match (parts[0], parts[1]) {
@@ -50,7 +53,10 @@ impl Capability {
             ("fs", "read") => (CapabilityResource::Filesystem, CapabilityOperation::Read),
             ("fs", "write") => (CapabilityResource::Filesystem, CapabilityOperation::Write),
             ("net", "connect") => (CapabilityResource::Network, CapabilityOperation::Connect),
-            ("keybinding", "register") => (CapabilityResource::Keybinding, CapabilityOperation::Register),
+            ("keybinding", "register") => (
+                CapabilityResource::Keybinding,
+                CapabilityOperation::Register,
+            ),
             _ => anyhow::bail!("Unknown capability: '{}:{}'", parts[0], parts[1]),
         };
 
@@ -59,15 +65,24 @@ impl Capability {
         // Validate that fs and net capabilities include a target
         match resource {
             CapabilityResource::Filesystem if target.is_none() => {
-                anyhow::bail!("Filesystem capability requires a path target: 'fs:{}:<path>'", parts[1]);
+                anyhow::bail!(
+                    "Filesystem capability requires a path target: 'fs:{}:<path>'",
+                    parts[1]
+                );
             }
             CapabilityResource::Network if target.is_none() => {
-                anyhow::bail!("Network capability requires a host:port target: 'net:connect:<host>:<port>'");
+                anyhow::bail!(
+                    "Network capability requires a host:port target: 'net:connect:<host>:<port>'"
+                );
             }
             _ => {}
         }
 
-        Ok(Capability { resource, operation, target })
+        Ok(Capability {
+            resource,
+            operation,
+            target,
+        })
     }
 }
 
@@ -102,7 +117,9 @@ impl CapabilitySet {
             if cap.resource == required.resource && cap.operation == required.operation {
                 // For filesystem: check path prefix
                 if cap.resource == CapabilityResource::Filesystem {
-                    if let (Some(granted_path), Some(requested_path)) = (&cap.target, &required.target) {
+                    if let (Some(granted_path), Some(requested_path)) =
+                        (&cap.target, &required.target)
+                    {
                         let granted = PathBuf::from(granted_path);
                         let requested = PathBuf::from(requested_path);
                         if requested.starts_with(&granted) {

@@ -42,27 +42,36 @@ pub fn register_log_functions(linker: &mut Linker<PluginStoreData>) -> anyhow::R
         .with_context(|| format!("failed to create linker instance for '{LOG_INTERFACE}'"))?;
 
     instance
-        .func_wrap("info", |ctx: wasmtime::StoreContextMut<'_, PluginStoreData>, (msg,): (String,)| {
-            let name = ctx.data().name.clone();
-            log::info!("[plugin/{name}] {msg}");
-            Ok(())
-        })
+        .func_wrap(
+            "info",
+            |ctx: wasmtime::StoreContextMut<'_, PluginStoreData>, (msg,): (String,)| {
+                let name = ctx.data().name.clone();
+                log::info!("[plugin/{name}] {msg}");
+                Ok(())
+            },
+        )
         .context("failed to register log::info host function")?;
 
     instance
-        .func_wrap("warn", |ctx: wasmtime::StoreContextMut<'_, PluginStoreData>, (msg,): (String,)| {
-            let name = ctx.data().name.clone();
-            log::warn!("[plugin/{name}] {msg}");
-            Ok(())
-        })
+        .func_wrap(
+            "warn",
+            |ctx: wasmtime::StoreContextMut<'_, PluginStoreData>, (msg,): (String,)| {
+                let name = ctx.data().name.clone();
+                log::warn!("[plugin/{name}] {msg}");
+                Ok(())
+            },
+        )
         .context("failed to register log::warn host function")?;
 
     instance
-        .func_wrap("error", |ctx: wasmtime::StoreContextMut<'_, PluginStoreData>, (msg,): (String,)| {
-            let name = ctx.data().name.clone();
-            log::error!("[plugin/{name}] {msg}");
-            Ok(())
-        })
+        .func_wrap(
+            "error",
+            |ctx: wasmtime::StoreContextMut<'_, PluginStoreData>, (msg,): (String,)| {
+                let name = ctx.data().name.clone();
+                log::error!("[plugin/{name}] {msg}");
+                Ok(())
+            },
+        )
         .context("failed to register log::error host function")?;
 
     Ok(())
@@ -73,12 +82,9 @@ pub fn register_log_functions(linker: &mut Linker<PluginStoreData>) -> anyhow::R
 ///
 /// Callers that need to add additional host functions should call
 /// [`register_log_functions`] directly on their own [`Linker`].
-pub fn create_default_linker(
-    engine: &wasmtime::Engine,
-) -> anyhow::Result<Linker<PluginStoreData>> {
+pub fn create_default_linker(engine: &wasmtime::Engine) -> anyhow::Result<Linker<PluginStoreData>> {
     let mut linker = Linker::new(engine);
-    register_log_functions(&mut linker)
-        .context("failed to register default host functions")?;
+    register_log_functions(&mut linker).context("failed to register default host functions")?;
     Ok(linker)
 }
 
@@ -127,11 +133,8 @@ mod tests {
     fn test_plugin_store_data_name_accessible() {
         // Verify that PluginStoreData exposes the name field used by log funcs.
         let caps = CapabilitySet::new(vec![]);
-        let data = crate::loader::PluginStoreData::new(
-            "my-plugin".to_string(),
-            caps,
-            64 * 1024 * 1024,
-        );
+        let data =
+            crate::loader::PluginStoreData::new("my-plugin".to_string(), caps, 64 * 1024 * 1024);
         assert_eq!(data.name, "my-plugin");
     }
 }

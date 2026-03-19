@@ -41,10 +41,7 @@ impl WasmPluginConfig {
             .filter_map(|s| match Capability::parse(s) {
                 Ok(cap) => Some(cap),
                 Err(e) => {
-                    log::warn!(
-                        "Plugin '{}': invalid capability '{}': {}",
-                        self.name, s, e
-                    );
+                    log::warn!("Plugin '{}': invalid capability '{}': {}", self.name, s, e);
                     None
                 }
             })
