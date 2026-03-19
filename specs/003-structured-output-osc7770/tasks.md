@@ -118,9 +118,9 @@ description: "Task list for Structured Output via OSC 7770"
 
 **Independent Test**: A 10-line shell script emits a code block that renders in ArcTerm and is invisible in other terminals.
 
-- [ ] T032 [US5] Create protocol documentation at `docs/osc-7770-protocol.md` (copy and finalize from `specs/003-structured-output-osc7770/contracts/osc-7770-protocol.md`) — include payload schemas, shell examples for all 4 content types, ArcTerm detection via `TERM_PROGRAM`, and compatibility notes
-- [ ] T033 [US5] Create example helper script at `examples/arcterm-structured-output.sh` — a shell script demonstrating how to emit each content type, with ArcTerm detection and plain-text fallback
-- [ ] T034 [US5] Verify graceful degradation — test the example script in a non-ArcTerm terminal (e.g., default macOS Terminal.app) and confirm no garbled output appears
+- [x] T0032 [US5] Create protocol documentation at `docs/osc-7770-protocol.md` (copy and finalize from `specs/003-structured-output-osc7770/contracts/osc-7770-protocol.md`) — include payload schemas, shell examples for all 4 content types, ArcTerm detection via `TERM_PROGRAM`, and compatibility notes
+- [x] T0033 [US5] Create example helper script at `examples/arcterm-structured-output.sh` — a shell script demonstrating how to emit each content type, with ArcTerm detection and plain-text fallback
+- [x] T0034 [US5] Verify graceful degradation — test the example script in a non-ArcTerm terminal (e.g., default macOS Terminal.app) and confirm no garbled output appears
 
 **Checkpoint**: Protocol documented. Example script works in ArcTerm and degrades gracefully elsewhere.
 
@@ -130,13 +130,13 @@ description: "Task list for Structured Output via OSC 7770"
 
 **Purpose**: Final verification and cleanup.
 
-- [ ] T035 Run full `cargo test --all` to verify all existing tests pass alongside new structured output tests
-- [ ] T036 Run `cargo fmt --all` to ensure formatting is clean
-- [ ] T037 Run `cargo clippy --package arcterm-structured-output` for lint checks
-- [ ] T038 Verify `cargo build --release` succeeds with the new crate
-- [ ] T039 Test all four content types end-to-end using quickstart.md commands
-- [ ] T040 Verify copy-to-clipboard from structured blocks produces plain text
-- [ ] T041 Update `specs/003-structured-output-osc7770/spec.md` status from "Draft" to "Complete"
+- [x] T0035 Run full `cargo test --all` to verify all existing tests pass alongside new structured output tests
+- [x] T0036 Run `cargo fmt --all` to ensure formatting is clean
+- [x] T0037 Run `cargo clippy --package arcterm-structured-output` for lint checks
+- [x] T0038 Verify `cargo build --release` succeeds with the new crate
+- [x] T0039 Test all four content types end-to-end using quickstart.md commands
+- [x] T0040 Verify copy-to-clipboard from structured blocks produces plain text
+- [x] T0041 Update `specs/003-structured-output-osc7770/spec.md` status from "Draft" to "Complete"
 
 ---
 

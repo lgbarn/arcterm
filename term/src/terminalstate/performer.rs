@@ -769,6 +769,19 @@ impl<'a> Performer<'a> {
             OperatingSystemCommand::SetHyperlink(link) => {
                 self.set_hyperlink(link);
             }
+            OperatingSystemCommand::ArcTermStructuredOutput(payload) => {
+                // Render structured content (code blocks, JSON trees, diffs, images)
+                // via the arcterm-structured-output crate and feed the resulting
+                // actions back into the terminal state machine.
+                if let Some(actions) = arcterm_structured_output::render(
+                    &payload,
+                    arcterm_structured_output::DEFAULT_MAX_PAYLOAD_SIZE,
+                ) {
+                    for action in actions {
+                        self.perform(action);
+                    }
+                }
+            }
             OperatingSystemCommand::Unspecified(unspec) => {
                 if self.config.log_unknown_escape_sequences() {
                     let mut output = String::new();

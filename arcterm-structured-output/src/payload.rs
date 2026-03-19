@@ -110,7 +110,8 @@ mod tests {
 
     #[test]
     fn test_parse_with_title() {
-        let payload = r#"{"type":"code","language":"rust","title":"example.rs","content":"fn main(){}"}"#;
+        let payload =
+            r#"{"type":"code","language":"rust","title":"example.rs","content":"fn main(){}"}"#;
         let block = parse(payload).unwrap();
         assert_eq!(block.title, Some("example.rs".to_string()));
     }

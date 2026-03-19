@@ -28,9 +28,15 @@ pub fn render_code(language: &str, content: &str, actions: &mut Vec<Action>) {
     let mut parse_state = syntect::parsing::ParseState::new(syntax);
 
     for line in syntect::util::LinesWithEndings::from(content) {
-        let ops = parse_state.parse_line(line, &SYNTAX_SET).unwrap_or_default();
-        let regions =
-            syntect::highlighting::HighlightIterator::new(&mut highlight_state, &ops, line, &highlighter);
+        let ops = parse_state
+            .parse_line(line, &SYNTAX_SET)
+            .unwrap_or_default();
+        let regions = syntect::highlighting::HighlightIterator::new(
+            &mut highlight_state,
+            &ops,
+            line,
+            &highlighter,
+        );
 
         for (style, text) in regions {
             emit_styled_text(style, text, actions);

@@ -99,7 +99,10 @@ fn should_collapse(value: &serde_json::Value, depth: usize) -> bool {
     if depth <= 1 {
         return false;
     }
-    matches!(value, serde_json::Value::Object(_) | serde_json::Value::Array(_))
+    matches!(
+        value,
+        serde_json::Value::Object(_) | serde_json::Value::Array(_)
+    )
 }
 
 /// Render a collapsed node marker.
@@ -179,10 +182,7 @@ mod tests {
     #[test]
     fn test_deep_nesting_collapses() {
         let mut actions = Vec::new();
-        render_json(
-            r#"{"a":{"b":{"c":"deep"}}}"#,
-            &mut actions,
-        );
+        render_json(r#"{"a":{"b":{"c":"deep"}}}"#, &mut actions);
         let text: String = actions
             .iter()
             .filter_map(|a| match a {
