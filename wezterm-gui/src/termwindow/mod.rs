@@ -2373,10 +2373,35 @@ impl TermWindow {
             Some(tab) => tab,
             None => return,
         };
-        let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
+
+        // Get the active pane's index for the split
+        let active_pane_index = match tab.get_active_pane() {
+            Some(pane) => {
+                tab.iter_panes_ignoring_zoom()
+                    .iter()
+                    .find(|p| p.pane.pane_id() == pane.pane_id())
+                    .map(|p| p.index)
+                    .unwrap_or(0)
+            }
+            None => return,
+        };
+
+        // Create the AI pane as a TermWizTermTab
+        let (ai_pane, future) = start_overlay(self, &tab, move |_tab_id, term| {
             crate::ai_pane::open_ai_pane(term)
         });
-        self.assign_overlay(tab.tab_id(), overlay);
+
+        // Insert as a horizontal split (AI pane on the right, 40% width)
+        let split_request = ::mux::tab::SplitRequest {
+            direction: ::mux::tab::SplitDirection::Horizontal,
+            target_is_second: true,
+            size: ::mux::tab::SplitSize::Percent(40),
+            top_level: false,
+        };
+        if let Err(err) = tab.split_and_insert(active_pane_index, split_request, ai_pane) {
+            log::error!("Failed to split for AI pane: {:#}", err);
+            return;
+        }
         promise::spawn::spawn(future).detach();
     }
 
