@@ -67,11 +67,11 @@ pub use termwindow::{set_window_class, set_window_position, TermWindow, ICON_DAT
 
 #[derive(Debug, Parser)]
 #[command(
-    about = "Wez's Terminal Emulator\nhttp://github.com/wezterm/wezterm",
+    about = "ArcTerm - AI-Powered Terminal Emulator\nhttps://github.com/lgbarn/arcterm",
     version = config::wezterm_version()
 )]
 struct Opt {
-    /// Skip loading wezterm.lua
+    /// Skip loading arcterm.lua (or wezterm.lua for backwards compatibility)
     #[arg(long, short = 'n')]
     skip_config: bool,
 
@@ -1172,7 +1172,7 @@ fn run() -> anyhow::Result<()> {
     {
         unsafe {
             ::windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(
-                ::windows::core::PCWSTR(wide_string("org.wezfurlong.wezterm").as_ptr()),
+                ::windows::core::PCWSTR(wide_string("com.lgbarn.arcterm").as_ptr()),
             )
             .unwrap();
         }

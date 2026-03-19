@@ -1,129 +1,71 @@
-# Contributing to wezterm
+# Contributing to ArcTerm
 
-Thanks for considering donating your time and energy!  I value any contribution,
-even if it is just to highlight a typo.
+ArcTerm is a fork of [WezTerm](https://github.com/wez/wezterm) by Wez Furlong, extended with AI-powered features.
 
-Included here are some guidelines that can help streamline taking in your contribution.
-They are just guidelines and not hard-and-fast rules. Things will probably go faster
-and smoother if you have the time and energy to read and follow these suggestions.
+## Upstream Relationship
 
-## Contributing Documentation
+- **Upstream repository**: https://github.com/wez/wezterm
+- **License**: MIT (same as upstream)
+- **Remote setup**: `upstream` points to wez/wezterm, `origin` points to lgbarn/arcterm
 
-There's never enough!  Pretty much anything is fair game to improve here.
+We periodically merge upstream changes to stay current with WezTerm improvements. ArcTerm-specific code is kept in clearly separated modules/crates to minimize merge conflicts.
 
-### Running the doc build yourself
-
-To check your documentation additions, you can optionally build the docs yourself and see how the changes will look on the webpage. 
-
-To serve them up, and then automatically rebuild and refresh the docs in your browser, run:
-```console
-$ ci/build-docs.sh serve
-```
-And then click on the URL that it prints out after it has performed the first build.
-
-Any arguments passed to `build-docs.sh` are passed down to the underlying `mkdocs` utility.
-
-Look at [mkdocs serve](https://www.mkdocs.org/user-guide/cli/#mkdocs-serve) for more information on additional parameters.
-
-### Operating system specific installation instructions?
-
-There are a lot of targets out there.  Today we have docs that are Ubuntu biased
-and I know that there are a lot of flavors of Linux. Rather than expand the README
-with instructions for those, please translate the instructions into steps that
-can be run in the [`get-deps`](https://github.com/wezterm/wezterm/blob/master/get-deps)
-script.
-
-## Contributing code
-
-Yes please!
-
-If you are new to the Rust language check out <https://doc.rust-lang.org/rust-by-example/>.
-
-### Where to find things?
-
-The `term` directory holds the core terminal model code. This is agnostic
-of any windowing system. If you want to add support for terminal escape
-sequences and that sort of thing, you probably want to be in the `term` directory.
-Keep in mind that for maximal compatibility and utility `wezterm` aims to
-be compatible with the `xterm` behavior.
-https://invisible-island.net/xterm/ctlseqs/ctlseqs.html is a useful resource!
-
-The `src` directory holds the code for the `wezterm` program. This is
-the GUI renderer for the terminal model.  If you want to change something
-about the GUI you want to be in the `src` dir.
-
-### Iterating
-
-I tend to iterate and sanity check as I develop using `cargo check`; it
-will type-check your code without generating code which is much faster
-than building everything in release mode:
+### Syncing with upstream
 
 ```console
-$ cargo check
+$ git fetch upstream
+$ git merge upstream/main
 ```
 
-Likewise, if you want to quickly check that something works, you can run it
-in debug mode using:
+## ArcTerm-Specific Features
+
+The following are unique to ArcTerm and not present in upstream WezTerm:
+
+1. **WASM Plugin System** — capability-based sandbox for plugins
+2. **AI Integration Layer** — cross-pane context, AI tool detection, Ollama/Claude integration
+3. **Structured Output Rendering** — OSC 7770 protocol for rich content
+
+When contributing to these features, please keep them in their dedicated crates/modules.
+
+## Development
+
+### Building
 
 ```console
-$ cargo run
+$ cargo build --release
 ```
 
-This will produce a debug-instrumented binary with poor optimization. This will
-give you more detail in the backtrace produced if you run `RUST_BACKTRACE=1 cargo run`.
-
-If you get a panic and want to examine local variables, you'll need to use gdb:
+### Running in debug mode
 
 ```console
-$ cargo build
-$ gdb ./target/debug/wezterm
-$ break rust_panic               # hit tab to complete the name of the panic symbol!
-$ run
-$ bt
+$ cargo run --bin wezterm-gui
 ```
 
-### Please include tests to cover your changes!
-
-This will help ensure that your contributions keep working as things change.
-
-You can run the existing tests using:
+### Running tests
 
 ```console
 $ cargo test --all
 ```
 
-There are some helper classes for writing tests for terminal behavior.
-Here's [an example of a test to verify that the terminal contents
-match expectations](https://github.com/wezterm/wezterm/blob/fd532a8c2fb3b56593597cf8be1775da1feda0a3/term/src/test/mod.rs#L314).
-
-Please also make a point of adding comments to your tests to help
-clarify the intent of the test!
-
-### Please also include documentation if you are adding or changing behavior
-
-This helps to keep things well-understood and working in the long term.
-Don't worry if you're not a wordsmith or English isn't your first language as
-I can help with that. It is more important to capture the intent of the
-feature and having this written out in English also helps when it comes
-to reviewing the code.
-
-## Submitting a Pull Request
-
-After considering all of the above, and once you've prepared your contribution
-and are ready to submit it, you'll need to create a pull request.
-
-If you're new to GitHub Pull Requests, read through
-https://help.github.com/articles/creating-a-pull-request/ to understand
-how the process works.
-
-### Before you submit your code
-
-Make sure that the tests are working and that the code is correctly
-formatted otherwise the continuous integration system will fail your build:
+### Code formatting
 
 ```console
-$ rustup component add rustfmt-preview          # you only need to do this once
-$ cargo test --all
+$ rustup component add rustfmt-preview
 $ cargo fmt --all
 ```
 
+## Where to Find Things
+
+- `term/` — Core terminal model (VT parsing, escape sequences)
+- `wezterm-gui/` — GUI renderer
+- `config/` — Configuration system (Lua plugins)
+- `mux/` — Multiplexer
+- `arcterm-*` — ArcTerm-specific crates (WASM plugins, AI integration, structured output)
+
+## Submitting a Pull Request
+
+1. Fork the repository
+2. Create a feature branch
+3. Ensure tests pass: `cargo test --all`
+4. Ensure formatting: `cargo fmt --all`
+5. Submit your PR with a clear description of the changes
