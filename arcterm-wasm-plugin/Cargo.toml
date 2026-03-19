@@ -12,7 +12,6 @@ log = { workspace = true }
 mux = { path = "../mux" }
 thiserror = { workspace = true }
 wasmtime = { version = "36", features = ["component-model"] }
-wasmtime-wasi = "36"
 
 [dev-dependencies]
 tempfile = { workspace = true }
