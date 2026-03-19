@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "arcterm-ai",
   "arcterm-structured-output",
   "arcterm-wasm-plugin",
   "bidi",

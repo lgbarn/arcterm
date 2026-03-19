@@ -131,13 +131,8 @@ impl PluginManager {
     ) -> anyhow::Result<()> {
         plugin.transition(PluginState::Loading);
 
-        // Load the WASM component from file
-        let path = std::path::Path::new(&config.path);
-        if !path.exists() {
-            anyhow::bail!("Plugin file not found: {}", config.path);
-        }
-
-        let wasm_bytes = std::fs::read(path)
+        // Load the WASM component from file (no exists() check — let read() fail atomically)
+        let wasm_bytes = std::fs::read(&config.path)
             .map_err(|e| anyhow::anyhow!("Failed to read plugin file '{}': {}", config.path, e))?;
 
         // Validate it's a WASM file (magic bytes: \0asm)

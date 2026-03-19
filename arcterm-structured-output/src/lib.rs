@@ -32,7 +32,9 @@ pub fn render(payload_str: &str, max_payload_size: usize) -> Option<Vec<Action>>
 
     let block = payload::parse(payload_str)?;
 
-    let mut actions = Vec::new();
+    // Pre-allocate: each content char ~1 Action + SGR overhead
+    let estimated_capacity = payload_str.len() * 2 + 64;
+    let mut actions = Vec::with_capacity(estimated_capacity);
 
     // Render optional title
     if let Some(title) = &block.title {

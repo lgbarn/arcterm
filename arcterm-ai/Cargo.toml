@@ -1,0 +1,14 @@
+[package]
+name = "arcterm-ai"
+version = "0.1.0"
+edition = "2021"
+description = "AI integration layer for ArcTerm — LLM backends, context extraction, and prompts"
+
+[dependencies]
+anyhow = { workspace = true }
+config = { path = "../config" }
+log = { workspace = true }
+mux = { path = "../mux" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ureq = { version = "2", features = ["json"] }
