@@ -1,8 +1,17 @@
 //! AI configuration types and defaults.
 
+/// Which LLM backend to use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BackendKind {
+    Ollama,
+    Claude,
+}
+
 /// Configuration for the AI subsystem.
 #[derive(Debug, Clone)]
 pub struct AiConfig {
+    /// Which backend to use
+    pub backend: BackendKind,
     /// LLM endpoint URL (default: Ollama on localhost)
     pub endpoint: String,
     /// Model identifier (default: qwen2.5-coder:7b)
@@ -16,23 +25,12 @@ pub struct AiConfig {
 impl Default for AiConfig {
     fn default() -> Self {
         Self {
+            backend: BackendKind::Ollama,
             endpoint: "http://localhost:11434".to_string(),
             model: "qwen2.5-coder:7b".to_string(),
             api_key: None,
             context_lines: 30,
         }
-    }
-}
-
-impl AiConfig {
-    /// Determine if this config targets a Claude backend.
-    pub fn is_claude(&self) -> bool {
-        self.api_key.is_some() && self.model.starts_with("claude")
-    }
-
-    /// Determine if this config targets an Ollama backend.
-    pub fn is_ollama(&self) -> bool {
-        !self.is_claude()
     }
 }
 
@@ -43,22 +41,21 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = AiConfig::default();
+        assert_eq!(config.backend, BackendKind::Ollama);
         assert_eq!(config.endpoint, "http://localhost:11434");
         assert_eq!(config.model, "qwen2.5-coder:7b");
         assert!(config.api_key.is_none());
         assert_eq!(config.context_lines, 30);
-        assert!(config.is_ollama());
-        assert!(!config.is_claude());
     }
 
     #[test]
-    fn test_claude_detection() {
+    fn test_claude_config() {
         let config = AiConfig {
+            backend: BackendKind::Claude,
             api_key: Some("sk-ant-test".to_string()),
             model: "claude-sonnet-4-20250514".to_string(),
             ..Default::default()
         };
-        assert!(config.is_claude());
-        assert!(!config.is_ollama());
+        assert_eq!(config.backend, BackendKind::Claude);
     }
 }

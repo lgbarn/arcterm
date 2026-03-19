@@ -1,7 +1,7 @@
 //! Integration tests for LLM backends.
 
 use arcterm_ai::backend::{create_backend, Message};
-use arcterm_ai::config::AiConfig;
+use arcterm_ai::config::{AiConfig, BackendKind};
 use arcterm_ai::context::PaneContext;
 use arcterm_ai::destructive;
 use arcterm_ai::prompts;
@@ -16,6 +16,7 @@ fn test_create_ollama_backend_from_default_config() {
 #[test]
 fn test_create_claude_backend_from_config() {
     let config = AiConfig {
+        backend: BackendKind::Claude,
         api_key: Some("sk-ant-test".to_string()),
         model: "claude-sonnet-4-20250514".to_string(),
         ..Default::default()
@@ -36,15 +37,17 @@ fn test_ollama_unavailable_on_bad_port() {
 
 #[test]
 fn test_message_construction() {
+    use arcterm_ai::backend::Role;
+
     let sys = Message::system("You are helpful");
-    assert_eq!(sys.role, "system");
+    assert_eq!(sys.role, Role::System);
     assert_eq!(sys.content, "You are helpful");
 
     let user = Message::user("Hello");
-    assert_eq!(user.role, "user");
+    assert_eq!(user.role, Role::User);
 
     let asst = Message::assistant("Hi there");
-    assert_eq!(asst.role, "assistant");
+    assert_eq!(asst.role, Role::Assistant);
 }
 
 #[test]

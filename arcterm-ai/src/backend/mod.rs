@@ -5,24 +5,33 @@ pub mod ollama;
 
 use std::io::Read;
 
+/// Message role in a conversation.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    System,
+    User,
+    Assistant,
+}
+
 /// A message in a conversation.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Message {
-    pub role: String,
+    pub role: Role,
     pub content: String,
 }
 
 impl Message {
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: "system".to_string(), content: content.into() }
+        Self { role: Role::System, content: content.into() }
     }
 
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: "user".to_string(), content: content.into() }
+        Self { role: Role::User, content: content.into() }
     }
 
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self { role: "assistant".to_string(), content: content.into() }
+        Self { role: Role::Assistant, content: content.into() }
     }
 }
 
@@ -51,15 +60,14 @@ pub trait LlmBackend: Send + Sync {
 
 /// Create the appropriate backend based on configuration.
 pub fn create_backend(config: &crate::config::AiConfig) -> Box<dyn LlmBackend> {
-    if config.is_claude() {
-        Box::new(claude::ClaudeBackend::new(
+    match config.backend {
+        crate::config::BackendKind::Claude => Box::new(claude::ClaudeBackend::new(
             config.api_key.clone().unwrap_or_default(),
             config.model.clone(),
-        ))
-    } else {
-        Box::new(ollama::OllamaBackend::new(
+        )),
+        crate::config::BackendKind::Ollama => Box::new(ollama::OllamaBackend::new(
             config.endpoint.clone(),
             config.model.clone(),
-        ))
+        )),
     }
 }

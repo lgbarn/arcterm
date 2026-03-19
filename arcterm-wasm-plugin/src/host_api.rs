@@ -43,24 +43,21 @@ pub fn register_log_functions(linker: &mut Linker<PluginStoreData>) -> anyhow::R
 
     instance
         .func_wrap("info", |ctx: wasmtime::StoreContextMut<'_, PluginStoreData>, (msg,): (String,)| {
-            let name = ctx.data().name.clone();
-            log::info!("[plugin/{name}] {msg}");
+            log::info!("[plugin/{}] {}", ctx.data().name, msg);
             Ok(())
         })
         .context("failed to register log::info host function")?;
 
     instance
         .func_wrap("warn", |ctx: wasmtime::StoreContextMut<'_, PluginStoreData>, (msg,): (String,)| {
-            let name = ctx.data().name.clone();
-            log::warn!("[plugin/{name}] {msg}");
+            log::warn!("[plugin/{}] {}", ctx.data().name, msg);
             Ok(())
         })
         .context("failed to register log::warn host function")?;
 
     instance
         .func_wrap("error", |ctx: wasmtime::StoreContextMut<'_, PluginStoreData>, (msg,): (String,)| {
-            let name = ctx.data().name.clone();
-            log::error!("[plugin/{name}] {msg}");
+            log::error!("[plugin/{}] {}", ctx.data().name, msg);
             Ok(())
         })
         .context("failed to register log::error host function")?;

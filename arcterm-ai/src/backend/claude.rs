@@ -23,13 +23,13 @@ impl LlmBackend for ClaudeBackend {
         // Claude API separates system prompt from messages
         let system = messages
             .iter()
-            .find(|m| m.role == "system")
+            .find(|m| m.role == super::Role::System)
             .map(|m| m.content.clone())
             .unwrap_or_default();
 
         let user_messages: Vec<_> = messages
             .iter()
-            .filter(|m| m.role != "system")
+            .filter(|m| m.role != super::Role::System)
             .map(|m| serde_json::json!({"role": m.role, "content": m.content}))
             .collect();
 

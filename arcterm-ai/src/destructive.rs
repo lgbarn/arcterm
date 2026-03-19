@@ -9,17 +9,17 @@ const DESTRUCTIVE_PATTERNS: &[&str] = &[
     "rm -r /",
     "rm -fr",
     "rmdir /",
-    "DROP TABLE",
-    "DROP DATABASE",
-    "TRUNCATE TABLE",
-    "DELETE FROM",
+    "drop table",
+    "drop database",
+    "truncate table",
+    "delete from",
     "git push --force",
     "git push -f",
     "git reset --hard",
     "git clean -fd",
-    "chmod -R 777",
+    "chmod -r 777",
     "chmod 777 /",
-    "chown -R",
+    "chown -r",
     "dd if=",
     "mkfs",
     "fdisk",
@@ -45,7 +45,7 @@ pub fn is_destructive(command: &str) -> bool {
     let lower = command.to_lowercase();
     DESTRUCTIVE_PATTERNS
         .iter()
-        .any(|pattern| lower.contains(&pattern.to_lowercase()))
+        .any(|pattern| lower.contains(pattern))
 }
 
 /// Format a command with a destructive warning if applicable.
