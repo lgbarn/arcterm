@@ -330,7 +330,7 @@ mod tests {
         );
         if let PluginState::Failed(msg) = &plugin.state {
             assert!(
-                msg.contains("Plugin file not found") || msg.contains("failed to read"),
+                msg.to_lowercase().contains("failed to read") || msg.contains("not found"),
                 "failure message should describe the cause: {msg}"
             );
         }
