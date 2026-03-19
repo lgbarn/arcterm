@@ -41,8 +41,8 @@ description: "Task list for WASM Plugin System"
 - [x] T007 Implement `PluginState` enum and `Plugin` struct in `arcterm-wasm-plugin/src/lifecycle.rs` — state machine (Loading → Initializing → Running → Stopping → Stopped, with Failed from any state), store name/path/capabilities/state
 - [x] T008 Implement `WasmPluginConfig` struct in `arcterm-wasm-plugin/src/config.rs` — fields for name, path, capabilities, memory_limit_mb, fuel_per_callback, enabled; implement `FromDynamic` for Lua deserialization
 - [x] T009 Add `wezterm.plugin.register()` Lua API function in `arcterm-wasm-plugin/src/config.rs` — register it via `add_context_setup_func()` so it's available in the Lua config; store registrations in a global `Vec<WasmPluginConfig>`
-- [ ] T010 Wire `arcterm-wasm-plugin` into `env-bootstrap/src/lib.rs` — add the Lua registration function call alongside the existing 14 lua-api-crate registrations
-- [ ] T011 Verify `cargo check --package arcterm-wasm-plugin --package env-bootstrap` compiles
+- [x] T0010 Wire `arcterm-wasm-plugin` into `env-bootstrap/src/lib.rs` — add the Lua registration function call alongside the existing 14 lua-api-crate registrations
+- [x] T0011 Verify `cargo check --package arcterm-wasm-plugin --package env-bootstrap` compiles
 
 **Checkpoint**: Core types exist. `wezterm.plugin.register()` is callable from Lua config. Config declarations are parsed and stored.
 
@@ -60,8 +60,8 @@ description: "Task list for WASM Plugin System"
 - [x] T015 [US1] Implement plugin initialization in `arcterm-wasm-plugin/src/lifecycle.rs` — instantiate the WASM component, call the `lifecycle.init()` export, transition state from Loading → Initializing → Running (or Failed on error)
 - [x] T016 [US1] Implement error containment — catch panics and traps from WASM execution, log the error, mark plugin as Failed, ensure terminal continues normally
 - [x] T0017 [US1] Wire plugin loading into `wezterm-gui/src/main.rs` — after `Mux::new()` and config load, iterate `WasmPluginConfig` entries, call the loader for each, log results
-- [ ] T018 [US1] Create test fixture: compile a minimal "hello world" WASM plugin to `arcterm-wasm-plugin/tests/fixtures/hello.wasm` that calls `log::info("Hello from WASM plugin!")` in `init()` and returns Ok
-- [ ] T019 [US1] Create test fixture: compile a "crasher" WASM plugin to `arcterm-wasm-plugin/tests/fixtures/crasher.wasm` that panics in `init()`
+- [x] T0018 [US1] Create test fixture: compile a minimal "hello world" WASM plugin to `arcterm-wasm-plugin/tests/fixtures/hello.wasm` that calls `log::info("Hello from WASM plugin!")` in `init()` and returns Ok
+- [x] T0019 [US1] Create test fixture: compile a "crasher" WASM plugin to `arcterm-wasm-plugin/tests/fixtures/crasher.wasm` that panics in `init()`
 - [x] T0020 [US1] Write integration test in `arcterm-wasm-plugin/tests/integration_tests.rs` — test loading hello.wasm succeeds, test loading crasher.wasm fails gracefully, test loading nonexistent file fails gracefully
 - [x] T0021 [US1] Verify `cargo test --package arcterm-wasm-plugin` passes
 
@@ -96,7 +96,7 @@ description: "Task list for WASM Plugin System"
 
 - [x] T0030 [US3] Ensure WASM plugin loading is independent of Lua plugin loading order in `wezterm-gui/src/main.rs` — WASM plugins load after Lua config is fully evaluated (so `wezterm.plugin.register()` calls have been processed)
 - [x] T0031 [US3] Add error isolation between Lua and WASM in `wezterm-gui/src/main.rs` — a WASM plugin failure during loading must not prevent Lua config from being applied; a Lua config error must not prevent WASM plugins from loading
-- [ ] T032 [US3] Write integration test verifying Lua config + WASM plugin coexistence — create a test config that sets font_size via Lua AND registers a hello.wasm plugin; verify both take effect
+- [x] T0032 [US3] Write integration test verifying Lua config + WASM plugin coexistence — create a test config that sets font_size via Lua AND registers a hello.wasm plugin; verify both take effect
 
 **Checkpoint**: Lua and WASM systems are independent. Failures in one don't affect the other.
 

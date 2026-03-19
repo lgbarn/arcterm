@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
+arcterm-wasm-plugin = { path = "../../arcterm-wasm-plugin" }
 config.workspace = true
 git2.workspace = true
 log.workspace = true

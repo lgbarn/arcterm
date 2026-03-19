@@ -238,6 +238,37 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
         })?,
     )?;
 
+    // ArcTerm: register a WASM plugin
+    plugin_mod.set(
+        "register_wasm",
+        lua.create_function(|_, config_table: mlua::Table| {
+            let name: String = config_table
+                .get("name")
+                .map_err(|_| mlua::Error::external("plugin.register_wasm: 'name' field required"))?;
+            let path: String = config_table
+                .get("path")
+                .map_err(|_| mlua::Error::external("plugin.register_wasm: 'path' field required"))?;
+            let capabilities: Vec<String> = config_table
+                .get::<&str, Vec<String>>("capabilities")
+                .unwrap_or_default();
+            let memory_limit_mb: u32 = config_table.get("memory_limit_mb").unwrap_or(64);
+            let fuel_per_callback: u64 = config_table.get("fuel_per_callback").unwrap_or(1_000_000);
+            let enabled: bool = config_table.get("enabled").unwrap_or(true);
+
+            arcterm_wasm_plugin::config::register_plugin(
+                arcterm_wasm_plugin::config::WasmPluginConfig {
+                    name,
+                    path,
+                    capabilities,
+                    memory_limit_mb,
+                    fuel_per_callback,
+                    enabled,
+                },
+            );
+            Ok(())
+        })?,
+    )?;
+
     plugin_mod.set(
         "update_all",
         lua.create_function(|_, _: ()| {
