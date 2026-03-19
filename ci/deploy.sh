@@ -190,7 +190,7 @@ Version: ${WEZTERM_RPM_VERSION}
 Release: ${SPEC_RELEASE}
 Packager: ArcTerm Maintainers
 License: MIT
-URL: # TODO(arcterm): replace with ArcTerm URL
+URL: https://github.com/lgbarn/arcterm
 Summary: ArcTerm - GPU-accelerated AI-native terminal emulator.
 ${BUILD_REQUIRES}
 Requires: wezterm-common, wezterm-gui, wezterm-mux-server
@@ -306,13 +306,13 @@ Architecture: $(dpkg-architecture -q DEB_BUILD_ARCH_CPU)
 Maintainer: ArcTerm Maintainers
 Section: utils
 Priority: optional
-Homepage: # TODO(arcterm): replace with ArcTerm URL
+Homepage: https://github.com/lgbarn/arcterm
 Description: ArcTerm - GPU-accelerated AI-native terminal emulator.
  wezterm is a terminal emulator with support for modern features
  such as fonts with ligatures, hyperlinks, tabs and multiple
  windows.
 Provides: x-terminal-emulator
-Source: # TODO(arcterm): replace with ArcTerm URL
+Source: https://github.com/lgbarn/arcterm
 EOF
 
         cat > pkg/debian/postinst <<EOF
@@ -397,7 +397,7 @@ pkgdesc="A GPU-accelerated AI-native cross-platform terminal emulator and multip
 license="MIT"
 arch="all"
 options="!check"
-url="# TODO(arcterm): replace with ArcTerm URL"
+url="https://github.com/lgbarn/arcterm"
 makedepends="cmd:tic"
 source="
   $TARGET_DIR/release/wezterm

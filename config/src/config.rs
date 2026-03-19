@@ -1074,16 +1074,10 @@ impl Config {
                 Ok(Some(loaded)) => {
                     // Emit a deprecation notice if the resolved config file is a
                     // wezterm.lua fallback (i.e. not an arcterm.lua path).
-                    let is_wezterm_fallback = path_item
-                        .path
-                        .file_name()
-                        .map(|n| n == "wezterm.lua")
-                        .unwrap_or(false)
-                        || path_item
-                            .path
-                            .file_name()
-                            .map(|n| n == ".wezterm.lua")
-                            .unwrap_or(false);
+                    let is_wezterm_fallback = matches!(
+                        path_item.path.file_name(),
+                        Some(n) if n == "wezterm.lua" || n == ".wezterm.lua"
+                    );
                     if is_wezterm_fallback {
                         log::warn!(
                             "Loaded deprecated config file '{}'. \
@@ -1171,6 +1165,12 @@ impl Config {
                 // problems earlier than we use them.
                 let _ = cfg.key_bindings();
 
+                std::env::set_var("ARCTERM_CONFIG_FILE", p);
+                if let Some(dir) = p.parent() {
+                    std::env::set_var("ARCTERM_CONFIG_DIR", dir);
+                }
+                // Also set deprecated vars for backward compatibility with
+                // tools that read WEZTERM_CONFIG_FILE during migration
                 std::env::set_var("WEZTERM_CONFIG_FILE", p);
                 if let Some(dir) = p.parent() {
                     std::env::set_var("WEZTERM_CONFIG_DIR", dir);
@@ -1822,7 +1822,7 @@ pub(crate) fn compute_runtime_dir() -> anyhow::Result<PathBuf> {
 }
 
 pub fn pki_dir() -> anyhow::Result<PathBuf> {
-    compute_runtime_dir().map(|d| d.join("pki"))
+    Ok(crate::RUNTIME_DIR.join("pki"))
 }
 
 pub fn default_read_timeout() -> Duration {
