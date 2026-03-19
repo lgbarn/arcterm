@@ -12,8 +12,10 @@ pub mod payload;
 
 use termwiz::escape::Action;
 
-/// Maximum payload size in bytes (default 10MB).
-pub const DEFAULT_MAX_PAYLOAD_SIZE: usize = 10 * 1024 * 1024;
+/// Maximum payload size in bytes (default 1MB).
+/// SECURITY: Larger values risk memory amplification — each payload byte
+/// can produce ~6 Action entries in the worst case.
+pub const DEFAULT_MAX_PAYLOAD_SIZE: usize = 1024 * 1024;
 
 /// Render an OSC 7770 payload into terminal actions.
 ///
@@ -32,8 +34,8 @@ pub fn render(payload_str: &str, max_payload_size: usize) -> Option<Vec<Action>>
 
     let block = payload::parse(payload_str)?;
 
-    // Pre-allocate: each content char ~1 Action + SGR overhead
-    let estimated_capacity = payload_str.len() * 2 + 64;
+    // Pre-allocate with a capped estimate to prevent memory amplification
+    let estimated_capacity = (payload_str.len() * 2 + 64).min(256 * 1024);
     let mut actions = Vec::with_capacity(estimated_capacity);
 
     // Render optional title

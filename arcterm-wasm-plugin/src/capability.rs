@@ -115,13 +115,26 @@ impl CapabilitySet {
     pub fn check(&self, required: &Capability) -> Result<(), CapabilityDenied> {
         for cap in &self.capabilities {
             if cap.resource == required.resource && cap.operation == required.operation {
-                // For filesystem: check path prefix
+                // For filesystem: check path prefix with traversal protection
                 if cap.resource == CapabilityResource::Filesystem {
                     if let (Some(granted_path), Some(requested_path)) =
                         (&cap.target, &required.target)
                     {
-                        let granted = PathBuf::from(granted_path);
                         let requested = PathBuf::from(requested_path);
+
+                        // SECURITY: Reject any path containing ".." components
+                        // to prevent sandbox escape via path traversal
+                        if requested.components().any(|c| {
+                            matches!(c, std::path::Component::ParentDir)
+                        }) {
+                            log::warn!(
+                                "Capability denied: path traversal detected in '{}'",
+                                requested_path
+                            );
+                            continue;
+                        }
+
+                        let granted = PathBuf::from(granted_path);
                         if requested.starts_with(&granted) {
                             return Ok(());
                         }
@@ -221,5 +234,27 @@ mod tests {
             target: Some("/etc/passwd".to_string()),
         };
         assert!(set.check(&denied).is_err());
+    }
+
+    #[test]
+    fn test_path_traversal_blocked() {
+        let caps = vec![Capability::parse("fs:read:/home/user").unwrap()];
+        let set = CapabilitySet::new(caps);
+
+        // Path traversal via ../ must be denied
+        let traversal = Capability {
+            resource: CapabilityResource::Filesystem,
+            operation: CapabilityOperation::Read,
+            target: Some("/home/user/../.ssh/id_rsa".to_string()),
+        };
+        assert!(set.check(&traversal).is_err());
+
+        // Another traversal attempt
+        let traversal2 = Capability {
+            resource: CapabilityResource::Filesystem,
+            operation: CapabilityOperation::Read,
+            target: Some("/home/user/../../etc/passwd".to_string()),
+        };
+        assert!(set.check(&traversal2).is_err());
     }
 }

@@ -1,5 +1,9 @@
 /.tag
 .DS_Store
+.env
+.env.*
+*.pem
+*.key
 dhat-heap.json
 /docs/_site
 /docs/favicon.png
