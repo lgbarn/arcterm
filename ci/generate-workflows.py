@@ -562,9 +562,9 @@ rustup default {toolchain}
         if self.uses_yum() or self.uses_zypper():
             patterns += ["wezterm-*.rpm"]
         elif "win" in self.name:
-            patterns += ["WezTerm-*.zip", "WezTerm-*.exe"]
+            patterns += ["ArcTerm-*.zip", "ArcTerm-*.exe"]
         elif "mac" in self.name:
-            patterns += ["WezTerm-*.zip"]
+            patterns += ["ArcTerm-*.zip"]
         elif ("ubuntu" in self.name) or ("debian" in self.name):
             patterns += ["wezterm-*.deb", "wezterm-*.xz"]
         elif "alpine" in self.name:
@@ -631,14 +631,17 @@ rustup default {toolchain}
         patterns.append("*.sha256")
         glob = " ".join(patterns)
 
-        if self.container == "ubuntu:22.04":
-            steps += [
-                RunStep(
-                    "Upload to gemfury",
-                    f"for f in wezterm*.deb ; do curl -i -F package=@$f https://$FURY_TOKEN@push.fury.io/wez/ ; done",
-                    env={"FURY_TOKEN": "${{ secrets.FURY_TOKEN }}"},
-                ),
-            ]
+        # TODO(arcterm): re-enable when ArcTerm packaging accounts exist
+        # Fury.io upload (was: push.fury.io/wez/) is disabled until
+        # an ArcTerm Fury.io account is created and configured.
+        # if self.container == "ubuntu:22.04":
+        #     steps += [
+        #         RunStep(
+        #             "Upload to gemfury",
+        #             f"for f in wezterm*.deb ; do curl -i -F package=@$f https://$FURY_TOKEN@push.fury.io/wez/ ; done",
+        #             env={"FURY_TOKEN": "${{ secrets.FURY_TOKEN }}"},
+        #         ),
+        #     ]
 
         return [
             ActionStep(
@@ -666,14 +669,17 @@ rustup default {toolchain}
         patterns.append("*.sha256")
         glob = " ".join(patterns)
 
-        if self.container == "ubuntu:22.04":
-            steps += [
-                RunStep(
-                    "Upload to gemfury",
-                    f"for f in wezterm*.deb ; do curl -i -F package=@$f https://$FURY_TOKEN@push.fury.io/wez/ ; done",
-                    env={"FURY_TOKEN": "${{ secrets.FURY_TOKEN }}"},
-                ),
-            ]
+        # TODO(arcterm): re-enable when ArcTerm packaging accounts exist
+        # Fury.io upload (was: push.fury.io/wez/) is disabled until
+        # an ArcTerm Fury.io account is created and configured.
+        # if self.container == "ubuntu:22.04":
+        #     steps += [
+        #         RunStep(
+        #             "Upload to gemfury",
+        #             f"for f in wezterm*.deb ; do curl -i -F package=@$f https://$FURY_TOKEN@push.fury.io/wez/ ; done",
+        #             env={"FURY_TOKEN": "${{ secrets.FURY_TOKEN }}"},
+        #         ),
+        #     ]
 
         return steps + [
             ActionStep(
@@ -701,115 +707,127 @@ rustup default {toolchain}
     def create_flathub_pr(self):
         if not self.app_image:
             return []
-        return [
-            ActionStep(
-                "Checkout flathub/org.wezfurlong.wezterm",
-                action="actions/checkout@v4",
-                params={
-                    "repository": "flathub/org.wezfurlong.wezterm",
-                    "path": "flathub",
-                    "token": "${{ secrets.GH_PAT }}",
-                },
-            ),
-            RunStep(
-                "Create flathub commit and push",
-                "bash ci/make-flathub-pr.sh",
-            ),
-            RunStep(
-                "Submit PR",
-                'cd flathub && gh pr create --fill --body "PR automatically created by release automation in the wezterm repo"',
-                env={
-                    "GITHUB_TOKEN": "${{ secrets.GH_PAT }}",
-                },
-            ),
-        ]
+        # TODO(arcterm): re-enable when ArcTerm packaging accounts exist
+        # Flathub PR creation (was: flathub/org.wezfurlong.wezterm) is disabled
+        # until an ArcTerm Flathub app ID and manifest are created.
+        # return [
+        #     ActionStep(
+        #         "Checkout flathub/org.wezfurlong.wezterm",
+        #         action="actions/checkout@v4",
+        #         params={
+        #             "repository": "flathub/org.wezfurlong.wezterm",
+        #             "path": "flathub",
+        #             "token": "${{ secrets.GH_PAT }}",
+        #         },
+        #     ),
+        #     RunStep(
+        #         "Create flathub commit and push",
+        #         "bash ci/make-flathub-pr.sh",
+        #     ),
+        #     RunStep(
+        #         "Submit PR",
+        #         'cd flathub && gh pr create --fill --body "PR automatically created by release automation in the wezterm repo"',
+        #         env={
+        #             "GITHUB_TOKEN": "${{ secrets.GH_PAT }}",
+        #         },
+        #     ),
+        # ]
+        return []
 
     def create_winget_pr(self):
         steps = []
-        if "windows" in self.name:
-            steps += [
-                ActionStep(
-                    "Checkout winget-pkgs",
-                    action="actions/checkout@v4",
-                    params={
-                        "repository": "wez/winget-pkgs",
-                        "path": "winget-pkgs",
-                        "token": "${{ secrets.GH_PAT }}",
-                    },
-                ),
-                RunStep(
-                    "Setup email for winget repo",
-                    "cd winget-pkgs && git config user.email wez@wezfurlong.org",
-                ),
-                RunStep(
-                    "Setup name for winget repo",
-                    "cd winget-pkgs && git config user.name 'Wez Furlong'",
-                ),
-                RunStep(
-                    "Create winget manifest and push to fork",
-                    "bash ci/make-winget-pr.sh winget-pkgs WezTerm-*.exe",
-                ),
-                RunStep(
-                    "Submit PR",
-                    'cd winget-pkgs && gh pr create --fill --body "PR automatically created by release automation in the wezterm repo"',
-                    env={
-                        "GITHUB_TOKEN": "${{ secrets.GH_PAT }}",
-                    },
-                ),
-            ]
+        # TODO(arcterm): re-enable when ArcTerm packaging accounts exist
+        # winget PR creation (was: wez/winget-pkgs) is disabled until
+        # an ArcTerm winget package manifest and fork are created.
+        # if "windows" in self.name:
+        #     steps += [
+        #         ActionStep(
+        #             "Checkout winget-pkgs",
+        #             action="actions/checkout@v4",
+        #             params={
+        #                 "repository": "wez/winget-pkgs",
+        #                 "path": "winget-pkgs",
+        #                 "token": "${{ secrets.GH_PAT }}",
+        #             },
+        #         ),
+        #         RunStep(
+        #             "Setup email for winget repo",
+        #             "cd winget-pkgs && git config user.email wez@wezfurlong.org",
+        #         ),
+        #         RunStep(
+        #             "Setup name for winget repo",
+        #             "cd winget-pkgs && git config user.name 'Wez Furlong'",
+        #         ),
+        #         RunStep(
+        #             "Create winget manifest and push to fork",
+        #             "bash ci/make-winget-pr.sh winget-pkgs ArcTerm-*.exe",
+        #         ),
+        #         RunStep(
+        #             "Submit PR",
+        #             'cd winget-pkgs && gh pr create --fill --body "PR automatically created by release automation in the arcterm repo"',
+        #             env={
+        #                 "GITHUB_TOKEN": "${{ secrets.GH_PAT }}",
+        #             },
+        #         ),
+        #     ]
 
         return steps
 
     def update_homebrew_tap(self):
         steps = []
-        if "macos" in self.name:
-            steps += [
-                ActionStep(
-                    "Checkout homebrew tap",
-                    action="actions/checkout@v4",
-                    params={
-                        "repository": "wez/homebrew-wezterm",
-                        "path": "homebrew-wezterm",
-                        "token": "${{ secrets.GH_PAT }}",
-                    },
-                ),
-                RunStep(
-                    "Update homebrew tap formula",
-                    "cp wezterm.rb homebrew-wezterm/Casks/wezterm.rb",
-                ),
-                ActionStep(
-                    "Commit homebrew tap changes",
-                    action="stefanzweifel/git-auto-commit-action@v5",
-                    params={
-                        "commit_message": "Automated update to match latest tag",
-                        "repository": "homebrew-wezterm",
-                    },
-                ),
-            ]
-        elif self.app_image:
-            steps += [
-                ActionStep(
-                    "Checkout linuxbrew tap",
-                    action="actions/checkout@v4",
-                    params={
-                        "repository": "wez/homebrew-wezterm-linuxbrew",
-                        "path": "linuxbrew-wezterm",
-                        "token": "${{ secrets.GH_PAT }}",
-                    },
-                ),
-                RunStep(
-                    "Update linuxbrew tap formula",
-                    "cp wezterm-linuxbrew.rb linuxbrew-wezterm/Formula/wezterm.rb",
-                ),
-                ActionStep(
-                    "Commit linuxbrew tap changes",
-                    action="stefanzweifel/git-auto-commit-action@v5",
-                    params={
-                        "commit_message": "Automated update to match latest tag",
-                        "repository": "linuxbrew-wezterm",
-                    },
-                ),
-            ]
+        # TODO(arcterm): re-enable when ArcTerm packaging accounts exist
+        # Homebrew macOS tap (was: wez/homebrew-wezterm) is disabled until
+        # an ArcTerm Homebrew tap is created and configured.
+        # if "macos" in self.name:
+        #     steps += [
+        #         ActionStep(
+        #             "Checkout homebrew tap",
+        #             action="actions/checkout@v4",
+        #             params={
+        #                 "repository": "wez/homebrew-wezterm",
+        #                 "path": "homebrew-wezterm",
+        #                 "token": "${{ secrets.GH_PAT }}",
+        #             },
+        #         ),
+        #         RunStep(
+        #             "Update homebrew tap formula",
+        #             "cp wezterm.rb homebrew-wezterm/Casks/wezterm.rb",
+        #         ),
+        #         ActionStep(
+        #             "Commit homebrew tap changes",
+        #             action="stefanzweifel/git-auto-commit-action@v5",
+        #             params={
+        #                 "commit_message": "Automated update to match latest tag",
+        #                 "repository": "homebrew-wezterm",
+        #             },
+        #         ),
+        #     ]
+        # Linuxbrew tap (was: wez/homebrew-wezterm-linuxbrew) is disabled until
+        # an ArcTerm Linuxbrew tap is created and configured.
+        # elif self.app_image:
+        #     steps += [
+        #         ActionStep(
+        #             "Checkout linuxbrew tap",
+        #             action="actions/checkout@v4",
+        #             params={
+        #                 "repository": "wez/homebrew-wezterm-linuxbrew",
+        #                 "path": "linuxbrew-wezterm",
+        #                 "token": "${{ secrets.GH_PAT }}",
+        #             },
+        #         ),
+        #         RunStep(
+        #             "Update linuxbrew tap formula",
+        #             "cp wezterm-linuxbrew.rb linuxbrew-wezterm/Formula/wezterm.rb",
+        #         ),
+        #         ActionStep(
+        #             "Commit linuxbrew tap changes",
+        #             action="stefanzweifel/git-auto-commit-action@v5",
+        #             params={
+        #                 "commit_message": "Automated update to match latest tag",
+        #                 "repository": "linuxbrew-wezterm",
+        #             },
+        #         ),
+        #     ]
 
         return steps
 
@@ -943,7 +961,7 @@ rustup default {toolchain}
             steps += [
                 RunStep(
                     "Workaround git permissions issue",
-                    "git config --global --add safe.directory /__w/wezterm/wezterm",
+                    "git config --global --add safe.directory /__w/arcterm/arcterm",
                 )
             ]
         steps += [CheckoutStep(submodules=submodules, container=self.container)]
@@ -1087,7 +1105,7 @@ jobs:
   upload:
     runs-on: ubuntu-latest
     needs: build
-    if: github.repository == 'wezterm/wezterm'
+    if: github.repository == 'lgbarn/arcterm'
     permissions:
       contents: write
       pages: write

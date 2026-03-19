@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <content_rating type="oars-1.0" />
+  <id>com.lgbarn.arcterm</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <name>ArcTerm</name>
+  <summary>A GPU-accelerated cross-platform terminal emulator and multiplexer</summary>
+  <description>
+    <p>
+      ArcTerm is a terminal emulator with support for modern features such as
+      fonts with ligatures, hyperlinks, multiple windows, tabs and split panes.
+    </p>
+
+    <p>
+      Configuration is expressed using Lua and many powerful functions are
+      provided to help you customize your terminal to your workflow.
+    </p>
+
+    <p>
+      Integrated ssh allows using multiple tabs and panes without requiring
+      tmux to be installed on the remote host, and remote ArcTerm multiplexer
+      support allows tmux+mosh style workflows without using tmux or mosh,
+      while providing a fully native GUI locally.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">com.lgbarn.arcterm.desktop</launchable>
+
+  <url type="homepage">https://TODO.arcterm.dev/</url>
+  <url type="help">https://TODO.arcterm.dev/help.html</url>
+  <url type="bugtracker">https://github.com/lgbarn/arcterm/issues</url>
+
+  <screenshots>
+    <!-- TODO: Add ArcTerm screenshots -->
+  </screenshots>
+
+  <developer_name>ArcTerm Contributors</developer_name>
+
+  <releases>
+    <release version="20220807-113146-c2fee766" date="2022-08-07">
+      <description>
+        <p>
+          Featuring more powerful key and mouse bindings, new lua functions for
+          working with color, json, time, processes and windows, reduced
+          scrollback memory consumption, increased search performance, IME on
+          Wayland and more!
+        </p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -384,7 +384,7 @@ impl CommandDef {
 
         let mut candidates_for_removal = vec![];
         #[allow(unexpected_cfgs)] // <https://github.com/SSheldon/rust-objc/issues/125>
-        let wezterm_perform_key_assignment_sel = sel!(weztermPerformKeyAssignment:);
+        let wezterm_perform_key_assignment_sel = sel!(arctermPerformKeyAssignment:);
 
         /// Mark menu items as candidates for removal
         fn mark_candidates(menu: &Menu, candidates: &mut Vec<MenuItem>, action: SEL) {

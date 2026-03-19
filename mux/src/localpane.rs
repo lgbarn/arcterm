@@ -266,8 +266,7 @@ impl Pane for LocalPane {
         let mut proc = self.process.lock();
 
         const EXIT_BEHAVIOR: &str = "This message is shown because \
-            \x1b]8;;https://wezterm.org/\
-            config/lua/config/exit_behavior.html\
+            \x1b]8;;https://github.com/lgbarn/arcterm/wiki/Configuration\
             \x1b\\exit_behavior\x1b]8;;\x1b\\";
 
         let mut terse = String::new();

@@ -1,9 +1,9 @@
 [Desktop Entry]
-Name=WezTerm
-Comment=Wez's Terminal Emulator
+Name=ArcTerm
+Comment=AI-Powered Terminal Emulator
 Keywords=shell;prompt;command;commandline;cmd;
-Icon=org.wezfurlong.wezterm
-StartupWMClass=org.wezfurlong.wezterm
+Icon=com.lgbarn.arcterm
+StartupWMClass=com.lgbarn.arcterm
 TryExec=wezterm
 Exec=wezterm start --cwd .
 Type=Application

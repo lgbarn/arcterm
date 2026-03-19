@@ -19,9 +19,9 @@ fi
 
 case $OSTYPE in
   darwin*)
-    zipdir=WezTerm-macos-$TAG_NAME
+    zipdir=ArcTerm-macos-$TAG_NAME
     if [[ "$BUILD_REASON" == "Schedule" ]] ; then
-      zipname=WezTerm-macos-nightly.zip
+      zipname=ArcTerm-macos-nightly.zip
     else
       zipname=$zipdir.zip
     fi
@@ -101,13 +101,13 @@ case $OSTYPE in
 
     ;;
   msys)
-    zipdir=WezTerm-windows-$TAG_NAME
+    zipdir=ArcTerm-windows-$TAG_NAME
     if [[ "$BUILD_REASON" == "Schedule" ]] ; then
-      zipname=WezTerm-windows-nightly.zip
-      instname=WezTerm-nightly-setup
+      zipname=ArcTerm-windows-nightly.zip
+      instname=ArcTerm-nightly-setup
     else
       zipname=$zipdir.zip
-      instname=WezTerm-${TAG_NAME}-setup
+      instname=ArcTerm-${TAG_NAME}-setup
     fi
     rm -rf $zipdir $zipname
     mkdir $zipdir
@@ -188,10 +188,10 @@ BUILDEOFEOF
 Name: wezterm
 Version: ${WEZTERM_RPM_VERSION}
 Release: ${SPEC_RELEASE}
-Packager: Wez Furlong <wez@wezfurlong.org>
+Packager: ArcTerm Maintainers
 License: MIT
-URL: https://wezterm.org/
-Summary: Wez's Terminal Emulator.
+URL: # TODO(arcterm): replace with ArcTerm URL
+Summary: ArcTerm - GPU-accelerated AI-native terminal emulator.
 ${BUILD_REQUIRES}
 Requires: wezterm-common, wezterm-gui, wezterm-mux-server
 
@@ -204,7 +204,7 @@ windows.
 
 # Subpackage: wezterm-common
 %package -n wezterm-common
-Summary: Wez's Terminal Emulator - Common CLI components
+Summary: ArcTerm - Common CLI components
 Requires: openssl
 %description -n wezterm-common
 wezterm-common provides the base CLI launcher and utilities shared by
@@ -212,7 +212,7 @@ all wezterm components.
 
 # Subpackage: wezterm-gui
 %package -n wezterm-gui
-Summary: Wez's Terminal Emulator - GUI and multiplexer
+Summary: ArcTerm - GUI and multiplexer
 Requires: wezterm-common
 %if 0%{?suse_version}
 Requires: dbus-1, fontconfig, libxcb1, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libwayland-egl1, libwayland-cursor0, Mesa-libEGL1, libxcb-keysyms1, libxcb-ewmh2, libxcb-icccm4
@@ -226,7 +226,7 @@ tabs and multiple windows.
 
 # Subpackage: wezterm-mux-server
 %package -n wezterm-mux-server
-Summary: Wez's Terminal Emulator - Multiplexer server (headless)
+Summary: ArcTerm - Multiplexer server (headless)
 Requires: openssl
 %description -n wezterm-mux-server
 wezterm-mux-server is a headless terminal multiplexer that can be used
@@ -274,7 +274,7 @@ install -Dm644 assets/wezterm-nautilus.py %{buildroot}/usr/share/nautilus-python
 /usr/bin/wezterm-mux-server
 
 %changelog
-* Mon Oct 2 2023 Wez Furlong
+* Mon Oct 2 2023 ArcTerm Maintainers
 - See git for full changelog
 EOF
 
@@ -303,16 +303,16 @@ Package: $pkgname
 Version: ${TAG_NAME#nightly-}
 Conflicts: $conflicts
 Architecture: $(dpkg-architecture -q DEB_BUILD_ARCH_CPU)
-Maintainer: Wez Furlong <wez@wezfurlong.org>
+Maintainer: ArcTerm Maintainers
 Section: utils
 Priority: optional
-Homepage: https://wezterm.org/
-Description: Wez's Terminal Emulator.
+Homepage: # TODO(arcterm): replace with ArcTerm URL
+Description: ArcTerm - GPU-accelerated AI-native terminal emulator.
  wezterm is a terminal emulator with support for modern features
  such as fonts with ligatures, hyperlinks, tabs and multiple
  windows.
 Provides: x-terminal-emulator
-Source: https://wezterm.org/
+Source: # TODO(arcterm): replace with ArcTerm URL
 EOF
 
         cat > pkg/debian/postinst <<EOF
@@ -388,16 +388,16 @@ EOF
         abuild-keygen -a -n -b 8192
         pkgver="${TAG_NAME#nightly-}"
         cat > APKBUILD <<EOF
-# Maintainer: Wez Furlong <wez@wezfurlong.org>
+# Maintainer: ArcTerm Maintainers
 pkgname=wezterm
 pkgver=$(echo "$pkgver" | cut -d'-' -f1-2 | tr - .)
 _pkgver=$pkgver
 pkgrel=0
-pkgdesc="A GPU-accelerated cross-platform terminal emulator and multiplexer written in Rust"
+pkgdesc="A GPU-accelerated AI-native cross-platform terminal emulator and multiplexer written in Rust"
 license="MIT"
 arch="all"
 options="!check"
-url="https://wezterm.org/"
+url="# TODO(arcterm): replace with ArcTerm URL"
 makedepends="cmd:tic"
 source="
   $TARGET_DIR/release/wezterm

@@ -1006,7 +1006,19 @@ impl Config {
         // multiple.  In addition, it spawns a lot of subprocesses,
         // so we do this bit "by-hand"
 
-        let mut paths = vec![PathPossibility::optional(HOME_DIR.join(".wezterm.lua"))];
+        // ArcTerm config paths (primary): arcterm.lua takes precedence over wezterm.lua
+        let mut paths = vec![PathPossibility::optional(HOME_DIR.join(".arcterm.lua"))];
+        for dir in CONFIG_DIRS.iter() {
+            // CONFIG_DIRS contains wezterm-named subdirs; also probe arcterm-named siblings
+            let arcterm_dir = dir
+                .parent()
+                .map(|p| p.join("arcterm"))
+                .unwrap_or_else(|| dir.clone());
+            paths.push(PathPossibility::optional(arcterm_dir.join("arcterm.lua")));
+        }
+
+        // Wezterm fallback paths (deprecated): kept for backward compatibility
+        paths.push(PathPossibility::optional(HOME_DIR.join(".wezterm.lua")));
         for dir in CONFIG_DIRS.iter() {
             paths.push(PathPossibility::optional(dir.join("wezterm.lua")))
         }
@@ -1022,12 +1034,20 @@ impl Config {
             // dir as the executable that will take precedence.
             if let Ok(exe_name) = std::env::current_exe() {
                 if let Some(exe_dir) = exe_name.parent() {
+                    // Insert arcterm.lua first, then wezterm.lua as fallback
                     paths.insert(0, PathPossibility::optional(exe_dir.join("wezterm.lua")));
+                    paths.insert(0, PathPossibility::optional(exe_dir.join("arcterm.lua")));
                 }
             }
         }
+
+        // ARCTERM_CONFIG_FILE takes priority over WEZTERM_CONFIG_FILE
         if let Some(path) = std::env::var_os("WEZTERM_CONFIG_FILE") {
-            log::trace!("Note: WEZTERM_CONFIG_FILE is set in the environment");
+            log::warn!("WEZTERM_CONFIG_FILE is deprecated; please use ARCTERM_CONFIG_FILE instead");
+            paths.insert(0, PathPossibility::required(path.into()));
+        }
+        if let Some(path) = std::env::var_os("ARCTERM_CONFIG_FILE") {
+            log::trace!("Note: ARCTERM_CONFIG_FILE is set in the environment");
             paths.insert(0, PathPossibility::required(path.into()));
         }
 
@@ -1051,7 +1071,28 @@ impl Config {
                     }
                 }
                 Ok(None) => continue,
-                Ok(Some(loaded)) => return loaded,
+                Ok(Some(loaded)) => {
+                    // Emit a deprecation notice if the resolved config file is a
+                    // wezterm.lua fallback (i.e. not an arcterm.lua path).
+                    let is_wezterm_fallback = path_item
+                        .path
+                        .file_name()
+                        .map(|n| n == "wezterm.lua")
+                        .unwrap_or(false)
+                        || path_item
+                            .path
+                            .file_name()
+                            .map(|n| n == ".wezterm.lua")
+                            .unwrap_or(false);
+                    if is_wezterm_fallback {
+                        log::warn!(
+                            "Loaded deprecated config file '{}'. \
+                             Please rename it to 'arcterm.lua' (or '${{XDG_CONFIG_HOME}}/arcterm/arcterm.lua').",
+                            path_item.path.display()
+                        );
+                    }
+                    return loaded;
+                }
             }
         }
 
@@ -1737,28 +1778,47 @@ fn default_font_size() -> f64 {
     12.0
 }
 
+/// Return `base.join("arcterm")` if that directory already exists, otherwise
+/// return `base.join("wezterm")` for backward compatibility with existing
+/// installations. This lets existing users keep their data in place while new
+/// installations automatically use the arcterm-branded path.
+fn arcterm_or_wezterm_subdir(base: &PathBuf) -> PathBuf {
+    let arcterm = base.join("arcterm");
+    if arcterm.exists() {
+        arcterm
+    } else {
+        base.join("wezterm")
+    }
+}
+
 pub(crate) fn compute_cache_dir() -> anyhow::Result<PathBuf> {
-    if let Some(runtime) = dirs_next::cache_dir() {
-        return Ok(runtime.join("wezterm"));
+    if let Some(base) = dirs_next::cache_dir() {
+        return Ok(arcterm_or_wezterm_subdir(&base));
     }
 
-    Ok(crate::HOME_DIR.join(".local/share/wezterm"))
+    Ok(arcterm_or_wezterm_subdir(
+        &crate::HOME_DIR.join(".local/share"),
+    ))
 }
 
 pub(crate) fn compute_data_dir() -> anyhow::Result<PathBuf> {
-    if let Some(runtime) = dirs_next::data_dir() {
-        return Ok(runtime.join("wezterm"));
+    if let Some(base) = dirs_next::data_dir() {
+        return Ok(arcterm_or_wezterm_subdir(&base));
     }
 
-    Ok(crate::HOME_DIR.join(".local/share/wezterm"))
+    Ok(arcterm_or_wezterm_subdir(
+        &crate::HOME_DIR.join(".local/share"),
+    ))
 }
 
 pub(crate) fn compute_runtime_dir() -> anyhow::Result<PathBuf> {
-    if let Some(runtime) = dirs_next::runtime_dir() {
-        return Ok(runtime.join("wezterm"));
+    if let Some(base) = dirs_next::runtime_dir() {
+        return Ok(arcterm_or_wezterm_subdir(&base));
     }
 
-    Ok(crate::HOME_DIR.join(".local/share/wezterm"))
+    Ok(arcterm_or_wezterm_subdir(
+        &crate::HOME_DIR.join(".local/share"),
+    ))
 }
 
 pub fn pki_dir() -> anyhow::Result<PathBuf> {

@@ -19,6 +19,11 @@ impl Default for SshBackend {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic)]
 pub enum SshMultiplexing {
+    /// Use the ArcTerm multiplexer (preferred). Accepts "ArcTerm" in config.
+    ArcTerm,
+    /// Legacy alias — "WezTerm" is accepted for backwards compatibility.
+    /// New configs should use "ArcTerm" instead.
+    /// See: https://github.com/lgbarn/arcterm/wiki/Configuration (TODO: update URL)
     WezTerm,
     None,
     // TODO: Tmux-cc in the future?
@@ -26,7 +31,7 @@ pub enum SshMultiplexing {
 
 impl Default for SshMultiplexing {
     fn default() -> Self {
-        Self::WezTerm
+        Self::ArcTerm
     }
 }
 
@@ -76,14 +81,14 @@ pub struct SshDomain {
 
     /// Show time since last response when waiting for a response.
     /// It is recommended to use
-    /// <https://wezterm.org/config/lua/pane/get_metadata.html#since_last_response_ms>
+    /// <https://github.com/lgbarn/arcterm/wiki/Configuration> (TODO: update URL)
     /// instead.
     #[dynamic(default)]
     pub overlay_lag_indicator: bool,
 
-    /// The path to the wezterm binary on the remote host
+    /// The path to the arcterm binary on the remote host
     pub remote_wezterm_path: Option<String>,
-    /// Override the entire `wezterm cli proxy` invocation that would otherwise
+    /// Override the entire `arcterm cli proxy` invocation that would otherwise
     /// be computed from remote_wezterm_path and other information.
     pub override_proxy_command: Option<String>,
 
@@ -91,8 +96,8 @@ pub struct SshDomain {
 
     /// If false, then don't use a multiplexer connection,
     /// just connect directly using ssh. This doesn't require
-    /// that the remote host have wezterm installed, and is equivalent
-    /// to using `wezterm ssh` to connect.
+    /// that the remote host have arcterm installed, and is equivalent
+    /// to using `arcterm ssh` to connect.
     #[dynamic(default)]
     pub multiplexing: SshMultiplexing,
 
@@ -126,7 +131,7 @@ impl SshDomain {
             mux_ssh.push(Self {
                 name: format!("SSHMUX:{host}"),
                 remote_address: host.to_string(),
-                multiplexing: SshMultiplexing::WezTerm,
+                multiplexing: SshMultiplexing::ArcTerm,
                 local_echo_threshold_ms: default_local_echo_threshold_ms(),
                 ..SshDomain::default()
             });

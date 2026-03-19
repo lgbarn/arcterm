@@ -40,7 +40,7 @@ jobs:
         run: "apt-get install -y openssh-server"
       - name: "Workaround git permissions issue"
         shell: bash
-        run: "git config --global --add safe.directory /__w/wezterm/wezterm"
+        run: "git config --global --add safe.directory /__w/arcterm/arcterm"
       - name: "checkout repo"
         uses: actions/checkout@v4
         with:
@@ -109,7 +109,7 @@ jobs:
   upload:
     runs-on: ubuntu-latest
     needs: build
-    if: github.repository == 'wezterm/wezterm'
+    if: github.repository == 'lgbarn/arcterm'
     permissions:
       contents: write
       pages: write
@@ -118,23 +118,9 @@ jobs:
     steps:
       - name: "Workaround git permissions issue"
         shell: bash
-        run: "git config --global --add safe.directory /__w/wezterm/wezterm"
+        run: "git config --global --add safe.directory /__w/arcterm/arcterm"
       - name: "checkout repo"
         uses: actions/checkout@v4
-      - name: "Checkout linuxbrew tap"
-        uses: actions/checkout@v4
-        with:
-          repository: "wez/homebrew-wezterm-linuxbrew"
-          path: "linuxbrew-wezterm"
-          token: "${{ secrets.GH_PAT }}"
-      - name: "Update linuxbrew tap formula"
-        shell: bash
-        run: "cp wezterm-linuxbrew.rb linuxbrew-wezterm/Formula/wezterm.rb"
-      - name: "Commit linuxbrew tap changes"
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "Automated update to match latest tag"
-          repository: "linuxbrew-wezterm"
       - name: "Download artifact"
         uses: actions/download-artifact@v4
         with:
@@ -152,17 +138,3 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: "bash ci/retry.sh gh release upload --clobber $(ci/tag-name.sh) wezterm-*.deb wezterm-*.xz *src.tar.gz *.AppImage *.sha256"
-      - name: "Checkout flathub/org.wezfurlong.wezterm"
-        uses: actions/checkout@v4
-        with:
-          repository: "flathub/org.wezfurlong.wezterm"
-          path: "flathub"
-          token: "${{ secrets.GH_PAT }}"
-      - name: "Create flathub commit and push"
-        shell: bash
-        run: "bash ci/make-flathub-pr.sh"
-      - name: "Submit PR"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
-        shell: bash
-        run: 'cd flathub && gh pr create --fill --body "PR automatically created by release automation in the wezterm repo"'

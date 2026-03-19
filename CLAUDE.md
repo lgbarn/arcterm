@@ -48,3 +48,7 @@ Internal crate names (`wezterm-gui`, `wezterm-font`, etc.) are NOT renamed to ke
 1. **WASM Plugin System** — `arcterm-wasm-plugin` crate (capability-based sandbox)
 2. **AI Integration** — `arcterm-ai` crate (Ollama/Claude, cross-pane context)
 3. **Structured Output** — OSC 7770 protocol for rich content rendering
+
+## Active Feature Branch
+
+- `001-rebrand-completion` — Completing the WezTerm → ArcTerm rebrand across all user-visible surfaces, CI pipelines, and platform assets

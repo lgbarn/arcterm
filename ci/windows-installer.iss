@@ -2,10 +2,10 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 ; vim:ts=2:sw=2:et:
 
-#define MyAppName "WezTerm"
+#define MyAppName "ArcTerm"
 ;#define MyAppVersion "1.5"
 #define MyAppPublisher "Wez Furlong"
-#define MyAppURL "http://wezterm.org"
+#define MyAppURL "https://github.com/lgbarn/arcterm"
 #define MyAppExeName "wezterm-gui.exe"
 
 [Setup]
@@ -26,7 +26,7 @@ DisableProgramGroupPage=yes
 ;PrivilegesRequired=lowest
 ;PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=..
-OutputBaseFilename=WezTerm-Setup
+OutputBaseFilename=ArcTerm-Setup
 SetupIconFile=..\assets\windows\terminal.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma
@@ -55,22 +55,22 @@ Source: "..\target\release\strip-ansi-escapes.exe"; DestDir: "{app}"; Flags: ign
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]
-Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; AppUserModelID: "org.wezfurlong.wezterm"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; AppUserModelID: "org.wezfurlong.wezterm"
+Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; AppUserModelID: "com.lgbarn.arcterm"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; AppUserModelID: "com.lgbarn.arcterm"
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
 [Registry]
-Root: HKA; Subkey: "Software\Classes\Drive\shell\Open WezTerm here"; Flags: uninsdeletekey
-Root: HKA; Subkey: "Software\Classes\Drive\shell\Open WezTerm here"; ValueName: "icon"; ValueType: string; ValueData: "{app}\{#MyAppExeName}"; Flags: uninsdeletekey;
-Root: HKA; Subkey: "Software\Classes\Drive\shell\Open WezTerm here\command"; ValueType: string; ValueData: """{app}\{#MyAppExeName}"" start --no-auto-connect --cwd ""%V\"""; Flags: uninsdeletekey;
-Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\Open WezTerm here"; Flags: uninsdeletekey
-Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\Open WezTerm here"; ValueName: "icon"; ValueType: string; ValueData: "{app}\{#MyAppExeName}"; Flags: uninsdeletekey;
-Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\Open WezTerm here\command"; ValueType: string; ValueData: """{app}\{#MyAppExeName}"" start --no-auto-connect --cwd ""%V"; Flags: uninsdeletekey;
-Root: HKA; Subkey: "Software\Classes\Directory\shell\Open WezTerm here"; Flags: uninsdeletekey
-Root: HKA; Subkey: "Software\Classes\Directory\shell\Open WezTerm here"; ValueName: "icon"; ValueType: string; ValueData: "{app}\{#MyAppExeName}"; Flags: uninsdeletekey;
-Root: HKA; Subkey: "Software\Classes\Directory\shell\Open WezTerm here\command"; ValueType: string; ValueData: """{app}\{#MyAppExeName}"" start --no-auto-connect --cwd ""%V\\"""; Flags: uninsdeletekey;
+Root: HKA; Subkey: "Software\Classes\Drive\shell\Open ArcTerm here"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\Drive\shell\Open ArcTerm here"; ValueName: "icon"; ValueType: string; ValueData: "{app}\{#MyAppExeName}"; Flags: uninsdeletekey;
+Root: HKA; Subkey: "Software\Classes\Drive\shell\Open ArcTerm here\command"; ValueType: string; ValueData: """{app}\{#MyAppExeName}"" start --no-auto-connect --cwd ""%V\"""; Flags: uninsdeletekey;
+Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\Open ArcTerm here"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\Open ArcTerm here"; ValueName: "icon"; ValueType: string; ValueData: "{app}\{#MyAppExeName}"; Flags: uninsdeletekey;
+Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\Open ArcTerm here\command"; ValueType: string; ValueData: """{app}\{#MyAppExeName}"" start --no-auto-connect --cwd ""%V"; Flags: uninsdeletekey;
+Root: HKA; Subkey: "Software\Classes\Directory\shell\Open ArcTerm here"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\Directory\shell\Open ArcTerm here"; ValueName: "icon"; ValueType: string; ValueData: "{app}\{#MyAppExeName}"; Flags: uninsdeletekey;
+Root: HKA; Subkey: "Software\Classes\Directory\shell\Open ArcTerm here\command"; ValueType: string; ValueData: """{app}\{#MyAppExeName}"" start --no-auto-connect --cwd ""%V\\"""; Flags: uninsdeletekey;
 
 [Code]
 { https://stackoverflow.com/a/46609047/149111 }
