@@ -753,6 +753,22 @@ fn run_terminal_gui(opts: StartCommand, default_domain_name: Option<String>) -> 
         opts.workspace.as_deref(),
     )?;
 
+    // Load WASM plugins after Lua config is fully evaluated.
+    // Plugin failures are isolated — they don't prevent the terminal from starting.
+    {
+        let plugin_configs = arcterm_wasm_plugin::config::take_registered_plugins();
+        if !plugin_configs.is_empty() {
+            log::info!("Loading {} WASM plugin(s)", plugin_configs.len());
+            let mut plugin_manager = arcterm_wasm_plugin::lifecycle::PluginManager::new();
+            plugin_manager.load_all(plugin_configs);
+            // TODO: Store plugin_manager for shutdown and event routing
+            log::info!(
+                "WASM plugins: {} running",
+                plugin_manager.running_count()
+            );
+        }
+    }
+
     // First, let's see if we can ask an already running wezterm to do this.
     // We must do this before we start the gui frontend as the scheduler
     // requirements are different.

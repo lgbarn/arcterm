@@ -95,6 +95,7 @@ walkdir.workspace = true
 wezterm-bidi.workspace = true
 wezterm-blob-leases = { workspace=true, features=["simple_tempdir"] }
 wezterm-client.workspace = true
+arcterm-wasm-plugin = {path = "../arcterm-wasm-plugin"}
 wezterm-dynamic.workspace = true
 wezterm-font.workspace = true
 wezterm-gui-subcommands.workspace = true

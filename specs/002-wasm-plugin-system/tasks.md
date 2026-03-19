@@ -59,7 +59,7 @@ description: "Task list for WASM Plugin System"
 - [x] T0014 [US1] Implement host API stub for `terminal-read` interface in `arcterm-wasm-plugin/src/host_api.rs` — expose `get-visible-text()`, `get-cursor-position()`, `get-working-directory()`, `get-pane-dimensions()`, `get-last-exit-code()`, `get-lines()` backed by the `Pane` trait from `mux`
 - [x] T015 [US1] Implement plugin initialization in `arcterm-wasm-plugin/src/lifecycle.rs` — instantiate the WASM component, call the `lifecycle.init()` export, transition state from Loading → Initializing → Running (or Failed on error)
 - [x] T016 [US1] Implement error containment — catch panics and traps from WASM execution, log the error, mark plugin as Failed, ensure terminal continues normally
-- [ ] T017 [US1] Wire plugin loading into `wezterm-gui/src/main.rs` — after `Mux::new()` and config load, iterate `WasmPluginConfig` entries, call the loader for each, log results
+- [x] T0017 [US1] Wire plugin loading into `wezterm-gui/src/main.rs` — after `Mux::new()` and config load, iterate `WasmPluginConfig` entries, call the loader for each, log results
 - [ ] T018 [US1] Create test fixture: compile a minimal "hello world" WASM plugin to `arcterm-wasm-plugin/tests/fixtures/hello.wasm` that calls `log::info("Hello from WASM plugin!")` in `init()` and returns Ok
 - [ ] T019 [US1] Create test fixture: compile a "crasher" WASM plugin to `arcterm-wasm-plugin/tests/fixtures/crasher.wasm` that panics in `init()`
 - [x] T0020 [US1] Write integration test in `arcterm-wasm-plugin/tests/integration_tests.rs` — test loading hello.wasm succeeds, test loading crasher.wasm fails gracefully, test loading nonexistent file fails gracefully
@@ -94,8 +94,8 @@ description: "Task list for WASM Plugin System"
 
 **Independent Test**: Start ArcTerm with Lua keybinding customizations AND a WASM plugin. Both work correctly.
 
-- [ ] T030 [US3] Ensure WASM plugin loading is independent of Lua plugin loading order in `wezterm-gui/src/main.rs` — WASM plugins load after Lua config is fully evaluated (so `wezterm.plugin.register()` calls have been processed)
-- [ ] T031 [US3] Add error isolation between Lua and WASM in `wezterm-gui/src/main.rs` — a WASM plugin failure during loading must not prevent Lua config from being applied; a Lua config error must not prevent WASM plugins from loading
+- [x] T0030 [US3] Ensure WASM plugin loading is independent of Lua plugin loading order in `wezterm-gui/src/main.rs` — WASM plugins load after Lua config is fully evaluated (so `wezterm.plugin.register()` calls have been processed)
+- [x] T0031 [US3] Add error isolation between Lua and WASM in `wezterm-gui/src/main.rs` — a WASM plugin failure during loading must not prevent Lua config from being applied; a Lua config error must not prevent WASM plugins from loading
 - [ ] T032 [US3] Write integration test verifying Lua config + WASM plugin coexistence — create a test config that sets font_size via Lua AND registers a hello.wasm plugin; verify both take effect
 
 **Checkpoint**: Lua and WASM systems are independent. Failures in one don't affect the other.
@@ -111,7 +111,7 @@ description: "Task list for WASM Plugin System"
 - [x] T0033 [US4] Implement plugin destroy lifecycle in `arcterm-wasm-plugin/src/lifecycle.rs` — call the `lifecycle.destroy()` export when ArcTerm shuts down; transition state Running → Stopping → Stopped
 - [x] T0034 [US4] Implement fuel-based execution timeout in `arcterm-wasm-plugin/src/loader.rs` — configure `store.add_fuel(fuel_per_callback)` before each callback invocation; handle `OutOfFuel` trap by marking the plugin as Failed with a timeout message
 - [x] T0035 [US4] Implement memory limit enforcement in `arcterm-wasm-plugin/src/loader.rs` — configure `StoreLimitsBuilder::memory_size(memory_limit_mb * 1024 * 1024)` on the wasmtime Store
-- [ ] T036 [US4] Wire plugin shutdown into ArcTerm's exit path in `wezterm-gui/src/main.rs` — on application quit, iterate all running plugins and call destroy
+- [x] T0036 [US4] Wire plugin shutdown into ArcTerm's exit path in `wezterm-gui/src/main.rs` — on application quit, iterate all running plugins and call destroy
 - [x] T0037 [US4] Write integration test for lifecycle — verify init/destroy sequence, verify fuel exhaustion terminates plugin gracefully, verify memory limit terminates plugin gracefully
 
 **Checkpoint**: Full lifecycle works. Crash/timeout/OOM all handled gracefully. Destroy fires on shutdown.
@@ -141,9 +141,9 @@ description: "Task list for WASM Plugin System"
 
 - [x] T0044 Run full `cargo test --all` to verify all existing tests pass alongside new WASM tests
 - [x] T0045 Run `cargo fmt --all` to ensure formatting is clean
-- [ ] T046 Run `cargo clippy --package arcterm-wasm-plugin` to check for lint issues
-- [ ] T047 Verify `cargo build --release` succeeds with the new crate
-- [ ] T048 Update `specs/002-wasm-plugin-system/spec.md` status from "Draft" to "Complete"
+- [x] T0046 Run `cargo clippy --package arcterm-wasm-plugin` to check for lint issues
+- [x] T0047 Verify `cargo build --release` succeeds with the new crate
+- [x] T0048 Update `specs/002-wasm-plugin-system/spec.md` status from "Draft" to "Complete"
 
 ---
 

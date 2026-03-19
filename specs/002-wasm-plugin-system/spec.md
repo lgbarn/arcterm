@@ -2,7 +2,7 @@
 
 **Feature Branch**: `002-wasm-plugin-system`
 **Created**: 2026-03-19
-**Status**: Draft
+**Status**: Complete
 **Input**: User description: "WASM plugin system with capability-based sandbox for extending ArcTerm"
 
 ## User Scenarios & Testing *(mandatory)*
