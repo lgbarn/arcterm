@@ -75,4 +75,22 @@ mod tests {
         let backend = ClaudeBackend::new("".to_string(), "claude-sonnet-4-20250514".to_string());
         assert!(!backend.is_available());
     }
+
+    #[test]
+    fn test_claude_name() {
+        let backend = ClaudeBackend::new("key".to_string(), "model".to_string());
+        assert_eq!(backend.name(), "Claude");
+    }
+
+    #[test]
+    fn test_claude_chat_fails_without_network() {
+        // Verify that chat returns an error (not a panic) when API is unreachable
+        let backend = ClaudeBackend::new("sk-ant-test".to_string(), "claude-sonnet-4-20250514".to_string());
+        let messages = vec![super::Message::user("hello")];
+        let result = backend.chat(&messages);
+        // Should fail with network error (API not reachable in test)
+        assert!(result.is_err());
+        let err = format!("{}", result.err().unwrap());
+        assert!(err.contains("Claude API request failed"));
+    }
 }

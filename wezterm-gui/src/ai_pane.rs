@@ -7,6 +7,7 @@
 
 use arcterm_ai::backend::{create_backend, Message};
 use arcterm_ai::config::AiConfig;
+use arcterm_ai::destructive;
 use arcterm_ai::prompts::AI_PANE_SYSTEM_PROMPT;
 use mux::termwiztermtab::TermWizTerminal;
 use std::io::{BufRead, BufReader};
@@ -130,6 +131,13 @@ pub fn open_ai_pane(mut term: TermWizTerminal) -> anyhow::Result<()> {
                         String::new()
                     }
                 };
+
+                // Scan response for destructive commands and warn
+                if !response_text.is_empty() && destructive::is_destructive(&response_text) {
+                    term.render(&[Change::Text(
+                        "\n\x1b[1;31m⚠ DESTRUCTIVE COMMAND detected in response above\x1b[0m\n".to_string(),
+                    )])?;
+                }
 
                 // Commit both turns to history
                 history.push(Message::user(user_text));

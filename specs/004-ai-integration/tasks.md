@@ -94,11 +94,11 @@ description: "Task list for AI Integration Layer"
 
 **Independent Test**: Configure Claude API key, use AI pane, verify response comes from Claude.
 
-- [ ] T030 [P] [US3] Implement `ClaudeBackend` in `arcterm-ai/src/backend/claude.rs` — POST to `https://api.anthropic.com/v1/messages` with API key header, messages array, and `stream: true`; parse SSE streaming response; return streamed tokens
-- [ ] T031 [P] [US3] Implement backend factory in `arcterm-ai/src/backend/mod.rs` — `create_backend(config: &AiConfig) -> Box<dyn LlmBackend>` that returns `OllamaBackend` or `ClaudeBackend` based on config (if `api_key` is set and model starts with "claude", use Claude; otherwise Ollama)
-- [ ] T032 [US3] Wire config-driven backend selection into AI pane and command overlay — replace hardcoded `OllamaBackend` with `create_backend()` call
-- [ ] T033 [US3] Write unit tests for Claude request formatting and SSE response parsing
-- [ ] T034 [US3] Verify `cargo test --package arcterm-ai` passes
+- [x] T0030 [P] [US3] Implement `ClaudeBackend` in `arcterm-ai/src/backend/claude.rs` — POST to `https://api.anthropic.com/v1/messages` with API key header, messages array, and `stream: true`; parse SSE streaming response; return streamed tokens
+- [x] T0031 [P] [US3] Implement backend factory in `arcterm-ai/src/backend/mod.rs` — `create_backend(config: &AiConfig) -> Box<dyn LlmBackend>` that returns `OllamaBackend` or `ClaudeBackend` based on config (if `api_key` is set and model starts with "claude", use Claude; otherwise Ollama)
+- [x] T0032 [US3] Wire config-driven backend selection into AI pane and command overlay — replace hardcoded `OllamaBackend` with `create_backend()` call
+- [x] T0033 [US3] Write unit tests for Claude request formatting and SSE response parsing
+- [x] T0034 [US3] Verify `cargo test --package arcterm-ai` passes
 
 **Checkpoint**: Both Ollama and Claude backends work. Config determines which is used.
 
@@ -110,10 +110,10 @@ description: "Task list for AI Integration Layer"
 
 **Independent Test**: Open AI pane, run new command in sibling, refresh context, ask about new output.
 
-- [ ] T035 [US4] Implement context refresh in `wezterm-gui/src/ai_pane.rs` — on receiving the refresh keybinding, re-read sibling pane context via `extract_context()` and append a system message noting the updated context
-- [ ] T036 [US4] Add `KeyAssignment::RefreshAiContext` variant in `config/src/keyassignment.rs` and handle it in the AI pane
-- [ ] T037 [US4] Register default keybinding `leader + c` for `RefreshAiContext`
-- [ ] T038 [US4] Handle edge case: sibling pane closed — render "No sibling pane available for context" when refresh is attempted but the sibling no longer exists
+- [x] T0035 [US4] Implement context refresh in `wezterm-gui/src/ai_pane.rs` — on receiving the refresh keybinding, re-read sibling pane context via `extract_context()` and append a system message noting the updated context
+- [x] T0036 [US4] Add `KeyAssignment::RefreshAiContext` variant in `config/src/keyassignment.rs` and handle it in the AI pane
+- [x] T0037 [US4] Register default keybinding `leader + c` for `RefreshAiContext`
+- [x] T0038 [US4] Handle edge case: sibling pane closed — render "No sibling pane available for context" when refresh is attempted but the sibling no longer exists
 
 **Checkpoint**: Context refresh updates the AI's awareness of terminal state. Edge cases handled.
 
@@ -125,9 +125,9 @@ description: "Task list for AI Integration Layer"
 
 **Independent Test**: Ask AI to suggest `rm -rf`, verify warning label appears.
 
-- [ ] T039 [US5] Implement AI pane warning rendering in `wezterm-gui/src/ai_pane.rs` — after receiving a complete response, scan for destructive patterns; if found, prepend a bold red `⚠ DESTRUCTIVE COMMAND` warning line before the command
-- [ ] T040 [US5] Write unit tests for destructive detection edge cases — test `rm -rf /`, `rm -rf .`, `DROP TABLE users`, `git push --force origin main`, `chmod -R 777 /`, `dd if=/dev/zero of=/dev/sda`; test that safe commands (`rm file.txt`, `git push`, `chmod 644`) are NOT flagged
-- [ ] T041 [US5] Verify `cargo test --package arcterm-ai` passes
+- [x] T0039 [US5] Implement AI pane warning rendering in `wezterm-gui/src/ai_pane.rs` — after receiving a complete response, scan for destructive patterns; if found, prepend a bold red `⚠ DESTRUCTIVE COMMAND` warning line before the command
+- [x] T0040 [US5] Write unit tests for destructive detection edge cases — test `rm -rf /`, `rm -rf .`, `DROP TABLE users`, `git push --force origin main`, `chmod -R 777 /`, `dd if=/dev/zero of=/dev/sda`; test that safe commands (`rm file.txt`, `git push`, `chmod 644`) are NOT flagged
+- [x] T0041 [US5] Verify `cargo test --package arcterm-ai` passes
 
 **Checkpoint**: Destructive commands consistently flagged. No false positives on common safe commands.
 
@@ -137,12 +137,12 @@ description: "Task list for AI Integration Layer"
 
 **Purpose**: Final verification and cleanup.
 
-- [ ] T042 Run full `cargo test --all` to verify all existing tests pass
-- [ ] T043 Run `cargo fmt --all` to ensure formatting is clean
-- [ ] T044 Run `cargo clippy --package arcterm-ai` for lint checks
-- [ ] T045 Verify `cargo build --release` succeeds
-- [ ] T046 Test full workflow end-to-end per quickstart.md (AI pane + overlay + context refresh + destructive warning)
-- [ ] T047 Update `specs/004-ai-integration/spec.md` status from "Draft" to "Complete"
+- [x] T0042 Run full `cargo test --all` to verify all existing tests pass
+- [x] T0043 Run `cargo fmt --all` to ensure formatting is clean
+- [x] T0044 Run `cargo clippy --package arcterm-ai` for lint checks
+- [x] T0045 Verify `cargo build --release` succeeds
+- [x] T0046 Test full workflow end-to-end per quickstart.md (AI pane + overlay + context refresh + destructive warning)
+- [x] T0047 Update `specs/004-ai-integration/spec.md` status from "Draft" to "Complete"
 
 ---
 

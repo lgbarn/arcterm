@@ -2,7 +2,7 @@
 
 **Feature Branch**: `004-ai-integration`
 **Created**: 2026-03-19
-**Status**: Draft
+**Status**: Complete
 **Input**: User description: "AI integration layer with AI pane, command overlay, Ollama and Claude support, cross-pane context"
 
 ## User Scenarios & Testing *(mandatory)*
