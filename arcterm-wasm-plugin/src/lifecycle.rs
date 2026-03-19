@@ -131,25 +131,21 @@ impl PluginManager {
     ) -> anyhow::Result<()> {
         plugin.transition(PluginState::Loading);
 
-        // Load the WASM component from file (no exists() check — let read() fail atomically)
-        let wasm_bytes = std::fs::read(&config.path)
-            .map_err(|e| anyhow::anyhow!("Failed to read plugin file '{}': {}", config.path, e))?;
-
-        // Validate it's a WASM file (magic bytes: \0asm)
-        if wasm_bytes.len() < 4 || &wasm_bytes[0..4] != b"\0asm" {
-            anyhow::bail!("Invalid WASM file: {}", config.path);
-        }
+        // Use the wasmtime loader for proper sandbox setup:
+        // - Compiles WASM Component via wasmtime
+        // - Creates Store with memory limits (StoreLimitsBuilder)
+        // - Sets fuel budget for execution metering
+        // - Validates the WASM binary structure
+        let _loaded = crate::loader::load_plugin(engine, config)?;
 
         log::debug!(
-            "Plugin '{}': loaded {} bytes from {}",
+            "Plugin '{}': compiled and sandboxed from {}",
             plugin.name,
-            wasm_bytes.len(),
             config.path
         );
 
-        // For now, mark as running after successful load.
-        // Full Component Model instantiation (with init() call) will be
-        // added when the host API linker is complete.
+        // TODO: Store _loaded (Component + Store) for instantiation
+        // against the host API linker and init() call
         plugin.transition(PluginState::Initializing);
         plugin.transition(PluginState::Running);
 

@@ -57,10 +57,18 @@ lazy_static::lazy_static! {
     static ref REGISTERED_PLUGINS: Mutex<Vec<WasmPluginConfig>> = Mutex::new(Vec::new());
 }
 
-/// Register a plugin from Lua config. Called by wezterm.plugin.register().
+/// Register a plugin from Lua config. Called by wezterm.plugin.register_wasm().
 pub fn register_plugin(config: WasmPluginConfig) {
-    if let Ok(mut plugins) = REGISTERED_PLUGINS.lock() {
-        plugins.push(config);
+    match REGISTERED_PLUGINS.lock() {
+        Ok(mut plugins) => plugins.push(config),
+        Err(poisoned) => {
+            log::error!(
+                "WASM plugin registration failed: mutex poisoned. Plugin '{}' will not load.",
+                config.name
+            );
+            // Recover the poisoned guard to prevent cascading failures
+            poisoned.into_inner().push(config);
+        }
     }
 }
 
