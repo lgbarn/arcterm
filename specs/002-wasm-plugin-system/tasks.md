@@ -54,11 +54,11 @@ description: "Task list for WASM Plugin System"
 
 **Independent Test**: Build a minimal "hello world" WASM plugin, configure it in `arcterm.lua`, start ArcTerm, and verify the plugin initializes (log message appears).
 
-- [ ] T012 [US1] Implement WASM loader in `arcterm-wasm-plugin/src/loader.rs` — create `wasmtime::Engine` with fuel consumption enabled, `wasmtime::component::Component` from file, `wasmtime::Store` with memory limits and fuel budget per plugin config
-- [ ] T013 [US1] Implement host API stub for `log` interface in `arcterm-wasm-plugin/src/host_api.rs` — expose `info()`, `warn()`, `error()` functions that delegate to the `log` crate; link them into the wasmtime `Linker`
+- [x] T012 [US1] Implement WASM loader in `arcterm-wasm-plugin/src/loader.rs` — create `wasmtime::Engine` with fuel consumption enabled, `wasmtime::component::Component` from file, `wasmtime::Store` with memory limits and fuel budget per plugin config
+- [x] T013 [US1] Implement host API stub for `log` interface in `arcterm-wasm-plugin/src/host_api.rs` — expose `info()`, `warn()`, `error()` functions that delegate to the `log` crate; link them into the wasmtime `Linker`
 - [ ] T014 [US1] Implement host API stub for `terminal-read` interface in `arcterm-wasm-plugin/src/host_api.rs` — expose `get-visible-text()`, `get-cursor-position()`, `get-working-directory()`, `get-pane-dimensions()`, `get-last-exit-code()`, `get-lines()` backed by the `Pane` trait from `mux`
-- [ ] T015 [US1] Implement plugin initialization in `arcterm-wasm-plugin/src/lifecycle.rs` — instantiate the WASM component, call the `lifecycle.init()` export, transition state from Loading → Initializing → Running (or Failed on error)
-- [ ] T016 [US1] Implement error containment — catch panics and traps from WASM execution, log the error, mark plugin as Failed, ensure terminal continues normally
+- [x] T015 [US1] Implement plugin initialization in `arcterm-wasm-plugin/src/lifecycle.rs` — instantiate the WASM component, call the `lifecycle.init()` export, transition state from Loading → Initializing → Running (or Failed on error)
+- [x] T016 [US1] Implement error containment — catch panics and traps from WASM execution, log the error, mark plugin as Failed, ensure terminal continues normally
 - [ ] T017 [US1] Wire plugin loading into `wezterm-gui/src/main.rs` — after `Mux::new()` and config load, iterate `WasmPluginConfig` entries, call the loader for each, log results
 - [ ] T018 [US1] Create test fixture: compile a minimal "hello world" WASM plugin to `arcterm-wasm-plugin/tests/fixtures/hello.wasm` that calls `log::info("Hello from WASM plugin!")` in `init()` and returns Ok
 - [ ] T019 [US1] Create test fixture: compile a "crasher" WASM plugin to `arcterm-wasm-plugin/tests/fixtures/crasher.wasm` that panics in `init()`
