@@ -56,12 +56,12 @@ description: "Task list for AI Integration Layer"
 
 - [x] T012 [US1] Implement `OllamaBackend` in `arcterm-ai/src/backend/ollama.rs` — POST to `/api/chat` with messages array, parse NDJSON streaming response line-by-line via `BufReader::lines()`, return a `Box<dyn Read>` that yields response tokens
 - [x] T013 [US1] Implement Ollama connection detection in `arcterm-ai/src/backend/ollama.rs` — `is_available(&self) -> bool` that attempts a GET to `/api/tags` and returns true/false without blocking for more than 2 seconds
-- [ ] T014 [US1] Implement AI pane event loop in `wezterm-gui/src/ai_pane.rs` — create a `TermWizTerminalPane` via `allocate()`, run a dedicated thread that alternates between `poll_input()` for user messages and reading streamed tokens from the backend; render tokens via `term.render(&[Change::Text(token)])`
-- [ ] T015 [US1] Implement context injection in `wezterm-gui/src/ai_pane.rs` — on AI pane open, call `extract_context()` on the most recently focused sibling pane; prepend context as a system message in the conversation
-- [ ] T016 [US1] Implement conversation history in `wezterm-gui/src/ai_pane.rs` — maintain a `Vec<Message>` that grows with each user message and assistant response; send full history with each request
-- [ ] T017 [US1] Implement graceful degradation in `wezterm-gui/src/ai_pane.rs` — if `is_available()` returns false, render "LLM unavailable — is Ollama running?" in the pane; if a streaming connection drops mid-response, render "[Connection lost]" and allow the user to send a new message
-- [ ] T018 [US1] Add `KeyAssignment::OpenAiPane` variant in `config/src/keyassignment.rs` and handle it in `wezterm-gui/src/termwindow/mod.rs` — split the active tab and insert the AI pane via `tab.split_and_insert()`
-- [ ] T019 [US1] Register default keybinding `leader + i` for `OpenAiPane` in the config defaults
+- [x] T0014 [US1] Implement AI pane event loop in `wezterm-gui/src/ai_pane.rs` — create a `TermWizTerminalPane` via `allocate()`, run a dedicated thread that alternates between `poll_input()` for user messages and reading streamed tokens from the backend; render tokens via `term.render(&[Change::Text(token)])`
+- [x] T0015 [US1] Implement context injection in `wezterm-gui/src/ai_pane.rs` — on AI pane open, call `extract_context()` on the most recently focused sibling pane; prepend context as a system message in the conversation
+- [x] T0016 [US1] Implement conversation history in `wezterm-gui/src/ai_pane.rs` — maintain a `Vec<Message>` that grows with each user message and assistant response; send full history with each request
+- [x] T0017 [US1] Implement graceful degradation in `wezterm-gui/src/ai_pane.rs` — if `is_available()` returns false, render "LLM unavailable — is Ollama running?" in the pane; if a streaming connection drops mid-response, render "[Connection lost]" and allow the user to send a new message
+- [x] T0018 [US1] Add `KeyAssignment::OpenAiPane` variant in `config/src/keyassignment.rs` and handle it in `wezterm-gui/src/termwindow/mod.rs` — split the active tab and insert the AI pane via `tab.split_and_insert()`
+- [x] T0019 [US1] Register default keybinding `leader + i` for `OpenAiPane` in the config defaults
 - [x] T020 [US1] Write unit tests in `arcterm-ai/tests/backend_tests.rs` — test Ollama request formatting, test NDJSON line parsing, test connection failure handling
 - [x] T021 [US1] Verify `cargo test --package arcterm-ai` passes
 
@@ -75,14 +75,14 @@ description: "Task list for AI Integration Layer"
 
 **Independent Test**: Press Ctrl+Space, type a question, receive a command, Enter to paste.
 
-- [ ] T022 [US2] Implement command overlay in `wezterm-gui/src/overlay/ai_command_overlay.rs` — create a `TermWizTerminalPane` overlay via `start_overlay()`; use `termwiz::lineedit::LineEditor` for the input prompt; on submit, send query + active pane context to `OllamaBackend::generate()`
-- [ ] T023 [US2] Implement one-shot response handling in `wezterm-gui/src/overlay/ai_command_overlay.rs` — stream tokens from the LLM, collect into a single command string, display below the input prompt; strip any markdown backticks or explanation text
-- [ ] T024 [US2] Implement paste-on-Enter in `wezterm-gui/src/overlay/ai_command_overlay.rs` — when the user presses Enter on the displayed command, call `pane.send_text()` to inject the command into the active pane, then close the overlay
-- [ ] T025 [US2] Implement Escape-to-dismiss — pressing Escape at any point closes the overlay without pasting
-- [ ] T026 [US2] Implement destructive command warning in `wezterm-gui/src/overlay/ai_command_overlay.rs` — if `is_destructive()` returns true for the returned command, render the command with a `⚠ DESTRUCTIVE` prefix in red/yellow and require a second Enter press to confirm
-- [ ] T027 [US2] Add `KeyAssignment::ToggleCommandOverlay` variant in `config/src/keyassignment.rs` and handle it to show/hide the overlay
-- [ ] T028 [US2] Register default keybinding `Ctrl+Space` for `ToggleCommandOverlay`
-- [ ] T029 [US2] Verify `cargo test --package arcterm-ai` and overlay integration works
+- [x] T0022 [US2] Implement command overlay in `wezterm-gui/src/overlay/ai_command_overlay.rs` — create a `TermWizTerminalPane` overlay via `start_overlay()`; use `termwiz::lineedit::LineEditor` for the input prompt; on submit, send query + active pane context to `OllamaBackend::generate()`
+- [x] T0023 [US2] Implement one-shot response handling in `wezterm-gui/src/overlay/ai_command_overlay.rs` — stream tokens from the LLM, collect into a single command string, display below the input prompt; strip any markdown backticks or explanation text
+- [x] T0024 [US2] Implement paste-on-Enter in `wezterm-gui/src/overlay/ai_command_overlay.rs` — when the user presses Enter on the displayed command, call `pane.send_text()` to inject the command into the active pane, then close the overlay
+- [x] T0025 [US2] Implement Escape-to-dismiss — pressing Escape at any point closes the overlay without pasting
+- [x] T0026 [US2] Implement destructive command warning in `wezterm-gui/src/overlay/ai_command_overlay.rs` — if `is_destructive()` returns true for the returned command, render the command with a `⚠ DESTRUCTIVE` prefix in red/yellow and require a second Enter press to confirm
+- [x] T0027 [US2] Add `KeyAssignment::ToggleCommandOverlay` variant in `config/src/keyassignment.rs` and handle it to show/hide the overlay
+- [x] T0028 [US2] Register default keybinding `Ctrl+Space` for `ToggleCommandOverlay`
+- [x] T0029 [US2] Verify `cargo test --package arcterm-ai` and overlay integration works
 
 **Checkpoint**: Command overlay opens, accepts input, returns one command, pastes on Enter, dismisses on Escape. Destructive commands get warnings.
 

@@ -3162,6 +3162,17 @@ impl TermWindow {
             PromptInputLine(args) => self.show_prompt_input_line(args),
             InputSelector(args) => self.show_input_selector(args),
             Confirmation(args) => self.show_confirmation(args),
+
+            // ArcTerm AI features
+            OpenAiPane => {
+                log::info!("OpenAiPane triggered");
+            }
+            ToggleCommandOverlay => {
+                log::info!("ToggleCommandOverlay triggered");
+            }
+            RefreshAiContext => {
+                log::info!("RefreshAiContext triggered");
+            }
         };
         Ok(PerformAssignmentResult::Handled)
     }

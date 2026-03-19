@@ -2011,6 +2011,8 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Edit"],
             icon: None,
         },
+        // ArcTerm AI features — no menu entries yet
+        OpenAiPane | ToggleCommandOverlay | RefreshAiContext => return None,
     })
 }
 

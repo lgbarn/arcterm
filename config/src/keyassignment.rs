@@ -646,6 +646,13 @@ pub enum KeyAssignment {
     PromptInputLine(PromptInputLine),
     InputSelector(InputSelector),
     Confirmation(Confirmation),
+
+    /// ArcTerm: Open an AI assistant pane alongside the active pane
+    OpenAiPane,
+    /// ArcTerm: Toggle the command overlay for one-shot AI command generation
+    ToggleCommandOverlay,
+    /// ArcTerm: Refresh AI pane's context from the sibling pane
+    RefreshAiContext,
 }
 impl_lua_conversion_dynamic!(KeyAssignment);
 
