@@ -2011,9 +2011,32 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Edit"],
             icon: None,
         },
-        // ArcTerm AI features — no menu entries yet
-        OpenAiPane | ToggleCommandOverlay | RefreshAiContext
-        | AcceptAiSuggestion | DismissAiSuggestion => return None,
+        // ArcTerm AI features
+        OpenAiPane => CommandDef {
+            brief: "AI Assistant".into(),
+            doc: "Open an AI assistant pane powered by Ollama/Claude".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["AI"],
+            icon: None,
+        },
+        ToggleCommandOverlay => CommandDef {
+            brief: "AI Command Generator".into(),
+            doc: "Generate a shell command from natural language".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["AI"],
+            icon: None,
+        },
+        RefreshAiContext => CommandDef {
+            brief: "Refresh AI Context".into(),
+            doc: "Re-read terminal context for the AI assistant".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["AI"],
+            icon: None,
+        },
+        AcceptAiSuggestion | DismissAiSuggestion => return None,
     })
 }
 

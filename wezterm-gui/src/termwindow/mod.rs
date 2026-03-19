@@ -2367,6 +2367,40 @@ impl TermWindow {
         promise::spawn::spawn(future).detach();
     }
 
+    fn show_ai_pane(&mut self) {
+        let mux = Mux::get();
+        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+            Some(tab) => tab,
+            None => return,
+        };
+        let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
+            crate::ai_pane::open_ai_pane(term)
+        });
+        self.assign_overlay(tab.tab_id(), overlay);
+        promise::spawn::spawn(future).detach();
+    }
+
+    fn show_command_overlay(&mut self, pane: &Arc<dyn Pane>) {
+        let mux = Mux::get();
+        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+            Some(tab) => tab,
+            None => return,
+        };
+        let pane_id = pane.pane_id();
+        let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
+            let result = crate::overlay::ai_command_overlay::show_command_overlay(term)?;
+            if let Some(command) = result {
+                let mux = Mux::get();
+                if let Some(pane) = mux.get_pane(pane_id) {
+                    pane.send_paste(&command)?;
+                }
+            }
+            Ok(())
+        });
+        self.assign_overlay(tab.tab_id(), overlay);
+        promise::spawn::spawn(future).detach();
+    }
+
     fn show_tab_navigator(&mut self) {
         let mux = Mux::get();
         let active_tab_idx = match mux.get_window(self.mux_window_id) {
@@ -3164,22 +3198,16 @@ impl TermWindow {
             Confirmation(args) => self.show_confirmation(args),
 
             // ArcTerm AI features
-            OpenAiPane => {
-                log::info!("OpenAiPane triggered");
-            }
-            ToggleCommandOverlay => {
-                log::info!("ToggleCommandOverlay triggered");
-            }
+            OpenAiPane => self.show_ai_pane(),
+            ToggleCommandOverlay => self.show_command_overlay(pane),
             RefreshAiContext => {
                 log::info!("RefreshAiContext triggered");
             }
             AcceptAiSuggestion => {
                 log::info!("AcceptAiSuggestion triggered");
-                // TODO: inject suggestion text via pane.send_text()
             }
             DismissAiSuggestion => {
                 log::info!("DismissAiSuggestion triggered");
-                // TODO: cancel suggestion overlay
             }
         };
         Ok(PerformAssignmentResult::Handled)
