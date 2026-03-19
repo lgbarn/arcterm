@@ -62,8 +62,8 @@ description: "Task list for AI Integration Layer"
 - [ ] T017 [US1] Implement graceful degradation in `wezterm-gui/src/ai_pane.rs` — if `is_available()` returns false, render "LLM unavailable — is Ollama running?" in the pane; if a streaming connection drops mid-response, render "[Connection lost]" and allow the user to send a new message
 - [ ] T018 [US1] Add `KeyAssignment::OpenAiPane` variant in `config/src/keyassignment.rs` and handle it in `wezterm-gui/src/termwindow/mod.rs` — split the active tab and insert the AI pane via `tab.split_and_insert()`
 - [ ] T019 [US1] Register default keybinding `leader + i` for `OpenAiPane` in the config defaults
-- [ ] T020 [US1] Write unit tests in `arcterm-ai/tests/backend_tests.rs` — test Ollama request formatting, test NDJSON line parsing, test connection failure handling
-- [ ] T021 [US1] Verify `cargo test --package arcterm-ai` passes
+- [x] T020 [US1] Write unit tests in `arcterm-ai/tests/backend_tests.rs` — test Ollama request formatting, test NDJSON line parsing, test connection failure handling
+- [x] T021 [US1] Verify `cargo test --package arcterm-ai` passes
 
 **Checkpoint**: AI pane opens, reads sibling context, streams responses from Ollama, maintains conversation history. Graceful fallback when Ollama unavailable.
 
