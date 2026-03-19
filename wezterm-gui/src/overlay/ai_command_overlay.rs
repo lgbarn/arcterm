@@ -166,7 +166,10 @@ fn collect_streaming_response(reader: Box<dyn std::io::Read + Send>) -> String {
     for line in buf.lines() {
         let line = match line {
             Ok(l) => l,
-            Err(_) => break,
+            Err(err) => {
+                log::warn!("ai_command_overlay: stream read error: {}", err);
+                break;
+            }
         };
         if line.trim().is_empty() {
             continue;

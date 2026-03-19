@@ -68,6 +68,7 @@ pub fn open_ai_pane(mut term: TermWizTerminal) -> anyhow::Result<()> {
     ))])?;
 
     // --- Conversation state --------------------------------------------------
+    const MAX_HISTORY_PAIRS: usize = 20;
     let mut history: Vec<Message> = Vec::new();
     let mut input_buf = String::new();
 
@@ -134,6 +135,12 @@ pub fn open_ai_pane(mut term: TermWizTerminal) -> anyhow::Result<()> {
                 history.push(Message::user(user_text));
                 if !response_text.is_empty() {
                     history.push(Message::assistant(response_text));
+                }
+
+                // Cap history to prevent context window overflow
+                // Each pair is 2 entries (user + assistant)
+                while history.len() > MAX_HISTORY_PAIRS * 2 {
+                    history.remove(0);
                 }
 
                 term.render(&[Change::Text("\n\n> ".to_string())])?;
