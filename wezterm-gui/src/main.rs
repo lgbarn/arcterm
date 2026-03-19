@@ -36,6 +36,8 @@ use wezterm_toast_notification::*;
 
 mod ai_pane;
 mod colorease;
+// Suggestion overlay not yet wired — state management ready, Pane wrapper TODO
+// mod suggestion_overlay;
 mod commands;
 mod customglyph;
 mod download;

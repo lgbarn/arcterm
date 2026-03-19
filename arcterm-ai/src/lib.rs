@@ -8,3 +8,4 @@ pub mod config;
 pub mod context;
 pub mod destructive;
 pub mod prompts;
+pub mod suggestions;
