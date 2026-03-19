@@ -4,10 +4,9 @@
 //! configured LLM backend (default: Ollama), and displays the generated command.
 //! The caller is responsible for pasting the returned command into the active pane.
 
-use arcterm_ai::backend::ollama::OllamaBackend;
-use arcterm_ai::backend::LlmBackend;
+use arcterm_ai::backend::{create_backend, LlmBackend};
 use arcterm_ai::config::AiConfig;
-use arcterm_ai::destructive::is_destructive;
+use arcterm_ai::destructive::maybe_warn;
 use arcterm_ai::prompts::COMMAND_OVERLAY_SYSTEM_PROMPT;
 use mux::termwiztermtab::TermWizTerminal;
 use std::io::BufRead;
@@ -96,11 +95,11 @@ pub fn show_command_overlay(mut term: TermWizTerminal) -> anyhow::Result<Option<
 
     // --- Build backend from default config ---
     let config = AiConfig::default();
-    let backend = OllamaBackend::new(config.endpoint.clone(), config.model.clone());
+    let backend = create_backend(&config);
 
     if !backend.is_available() {
         term.render(&[Change::Text(
-            "LLM unavailable — is Ollama running?\r\n".to_string(),
+            format!("LLM unavailable — {} is not reachable\r\n", backend.name()),
         )])?;
         return Ok(None);
     }
@@ -123,12 +122,8 @@ pub fn show_command_overlay(mut term: TermWizTerminal) -> anyhow::Result<Option<
     // --- Strip markdown formatting (backticks, code fences) ---
     let command = strip_markdown(&raw);
 
-    // --- Destructive check ---
-    let display = if is_destructive(&command) {
-        format!("\u{26a0} DESTRUCTIVE: {}", command)
-    } else {
-        command.clone()
-    };
+    // --- Destructive check (uses shared warning format) ---
+    let display = maybe_warn(&command);
 
     // --- Render result ---
     term.render(&[Change::Text(format!("\r\n{}\r\n", display))])?;
