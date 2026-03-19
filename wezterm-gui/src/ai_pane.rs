@@ -28,8 +28,8 @@ pub fn open_ai_pane(mut term: TermWizTerminal) -> anyhow::Result<()> {
     // --- Availability check --------------------------------------------------
     if !backend.is_available() {
         term.render(&[Change::Text(
-            "\u{26a0} LLM unavailable \u{2014} is Ollama running at localhost:11434?\n\
-             Press Enter to retry or Escape / Ctrl-C to quit.\n"
+            "\u{26a0} LLM unavailable \u{2014} is Ollama running at localhost:11434?\r\n\
+             Press Enter to retry or Escape / Ctrl-C to quit.\r\n"
                 .to_string(),
         )])?;
 
@@ -44,7 +44,7 @@ pub fn open_ai_pane(mut term: TermWizTerminal) -> anyhow::Result<()> {
                         break;
                     }
                     term.render(&[Change::Text(
-                        "Still unavailable. Press Enter to retry or Escape / Ctrl-C to quit.\n"
+                        "Still unavailable. Press Enter to retry or Escape / Ctrl-C to quit.\r\n"
                             .to_string(),
                     )])?;
                 }
@@ -63,10 +63,13 @@ pub fn open_ai_pane(mut term: TermWizTerminal) -> anyhow::Result<()> {
     }
 
     // --- Welcome message -----------------------------------------------------
-    term.render(&[Change::Text(format!(
-        "ArcTerm AI Assistant (model: {})\nType your question and press Enter.\n\n> ",
-        config.model
-    ))])?;
+    term.render(&[
+        Change::Title("ArcTerm AI".to_string()),
+        Change::Text(format!(
+            "ArcTerm AI Assistant (model: {})\r\nType your question and press Enter.\r\n\r\n> ",
+            config.model
+        )),
+    ])?;
 
     // --- Conversation state --------------------------------------------------
     const MAX_HISTORY_PAIRS: usize = 20;
@@ -104,7 +107,7 @@ pub fn open_ai_pane(mut term: TermWizTerminal) -> anyhow::Result<()> {
             }))) => {
                 let user_text = input_buf.trim().to_string();
                 input_buf.clear();
-                term.render(&[Change::Text("\n".to_string())])?;
+                term.render(&[Change::Text("\r\n".to_string())])?;
 
                 if user_text.is_empty() {
                     term.render(&[Change::Text("> ".to_string())])?;
@@ -123,9 +126,9 @@ pub fn open_ai_pane(mut term: TermWizTerminal) -> anyhow::Result<()> {
                     Ok(text) => text,
                     Err(err) => {
                         let msg = if is_connection_error(&err) {
-                            "[Connection lost]\n".to_string()
+                            "[Connection lost]\r\n".to_string()
                         } else {
-                            format!("[Error: {}]\n", err)
+                            format!("[Error: {}]\r\n", err)
                         };
                         term.render(&[Change::Text(msg)])?;
                         String::new()
@@ -135,7 +138,7 @@ pub fn open_ai_pane(mut term: TermWizTerminal) -> anyhow::Result<()> {
                 // Scan response for destructive commands and warn
                 if !response_text.is_empty() && destructive::is_destructive(&response_text) {
                     term.render(&[Change::Text(
-                        "\n\x1b[1;31m⚠ DESTRUCTIVE COMMAND detected in response above\x1b[0m\n".to_string(),
+                        "\r\n\x1b[1;31m⚠ DESTRUCTIVE COMMAND detected in response above\x1b[0m\r\n".to_string(),
                     )])?;
                 }
 
@@ -151,7 +154,7 @@ pub fn open_ai_pane(mut term: TermWizTerminal) -> anyhow::Result<()> {
                     history.remove(0);
                 }
 
-                term.render(&[Change::Text("\n\n> ".to_string())])?;
+                term.render(&[Change::Text("\r\n\r\n> ".to_string())])?;
             }
 
             // --- Escape: quit -----------------------------------------------
@@ -213,7 +216,9 @@ fn stream_response(
                     .and_then(|c| c.as_str())
                 {
                     if !token.is_empty() {
-                        term.render(&[Change::Text(token.to_string())])?;
+                        // Replace \n with \r\n for proper terminal line feeds
+                        let display_token = token.replace('\n', "\r\n");
+                        term.render(&[Change::Text(display_token)])?;
                         full_response.push_str(token);
                     }
                 }
