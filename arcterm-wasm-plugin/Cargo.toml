@@ -1,0 +1,15 @@
+[package]
+name = "arcterm-wasm-plugin"
+version = "0.1.0"
+edition = "2021"
+description = "WASM plugin system for ArcTerm with capability-based sandbox"
+
+[dependencies]
+anyhow = { workspace = true }
+config = { path = "../config" }
+lazy_static = { workspace = true }
+log = { workspace = true }
+mux = { path = "../mux" }
+thiserror = { workspace = true }
+wasmtime = { version = "36", features = ["component-model"] }
+wasmtime-wasi = "36"

@@ -1,0 +1,126 @@
+// ArcTerm Plugin Host API — WIT Interface Definition
+// Version: 1.0
+//
+// This defines the contract between ArcTerm (host) and WASM plugins (guest).
+// Plugins import host functions and export lifecycle callbacks.
+
+package arcterm:plugin@1.0.0;
+
+// ── Host-provided interfaces (imported by plugins) ──────────────────
+
+/// Terminal state reading (requires terminal:read capability)
+interface terminal-read {
+    /// Get all visible text in the active pane
+    get-visible-text: func() -> string;
+
+    /// Get specific line range (0-indexed, inclusive start, exclusive end)
+    get-lines: func(start: u32, end: u32) -> list<string>;
+
+    /// Get cursor row and column (0-indexed)
+    get-cursor-position: func() -> tuple<u32, u32>;
+
+    /// Get the current working directory of the pane's process
+    get-working-directory: func() -> string;
+
+    /// Get pane dimensions (rows, columns)
+    get-pane-dimensions: func() -> tuple<u32, u32>;
+
+    /// Get the exit code of the last command (if available)
+    get-last-exit-code: func() -> option<s32>;
+}
+
+/// Terminal writing (requires terminal:write capability)
+interface terminal-write {
+    /// Send text as if the user typed it
+    send-text: func(text: string) -> result<_, string>;
+
+    /// Inject text into the terminal output stream
+    inject-output: func(text: string) -> result<_, string>;
+}
+
+/// Filesystem access (requires fs:read or fs:write capability)
+interface filesystem {
+    /// Read a file's contents
+    read-file: func(path: string) -> result<list<u8>, string>;
+
+    /// Write data to a file
+    write-file: func(path: string, data: list<u8>) -> result<_, string>;
+}
+
+/// Network access (requires net:connect capability)
+interface network {
+    record http-response {
+        status: u16,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+    }
+
+    /// Make an HTTP GET request
+    http-get: func(url: string) -> result<http-response, string>;
+
+    /// Make an HTTP POST request
+    http-post: func(url: string, body: list<u8>) -> result<http-response, string>;
+}
+
+/// Key binding registration (requires keybinding:register capability)
+interface keybindings {
+    /// Register a key binding; returns a binding ID for the on-key-binding callback
+    register-key-binding: func(key: string, mods: string) -> result<u32, string>;
+}
+
+/// Logging (always available, no capability required)
+interface log {
+    /// Log a message at info level
+    info: func(message: string);
+
+    /// Log a message at warning level
+    warn: func(message: string);
+
+    /// Log a message at error level
+    error: func(message: string);
+}
+
+// ── Plugin-provided interfaces (exported by plugins) ─────────────────
+
+/// Required plugin lifecycle exports
+interface lifecycle {
+    /// Called once after the plugin is loaded. Return error string to abort.
+    init: func() -> result<_, string>;
+
+    /// Called when ArcTerm is shutting down.
+    destroy: func();
+}
+
+/// Optional event handler exports
+interface events {
+    /// Called when terminal output changes (debounced)
+    on-output: func(text: string);
+
+    /// Called when a bell character is received
+    on-bell: func();
+
+    /// Called when the pane gains or loses focus
+    on-focus: func(focused: bool);
+
+    /// Called when a registered key binding is triggered
+    on-key-binding: func(binding-id: u32);
+}
+
+// ── World definition ─────────────────────────────────────────────────
+
+/// The complete plugin world
+world arcterm-plugin {
+    // Host provides these to the plugin
+    import terminal-read;
+    import terminal-write;
+    import filesystem;
+    import network;
+    import keybindings;
+    import log;
+
+    // Plugin must export these
+    export lifecycle;
+
+    // Plugin may optionally export these
+    export events;
+}
