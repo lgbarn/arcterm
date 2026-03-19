@@ -56,7 +56,7 @@ description: "Task list for WASM Plugin System"
 
 - [x] T012 [US1] Implement WASM loader in `arcterm-wasm-plugin/src/loader.rs` — create `wasmtime::Engine` with fuel consumption enabled, `wasmtime::component::Component` from file, `wasmtime::Store` with memory limits and fuel budget per plugin config
 - [x] T013 [US1] Implement host API stub for `log` interface in `arcterm-wasm-plugin/src/host_api.rs` — expose `info()`, `warn()`, `error()` functions that delegate to the `log` crate; link them into the wasmtime `Linker`
-- [ ] T014 [US1] Implement host API stub for `terminal-read` interface in `arcterm-wasm-plugin/src/host_api.rs` — expose `get-visible-text()`, `get-cursor-position()`, `get-working-directory()`, `get-pane-dimensions()`, `get-last-exit-code()`, `get-lines()` backed by the `Pane` trait from `mux`
+- [x] T0014 [US1] Implement host API stub for `terminal-read` interface in `arcterm-wasm-plugin/src/host_api.rs` — expose `get-visible-text()`, `get-cursor-position()`, `get-working-directory()`, `get-pane-dimensions()`, `get-last-exit-code()`, `get-lines()` backed by the `Pane` trait from `mux`
 - [x] T015 [US1] Implement plugin initialization in `arcterm-wasm-plugin/src/lifecycle.rs` — instantiate the WASM component, call the `lifecycle.init()` export, transition state from Loading → Initializing → Running (or Failed on error)
 - [x] T016 [US1] Implement error containment — catch panics and traps from WASM execution, log the error, mark plugin as Failed, ensure terminal continues normally
 - [ ] T017 [US1] Wire plugin loading into `wezterm-gui/src/main.rs` — after `Mux::new()` and config load, iterate `WasmPluginConfig` entries, call the loader for each, log results
@@ -75,14 +75,14 @@ description: "Task list for WASM Plugin System"
 
 **Independent Test**: Load a plugin with only `terminal:read` capability; verify filesystem/network/write calls are denied. Add capabilities and verify they work.
 
-- [ ] T022 [US2] Implement capability enforcement layer in `arcterm-wasm-plugin/src/capability.rs` — add `check_capability(&self, required: &Capability) -> Result<(), CapabilityDenied>` method that validates a requested operation against the plugin's granted capabilities, including path prefix matching for `fs:*` capabilities
-- [ ] T023 [US2] Implement host API for `filesystem` interface in `arcterm-wasm-plugin/src/host_api.rs` — `read-file()` and `write-file()` with capability checks before each operation; path validation against granted `fs:read:<path>` / `fs:write:<path>`
-- [ ] T024 [US2] Implement host API for `network` interface in `arcterm-wasm-plugin/src/host_api.rs` — `http-get()` and `http-post()` with capability checks against granted `net:connect:<host>:<port>`
-- [ ] T025 [US2] Implement host API for `terminal-write` interface in `arcterm-wasm-plugin/src/host_api.rs` — `send-text()` and `inject-output()` with capability check for `terminal:write`
-- [ ] T026 [US2] Wire all capability checks into the wasmtime `Linker` — each host function call checks the plugin's capability set before executing; denied calls return an error result (not a trap)
-- [ ] T027 [US2] Create test fixture: compile `fs_reader.wasm` to `arcterm-wasm-plugin/tests/fixtures/fs_reader.wasm` that attempts to read a file in `init()`
-- [ ] T028 [US2] Write integration tests in `arcterm-wasm-plugin/tests/integration_tests.rs` — test fs_reader.wasm denied without `fs:read` capability, test fs_reader.wasm succeeds with `fs:read:.` capability, test path prefix enforcement (deny reads outside granted path)
-- [ ] T029 [US2] Verify `cargo test --package arcterm-wasm-plugin` passes
+- [x] T0022 [US2] Implement capability enforcement layer in `arcterm-wasm-plugin/src/capability.rs` — add `check_capability(&self, required: &Capability) -> Result<(), CapabilityDenied>` method that validates a requested operation against the plugin's granted capabilities, including path prefix matching for `fs:*` capabilities
+- [x] T0023 [US2] Implement host API for `filesystem` interface in `arcterm-wasm-plugin/src/host_api.rs` — `read-file()` and `write-file()` with capability checks before each operation; path validation against granted `fs:read:<path>` / `fs:write:<path>`
+- [x] T0024 [US2] Implement host API for `network` interface in `arcterm-wasm-plugin/src/host_api.rs` — `http-get()` and `http-post()` with capability checks against granted `net:connect:<host>:<port>`
+- [x] T0025 [US2] Implement host API for `terminal-write` interface in `arcterm-wasm-plugin/src/host_api.rs` — `send-text()` and `inject-output()` with capability check for `terminal:write`
+- [x] T0026 [US2] Wire all capability checks into the wasmtime `Linker` — each host function call checks the plugin's capability set before executing; denied calls return an error result (not a trap)
+- [x] T0027 [US2] Create test fixture: compile `fs_reader.wasm` to `arcterm-wasm-plugin/tests/fixtures/fs_reader.wasm` that attempts to read a file in `init()`
+- [x] T0028 [US2] Write integration tests in `arcterm-wasm-plugin/tests/integration_tests.rs` — test fs_reader.wasm denied without `fs:read` capability, test fs_reader.wasm succeeds with `fs:read:.` capability, test path prefix enforcement (deny reads outside granted path)
+- [x] T0029 [US2] Verify `cargo test --package arcterm-wasm-plugin` passes
 
 **Checkpoint**: All host API calls enforce capabilities. Denied operations return clean errors. Path prefix matching works for filesystem.
 
@@ -124,12 +124,12 @@ description: "Task list for WASM Plugin System"
 
 **Independent Test**: Load a plugin that watches for output changes and counts them. Verify the callback fires when terminal output changes.
 
-- [ ] T038 [US5] Implement event router in `arcterm-wasm-plugin/src/event_router.rs` — subscribe to `MuxNotification` from the mux layer; filter and debounce `PaneOutput` events; dispatch to plugins that export `events.on-output`
-- [ ] T039 [US5] Wire event router into `wezterm-gui/src/main.rs` — start event routing after plugin initialization; ensure events are dispatched on a background thread (not blocking GUI)
-- [ ] T040 [US5] Implement bell and focus event routing in `arcterm-wasm-plugin/src/event_router.rs` — handle `Alert::Bell` and focus change notifications; dispatch to `events.on-bell` and `events.on-focus` plugin exports
-- [ ] T041 [US5] Implement `keybindings` host API in `arcterm-wasm-plugin/src/host_api.rs` — `register-key-binding()` that creates a `KeyAssignment` and wires it into the existing keybinding system; invoke `events.on-key-binding(id)` when triggered
-- [ ] T042 [US5] Create test fixture: compile `output_watcher.wasm` to `arcterm-wasm-plugin/tests/fixtures/output_watcher.wasm` that subscribes to on-output and logs each event
-- [ ] T043 [US5] Write integration tests for event routing — verify on-output fires when terminal state changes, verify fuel is consumed per callback, verify debouncing reduces callback frequency
+- [x] T0038 [US5] Implement event router in `arcterm-wasm-plugin/src/event_router.rs` — subscribe to `MuxNotification` from the mux layer; filter and debounce `PaneOutput` events; dispatch to plugins that export `events.on-output`
+- [x] T0039 [US5] Wire event router into `wezterm-gui/src/main.rs` — start event routing after plugin initialization; ensure events are dispatched on a background thread (not blocking GUI)
+- [x] T0040 [US5] Implement bell and focus event routing in `arcterm-wasm-plugin/src/event_router.rs` — handle `Alert::Bell` and focus change notifications; dispatch to `events.on-bell` and `events.on-focus` plugin exports
+- [x] T0041 [US5] Implement `keybindings` host API in `arcterm-wasm-plugin/src/host_api.rs` — `register-key-binding()` that creates a `KeyAssignment` and wires it into the existing keybinding system; invoke `events.on-key-binding(id)` when triggered
+- [x] T0042 [US5] Create test fixture: compile `output_watcher.wasm` to `arcterm-wasm-plugin/tests/fixtures/output_watcher.wasm` that subscribes to on-output and logs each event
+- [x] T0043 [US5] Write integration tests for event routing — verify on-output fires when terminal state changes, verify fuel is consumed per callback, verify debouncing reduces callback frequency
 
 **Checkpoint**: Plugins receive terminal events. Key bindings integrate with existing system. Event dispatch doesn't block GUI.
 
