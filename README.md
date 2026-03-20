@@ -6,7 +6,11 @@
 
 <br clear="left"/>
 
+<p align="center">
 <img width="800" alt="ArcTerm running Claude Code" src="docs/screenshots/arcterm-claude-code.png">
+</p>
+
+*ArcTerm running Claude Code on macOS*
 
 ## Features
 
