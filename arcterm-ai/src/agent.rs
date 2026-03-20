@@ -78,7 +78,11 @@ impl AgentSession {
     }
 
     /// Execute the current step (transition to Executing).
+    /// Only valid when state is Reviewing.
     pub fn execute_current(&mut self) -> Option<&str> {
+        if !matches!(self.state, AgentState::Reviewing) {
+            return None;
+        }
         if let Some(step) = self.steps.get_mut(self.current_step) {
             step.status = StepStatus::Running;
             self.state = AgentState::Executing;
@@ -89,7 +93,11 @@ impl AgentSession {
     }
 
     /// Mark current step as completed and advance.
+    /// Only valid when state is Executing.
     pub fn complete_step(&mut self, exit_code: i32) {
+        if !matches!(self.state, AgentState::Executing) {
+            return;
+        }
         if let Some(step) = self.steps.get_mut(self.current_step) {
             if exit_code == 0 {
                 step.status = StepStatus::Completed { exit_code };
@@ -107,7 +115,11 @@ impl AgentSession {
     }
 
     /// Skip the current step and advance.
+    /// Only valid when state is Reviewing.
     pub fn skip_current(&mut self) {
+        if !matches!(self.state, AgentState::Reviewing) {
+            return;
+        }
         if let Some(step) = self.steps.get_mut(self.current_step) {
             step.status = StepStatus::Skipped;
             self.current_step += 1;
@@ -119,13 +131,19 @@ impl AgentSession {
         }
     }
 
-    /// Abort the entire plan.
+    /// Abort the entire plan. Valid from any non-terminal state.
     pub fn abort(&mut self) {
-        self.state = AgentState::Aborted;
+        if !self.is_finished() {
+            self.state = AgentState::Aborted;
+        }
     }
 
     /// Retry the failed step (reset to Reviewing).
+    /// Only valid when state is StepFailed.
     pub fn retry_current(&mut self) {
+        if !matches!(self.state, AgentState::StepFailed { .. }) {
+            return;
+        }
         if let Some(step) = self.steps.get_mut(self.current_step) {
             step.status = StepStatus::Pending;
             self.state = AgentState::Reviewing;
