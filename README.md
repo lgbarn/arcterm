@@ -6,6 +6,8 @@
 
 <br clear="left"/>
 
+<img width="800" alt="ArcTerm running Claude Code" src="docs/screenshots/arcterm-claude-code.png">
+
 ## Features
 
 ### AI Assistant
