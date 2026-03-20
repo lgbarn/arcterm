@@ -5,6 +5,7 @@
 **An AI-native GPU-accelerated terminal emulator.** Built on [WezTerm](https://github.com/wez/wezterm), extended with WASM plugins, structured output, and local AI integration powered by [Ollama](https://ollama.com).
 
 <br clear="left"/>
+<br>
 
 <p align="center">
 <img width="800" alt="ArcTerm running Claude Code" src="docs/screenshots/arcterm-claude-code.png">
