@@ -8,9 +8,9 @@
 
 <p align="center">
 <img width="800" alt="ArcTerm running Claude Code" src="docs/screenshots/arcterm-claude-code.png">
+<br>
+<em>ArcTerm running Claude Code on macOS</em>
 </p>
-
-*ArcTerm running Claude Code on macOS*
 
 ## Features
 
