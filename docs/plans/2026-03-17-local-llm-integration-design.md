@@ -42,7 +42,7 @@ Added to `~/.config/arcterm/config.toml`. Both fields have defaults — zero con
 
 ## Context Protocol Extension
 
-Extend OSC 7770 `context/query` response to include a `scrollback` field containing the last 30 lines from the target pane's terminal scrollback buffer. This is the only protocol change required.
+Extend the context query response to include a `scrollback` field containing the last 30 lines from the target pane's terminal scrollback buffer. This is the only protocol change required.
 
 ### Updated context response shape
 

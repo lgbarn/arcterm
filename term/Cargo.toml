@@ -35,7 +35,6 @@ url.workspace = true
 wezterm-bidi.workspace = true
 wezterm-dynamic = {workspace = true, features=["std"]}
 wezterm-cell = {workspace = true, features=["std", "use_image"]}
-arcterm-structured-output = {path = "../arcterm-structured-output"}
 wezterm-escape-parser = {workspace = true, features=["std", "use_image"]}
 wezterm-surface = {workspace = true, features=["std", "appdata", "use_image"]}
 

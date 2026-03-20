@@ -90,7 +90,7 @@ description: "Task list for Warp-Style AI UX"
 
 **Goal**: Markdown rendering in AI pane, loading indicators, theme matching.
 
-- [x] T034 [P] [US3] Implement Markdown rendering in AI pane responses in `wezterm-gui/src/ai_pane.rs` — detect code blocks (triple backtick) and render with syntax highlighting via `arcterm-structured-output::code::render_code`; render bold (`**text**`) as SGR bold, inline code as dimmed, lists as indented bullets
+- [x] T034 [P] [US3] Implement Markdown rendering in AI pane responses in `wezterm-gui/src/ai_pane.rs` — detect code blocks (triple backtick) and render with syntax highlighting; render bold (`**text**`) as SGR bold, inline code as dimmed, lists as indented bullets
 - [x] T035 [P] [US3] Add loading spinner in compact panel in `wezterm-gui/src/termwindow/render/ai_panel.rs` — while LLM query is in flight, show animated dots or spinner character in the panel
 - [x] T036 [US3] Ensure all AI UI elements use the terminal's configured color scheme — panel background matches terminal background, text uses terminal foreground, commands use the bright green from the palette
 

@@ -7,7 +7,6 @@ Building arcterm from scratch (currently at Phase 16) has been valuable for lear
 The goal is to fork WezTerm, rebrand it as ArcTerm, and bolt on the three key innovations from the current arcterm project:
 1. **WASM plugin system** — capability-based sandbox (Phase 6)
 2. **AI integration layer** — cross-pane context, AI tool detection, Ollama/Claude integration (Phases 7, 16)
-3. **Structured output rendering** — OSC 7770 protocol for rich content (Phase 4)
 
 ## Phase 1: Fork & Rebrand ✅
 
@@ -42,21 +41,7 @@ Port the `arcterm-plugin` crate's WASM sandbox into WezTerm's architecture:
 - `config/src/lua/` (plugin loading infrastructure)
 - `wezterm-gui/src/` (plugin UI integration)
 
-## Phase 3: Port Structured Output (OSC 7770)
-
-1. Add OSC 7770 sequence parsing to WezTerm's terminal parser
-2. Implement rich content rendering in WezTerm's GPU renderer:
-   - Syntax-highlighted code blocks
-   - Side-by-side diffs
-   - Collapsible JSON trees
-   - Inline images
-3. Create Lua API for plugins to emit structured content
-
-**Key WezTerm files to modify:**
-- `term/src/` (VT parser, OSC handling)
-- `wezterm-gui/src/` (renderer)
-
-## Phase 4: Port AI Integration Layer
+## Phase 3: Port AI Integration Layer
 
 1. Add AI pane type — a special pane that connects to Ollama/Claude API instead of a PTY
 2. Implement cross-pane context sharing:
@@ -83,7 +68,6 @@ Port the `arcterm-plugin` crate's WASM sandbox into WezTerm's architecture:
 - [ ] Full `cargo build --release` verification
 - [ ] Existing WezTerm Lua plugins still work
 - [ ] WASM plugins load and execute in sandbox
-- [ ] OSC 7770 sequences render structured content
 - [ ] AI pane connects to Ollama and responds to prompts
 - [ ] Cross-pane context sharing works (AI pane sees sibling output)
 - [ ] Command suggestion overlay triggers and shows suggestions

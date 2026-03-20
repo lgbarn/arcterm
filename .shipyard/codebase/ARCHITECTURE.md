@@ -147,10 +147,7 @@ The following locations are the minimal-conflict integration points for planned 
 2. **WASM Plugin System (`arcterm-wasm-plugin` crate)**
    - [Inferred] Should integrate at the same level as Lua API crates in `lua-api-crates/`. The `config/src/lua.rs` `add_context_setup_func` mechanism (called at `wezterm-gui/src/main.rs` lines 1205-1207) is the registration path.
 
-3. **Structured Output / OSC 7770**
-   - The escape sequence parser in `mux/src/lib.rs` (`parse_buffered_data`, line 160) calls `parser.parse(...)`. New OSC sequences can be handled by extending `termwiz::escape::parser::Parser` or intercepting at the `Action` dispatch level in `term`.
-
-4. **New Domain types** (e.g., WASM sandbox domain)
+3. **New Domain types** (e.g., WASM sandbox domain)
    - Implement the `Domain` trait (`mux/src/domain.rs` lines 49-80) and register via `Mux::add_domain`. This is already the pattern for `LocalDomain`, `RemoteSshDomain`, `ClientDomain`.
 
 ---

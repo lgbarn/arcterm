@@ -401,7 +401,7 @@ plugin system must be careful not to invoke WASM for every `PaneOutput` without 
 The `Domain` trait is relevant for the future possibility of a "WASM sandbox domain" that itself
 provides PTY-like panes. Key async methods: `spawn_pane()`, `spawn()`, `split_pane()`,
 `attach()`, `detach()`. Implementing this trait allows the WASM plugin system to serve as a domain
-that hosts purely WASM-driven panes (e.g., for a structured-output pane or AI chat pane), which
+that hosts purely WASM-driven panes (e.g., for an AI chat pane), which
 aligns with the ARCHITECTURE.md observation that "new Domain types" is an identified extension point.
 
 ---

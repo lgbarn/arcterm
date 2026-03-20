@@ -1,6 +1,6 @@
 # Getting Started with ArcTerm
 
-ArcTerm is a GPU-accelerated terminal emulator built on WezTerm, with AI-powered completions, an interactive AI pane, structured output rendering, and a WASM plugin system.
+ArcTerm is a GPU-accelerated terminal emulator built on WezTerm, with AI-powered completions, an interactive AI pane, and a WASM plugin system.
 
 ## Prerequisites
 
@@ -117,22 +117,6 @@ Inline suggestions appear as ghost text after your cursor while you type a shell
 
 Suggestions work best with [shell integration](shell-integration.md) enabled, which lets ArcTerm detect exactly when you are at a shell prompt. Without it, ArcTerm falls back to a heuristic: cursor on the last row + the foreground process is a known shell.
 
-## Configuring Structured Output
-
-If you use CLI tools that support OSC 7770, ArcTerm renders their output with syntax highlighting and structure automatically — no config needed.
-
-To emit structured output from your own scripts:
-
-```bash
-# Syntax-highlighted code
-printf '\033]7770;{"type":"code","language":"python","content":"print(\"hello\")"}\033\\'
-
-# JSON tree
-printf '\033]7770;{"type":"json","content":"{\"key\":\"value\"}"}\033\\'
-```
-
-See [osc-7770-protocol.md](osc-7770-protocol.md) for the full specification.
-
 ## Configuring WASM Plugins
 
 WASM plugins are `.wasm` files that run inside ArcTerm with explicit capability grants.
@@ -156,5 +140,4 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md) for how to build WASM plugins.
 ## Next Steps
 
 - [local-llm-setup.md](local-llm-setup.md) — Ollama setup, model selection, troubleshooting
-- [osc-7770-protocol.md](osc-7770-protocol.md) — Structured output protocol reference
 - [CONTRIBUTING.md](../CONTRIBUTING.md) — Developing plugins and ArcTerm itself

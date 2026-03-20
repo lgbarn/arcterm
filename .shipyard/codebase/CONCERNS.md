@@ -274,15 +274,6 @@ ArcTerm is a fork of WezTerm at an early rebrand stage (Phase 1 just completed p
 - **No async runtime in `wezterm-gui`**: The GUI binary uses WezTerm's custom `promise` executor rather than Tokio. Adding Tokio for AI HTTP streaming would require either integrating the two runtimes (possible but complex) or implementing streaming over the `promise` executor.
   - Evidence: `Cargo.toml` `tokio = "1.0"` is a workspace dependency; `wezterm-gui/Cargo.toml` would need to be checked for whether it opts in. [Inferred] The `promise` crate at `promise/` is a custom async executor used by WezTerm's GUI thread.
 
-#### 8c. Structured Output (OSC 7770)
-
-- **OSC 7770 is not registered**: Unknown OSC sequences fall through to `OperatingSystemCommand::Unspecified` and are logged as warnings (if `log_unknown_escape_sequences` is enabled) and dropped.
-  - Evidence: `term/src/terminalstate/performer.rs` lines 772-782: `Unspecified` arm logs and discards.
-  - Missing: OSC 7770 variant in `OperatingSystemCommand` enum (`wezterm-escape-parser/src/osc.rs`), renderer hook in `wezterm-gui/src/` to render rich content, Lua API for emitting structured content.
-
-- **GPU renderer has no extension point for custom pane content**: The render pipeline in `wezterm-gui/src/termwindow/` renders terminal cell grids. Adding a side channel for structured rich content (syntax-highlighted blocks, diff views) will require non-trivial changes to the render pass architecture.
-  - [Inferred] Based on overlay structure in `wezterm-gui/src/overlay/` -- overlays use the same terminal cell model; they do not bypass the cell renderer.
-
 ---
 
 ## Summary Table
@@ -299,7 +290,6 @@ ArcTerm is a fork of WezTerm at an early rebrand stage (Phase 1 just completed p
 | `FUNDING.yml` routes donations to upstream author | High | Rebrand | Observed |
 | No WASM plugin infrastructure exists | High | Missing Feature | Observed |
 | No AI integration crate exists | High | Missing Feature | Observed |
-| OSC 7770 not registered, would be silently dropped | High | Missing Feature | Observed |
 | macOS signing secrets not provisioned | High | CI / Build | Observed |
 | No `cargo deny check` in CI | Medium | Security | Observed |
 | No `cargo audit` or `cargo clippy` in CI | Medium | Security / Quality | Observed |

@@ -52,7 +52,6 @@ This is a Rust workspace. Key crates:
 
 - `arcterm-wasm-plugin/` — WASM plugin system using wasmtime Component Model with capability-based sandboxing. Plugins are `.wasm` files declared in `arcterm.lua`.
 - `arcterm-ai/` — LLM backend abstraction (Ollama, Claude API), pane context extraction, system prompts, destructive command detection, and inline suggestion logic.
-- `arcterm-structured-output/` — OSC 7770 escape sequence parser and renderer. Converts JSON payloads into syntax-highlighted terminal output (code, JSON trees, diffs, images).
 
 ## Upstream Relationship
 
@@ -78,7 +77,6 @@ Internal crate names (`wezterm-gui`, `wezterm-font`, etc.) are NOT renamed to ke
 2. **WASM Plugin System** — `arcterm-wasm-plugin` crate; wasmtime v36 Component Model; capability strings like `"fs:read:/home/user"` declared per-plugin in config; `terminal:read` granted by default.
 3. **AI Integration** — `arcterm-ai` crate; Ollama (default: `qwen2.5-coder:7b`) and Claude API backends; interactive AI pane (`OpenAiPane` action) and command overlay (`ToggleCommandOverlay` action); cross-pane context via scrollback and CWD.
 4. **Inline AI Suggestions** — ghost-text command completions using `arcterm-ai`; debounced 300ms after keystroke; accept with Tab, dismiss with Escape; requires OSC 133 shell integration or heuristic fallback.
-5. **Structured Output** — `arcterm-structured-output` crate; OSC 7770 escape sequence; renders code (syntax-highlighted via syntect), JSON trees, diffs, and images natively in the terminal.
 
 ## Active Technologies
 - Rust (edition 2021) + arcterm-ai (existing), termwiz, mux (006-warp-style-ai-ux)
