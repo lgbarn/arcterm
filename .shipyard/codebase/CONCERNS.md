@@ -2,7 +2,7 @@
 
 ## Overview
 
-ArcTerm is a fork of WezTerm at an early rebrand stage (Phase 1 just completed per `docs/plans/2026-03-18-wezterm-fork-plan.md`). The codebase is structurally sound -- it inherits WezTerm's mature, well-tested Rust foundation -- but carries a cluster of interrelated risks: an incomplete rebrand that leaves WezTerm identity in user-visible strings and CI pipelines, CI workflows still wired to upstream WezTerm release infrastructure, and a completely blank slate for the three headline AI/WASM features that are the entire purpose of the fork. There are no security emergencies, but the 855+ unsafe blocks in the non-vendor codebase require ongoing vigilance, and the update checker currently points at WezTerm's GitHub releases for a product now named ArcTerm.
+ArcTerm has made substantial progress since the initial analysis: the rebrand is now largely committed and reflected in the codebase, both headline ArcTerm-specific crates (`arcterm-ai` and `arcterm-wasm-plugin`) exist and contain working implementations, and the CI pipeline no longer targets upstream `wez/` infrastructure. The primary risk surface has shifted from "nothing is built" to "prototype-stage security gaps that will become critical the moment the features ship." The most urgent item is the incomplete plugin instantiation wiring in `arcterm-wasm-plugin`: a future commit that wires the guest `Instance` will silently enable the unconditional `terminal:read` grant and any other gaps flagged in AUDIT-main.md if they are not fixed first.
 
 ---
 
@@ -10,149 +10,135 @@ ArcTerm is a fork of WezTerm at an early rebrand stage (Phase 1 just completed p
 
 ### 1. Upstream Drift Risk
 
-- **Fork divergence is very low -- one commit of ArcTerm changes on top of upstream**: The most recent commit that diverges from upstream is `e8804618c` (shipyard initialization). All other recent commits (`05343b387` through `d2fc83559`) appear to be upstream WezTerm commits cherry-picked or merged. The rebrand changes are exclusively uncommitted working-tree modifications.
-  - Evidence: `git log --oneline upstream/main..HEAD` shows only one ahead commit as of analysis time.
-  - [Inferred] The fork was created very recently; merge conflicts are minimal today but will compound as ArcTerm-specific crates are added.
+- **Fork divergence remains manageable but will compound**: ArcTerm-specific code is isolated in `arcterm-ai/`, `arcterm-wasm-plugin/`, and `wezterm-gui/src/ai_pane.rs` plus `wezterm-gui/src/overlay/ai_command_overlay.rs`. The rebrand changes to core upstream files are now committed.
+  - Evidence: `CLAUDE.md` describes the upstream merge strategy. `arcterm-ai/` and `arcterm-wasm-plugin/` directories are self-contained.
+  - [Inferred] The diff surface in `wezterm-gui/src/termwindow/mod.rs` (AI pane launch) and `wezterm-gui/src/overlay/mod.rs` (overlay registration) will receive upstream changes as WezTerm evolves. Merge conflicts are likely.
 
-- **Rebrand changes are unstaged**: All 13 files with ArcTerm renaming are unstaged working-tree edits, not committed. They would be lost in a `git restore .` and are invisible to CI.
-  - Evidence: `git status --short` lists `CONTRIBUTING.md`, `config/src/config.rs`, `lua-api-crates/termwiz-funcs/src/lib.rs`, `mux/src/domain.rs`, `mux/src/ssh.rs`, `mux/src/termwiztermtab.rs`, `mux/src/tmux_commands.rs`, `term/src/test/mod.rs`, `termwiz/src/caps/mod.rs`, `wezterm-gui/src/commands.rs`, `wezterm-gui/src/main.rs`, `wezterm-gui/src/overlay/confirm_close_pane.rs`, `wezterm-gui/src/update.rs` as modified but not staged.
-
-- **Future merge risk from touching core files**: The rebrand modifies high-traffic upstream files that will receive ongoing changes from `wez/wezterm`. Merge conflicts are guaranteed in at least `config/src/config.rs`, `mux/src/domain.rs`, `mux/src/ssh.rs`, `wezterm-gui/src/main.rs`, and `wezterm-gui/src/commands.rs`.
-  - Evidence: All listed in git status above.
-  - Remediation: Commit the rebrand now. Where practical, isolate string constants into a single `arcterm-branding` module to minimize future merge surface.
+- **Future merge risk from touching core GUI files**: `wezterm-gui/src/commands.rs`, `wezterm-gui/src/main.rs`, and `wezterm-gui/src/termwindow/mod.rs` contain ArcTerm-specific additions (AI pane action, agent mode, command overlay) in high-traffic upstream files.
+  - Evidence: `wezterm-gui/src/termwindow/mod.rs` line 2392 (`crate::ai_pane::open_ai_pane`); `wezterm-gui/src/overlay/mod.rs` line 9 (`pub mod ai_command_overlay`).
+  - Remediation: Continue the pattern of isolating logic in `arcterm-*` crates. Consider adding integration hook points in upstream files that are minimally invasive.
 
 ---
 
 ### 2. Rebrand Completeness
 
-**Severity: High** -- Several categories of WezTerm identity remain in user-visible strings, deployment artifacts, and CI pipelines.
+**Severity: Medium** (was High) -- The critical rebrand items are now addressed. Remaining issues are lower-severity cosmetic or legacy-compat items.
 
-#### 2a. User-Visible Strings Still Showing "WezTerm"
+#### 2a. Resolved Rebrand Items [Resolved - 2026-03-19]
 
-- **Update checker fetches from `wez/wezterm` GitHub releases and shows "wezterm" User-Agent**: ArcTerm users will be prompted to update to WezTerm releases, not ArcTerm releases. The User-Agent header sent to GitHub API also identifies as `wezterm/wezterm-<version>`.
-  - Evidence: `wezterm-gui/src/update.rs` lines 44, 59, 64:
-    ```rust
-    "User-Agent",
-    &format!("wezterm/wezterm-{}", wezterm_version()),
-    // ...
-    get_github_release_info("https://api.github.com/repos/wezterm/wezterm/releases/latest")
-    get_github_release_info("https://api.github.com/repos/wezterm/wezterm/releases/tags/nightly")
-    ```
-  - [Note: The banner text "ArcTerm Update Available" was changed in the diff, but the URL still points at WezTerm releases.]
-  - Remediation: Point at `lgbarn/arcterm` releases or disable the update checker until ArcTerm has its own release pipeline.
+- **macOS quit dialog**: Now says "Quit ArcTerm?" and "Detach and close all panes and quit ArcTerm?".
+  - Evidence: `window/src/os/macos/app.rs` lines 30-31.
 
-- **Font missing-glyph error messages link to `wezterm.org`**: Users seeing font errors are directed to upstream documentation.
-  - Evidence: `wezterm-font/src/lib.rs` lines 418, 852:
-    ```rust
-    let url = "https://wezterm.org/config/fonts.html";
-    ```
+- **macOS Objective-C class names**: Renamed to `ArcTermAppDelegate`, `ArcTermWindow`, `ArcTermWindowView`, `ArcTermNotifDelegate`.
+  - Evidence: `window/src/os/macos/app.rs` line 16; `window/src/os/macos/window.rs` lines 1821-1822; `wezterm-toast-notification/src/macos.rs` line 36.
 
-- **Exit behavior message links to `wezterm.org`**: Displayed inline in the terminal when a program exits.
-  - Evidence: `mux/src/localpane.rs` line 269:
-    ```
-    \x1b]8;;https://wezterm.org/config/lua/config/exit_behavior.html\x1b\\exit_behavior
-    ```
+- **macOS app bundle renamed**: `assets/macos/WezTerm.app` is now `assets/macos/ArcTerm.app`.
+  - Evidence: `ls /Users/lgbarn/Personal/arcterm/assets/macos/` returns `ArcTerm.app`.
 
-- **macOS quit dialog still says "Terminate WezTerm?"**: Internal Objective-C class name unchanged.
-  - Evidence: `window/src/os/macos/app.rs` line 30: `let message_text = nsstring("Terminate WezTerm?");`
+- **Update checker URL corrected**: Now fetches from `lgbarn/arcterm` GitHub releases, not `wezterm/wezterm`.
+  - Evidence: `wezterm-gui/src/update.rs` lines 56, 61; User-Agent changed to `arcterm/<version>` at line 42.
 
-- **macOS Objective-C class names are "WezTermWindow", "WezTermWindowView", "WezTermAppDelegate"**: These are internal runtime class names but will appear in crash reports and diagnostics.
-  - Evidence: `window/src/os/macos/window.rs` lines 1821-1822; `window/src/os/macos/app.rs` line 16; `window/src/os/macos/menu.rs` line 367.
+- **Linux `.desktop` file rebranded**: Renamed to `arcterm.desktop`, uses `com.lgbarn.arcterm` app-id.
+  - Evidence: `assets/arcterm.desktop` lines 1-10.
 
-- **macOS notification delegate class named "WezTermNotifDelegate"**: Appears in macOS notification system logs.
-  - Evidence: `wezterm-toast-notification/src/macos.rs` line 36.
+- **AppStream/Flatpak metadata rebranded**: Files renamed to `arcterm.appdata.xml` and `com.lgbarn.arcterm.*`.
+  - Evidence: `assets/arcterm.appdata.xml`; `assets/flatpak/com.lgbarn.arcterm.json`.
 
-- **macOS app bundle is still `assets/macos/WezTerm.app/`**: The bundle directory name, its `Info.plist` (14 occurrences of "WezTerm"), and all CI packaging scripts reference the `WezTerm.app` path.
-  - Evidence: `assets/macos/WezTerm.app/Contents/Info.plist` (14 occurrences); `ci/deploy.sh` lines 22, 30, 33-36.
+- **FUNDING.yml updated**: Now routes to `lgbarn` only.
+  - Evidence: `.github/FUNDING.yml` line 1: `github: lgbarn`.
 
-- **Windows installer still branded as WezTerm**: The InnoSetup script has hardcoded publisher and URL.
-  - Evidence: `ci/windows-installer.iss` lines 7-8:
-    ```
-    #define MyAppPublisher "Wez Furlong"
-    #define MyAppURL "http://wezterm.org"
-    ```
+- **CI tag workflows repointed**: `gen_macos_tag.yml` now uploads `ArcTerm-*.zip` to `lgbarn/arcterm` releases. No references to `wez/homebrew-wezterm`, `push.fury.io/wez/`, or `wez/winget-pkgs` found in any workflow file.
+  - Evidence: `.github/workflows/gen_macos_tag.yml` lines 111, 121.
 
-- **`build.rs` Windows VERSIONINFO still says "WezTerm"**: Sets the Windows binary's file description and product name metadata.
-  - Evidence: `wezterm-gui/build.rs` lines 122, 127:
-    ```
-    VALUE "FileDescription", "WezTerm - Wez's Terminal Emulator\0"
-    VALUE "ProductName",     "WezTerm\0"
-    ```
-  - Also: `wezterm-gui/build.rs` line 168 references the `WezTerm.app` path for macOS builds.
+- **WASM plugin infrastructure**: `arcterm-wasm-plugin` crate now exists with capability enforcement, loader, lifecycle manager, and host API registration.
+  - Evidence: `arcterm-wasm-plugin/src/` (7 source files).
 
-- **SSH multiplexing enum variant `SshMultiplexing::WezTerm`**: Public API name visible in Lua config.
-  - Evidence: `config/src/ssh.rs` line 22 (enum definition); `wezterm-mux-server-impl/src/lib.rs` line 20 (match arm). Renaming this is a breaking change for users' Lua configs.
-  - Remediation: Add `SshMultiplexing::ArcTerm` as an alias; deprecate `WezTerm` variant.
+- **AI integration crate**: `arcterm-ai` crate now exists with Ollama and Claude backends, context extraction, suggestions, agent session, destructive detection.
+  - Evidence: `arcterm-ai/src/` (10 source files).
 
-- **`strip-ansi-escapes` binary docstring**: Minor, but the utility identifies itself as part of WezTerm.
-  - Evidence: `strip-ansi-escapes/src/main.rs` line 11: `/// This utility is part of WezTerm.`
+- **Structured output (OSC 7770) removed**: `arcterm-structured-output` crate is completely absent from the workspace.
+  - Evidence: Glob for `arcterm-structured-output/**` returns no files; grep for `7770` in `*.rs` and `*.toml` returns no matches.
 
-- **Linux desktop entry still branded as WezTerm**: Affects taskbar, app launcher, and Wayland app_id.
-  - Evidence: `assets/wezterm.desktop` lines 2, 5-6: `Name=WezTerm`, `Icon=org.wezfurlong.wezterm`, `StartupWMClass=org.wezfurlong.wezterm`.
+- **Path traversal in WASM capability check**: The `..` component bypass documented in AUDIT-main.md [I1] has been fixed.
+  - Evidence: `arcterm-wasm-plugin/src/capability.rs` lines 127-129: `requested.components().any(|c| matches!(c, std::path::Component::ParentDir))` — a test `test_path_traversal_blocked` covers both traversal patterns at lines 240-259.
 
-- **AppStream/Flatpak metadata**: Full upstream identity including `org.wezfurlong.wezterm` app-id.
-  - Evidence: `assets/wezterm.appdata.xml`, `assets/flatpak/org.wezfurlong.wezterm.json`.
+- **`SshMultiplexing` enum default updated**: Default is now `ArcTerm`; `WezTerm` variant is retained as a legacy alias with a deprecation comment.
+  - Evidence: `config/src/ssh.rs` lines 22-28.
 
-- **Shell completion scripts embed the old window class string**: Users will see `org.wezfurlong.wezterm` in shell completions.
-  - Evidence: `assets/shell-completion/zsh` (multiple lines), `assets/shell-completion/fish` (multiple lines).
+#### 2b. Remaining Rebrand Issues
 
-#### 2b. CI/CD Pipeline Still Targeting Upstream Infrastructure
+- **Windows installer publisher still "Wez Furlong"**: The `MyAppPublisher` define in the InnoSetup script was not updated; only the URL was changed.
+  - Evidence: `ci/windows-installer.iss` line 7: `#define MyAppPublisher "Wez Furlong"`.
 
-**Severity: Critical** -- If tag-based workflows are triggered, they will attempt to push releases to repositories owned by Wez Furlong.
+- **Windows binary `CompanyName` still "Wez Furlong"**: The VERSIONINFO resource in `build.rs` has `ProductName = "ArcTerm"` and `FileDescription = "ArcTerm - AI-Powered Terminal Emulator"` (updated), but `CompanyName` and `LegalCopyright` still attribute to Wez Furlong. These appear as Windows file properties in the binary.
+  - Evidence: `wezterm-gui/build.rs` lines 121, 124.
+  - [Inferred] This is likely intentional attribution rather than an oversight, but could confuse Windows users inspecting the binary.
 
-- **macOS tag workflow pushes to `wez/homebrew-wezterm`**: Uses `GH_PAT` secret to checkout and commit to the upstream Homebrew tap.
-  - Evidence: `.github/workflows/gen_macos_tag.yml` lines 108-118.
+- **Shell completion scripts still reference `org.wezfurlong.wezterm` window class**: The generated fish and zsh completions describe the `--class` flag as defaulting to `org.wezfurlong.wezterm`. This misleads users trying to configure Wayland `app_id` targeting.
+  - Evidence: `assets/shell-completion/fish` line 21; `assets/shell-completion/zsh` (multiple lines).
 
-- **Ubuntu tag workflow pushes `.deb` to `push.fury.io/wez/`**: Uses `FURY_TOKEN` to upload packages to the upstream user's Gemfury account.
-  - Evidence: `.github/workflows/gen_ubuntu22.04_tag.yml` lines 113-115:
-    ```yaml
-    run: "for f in wezterm*.deb ; do curl -i -F package=@$f https://$FURY_TOKEN@push.fury.io/wez/ ; done"
-    ```
+- **Nautilus integration script still uses `org.wezfurlong.wezterm`**: The GNOME Files right-click extension identifies the app with the old class name and icon.
+  - Evidence: `assets/wezterm-nautilus.py` lines 49, 60.
 
-- **Ubuntu tag workflow pushes to `wez/homebrew-wezterm-linuxbrew`**.
-  - Evidence: `.github/workflows/gen_ubuntu20.04_tag.yml` line 127.
+- **`wezterm.org` links remain in the Help menu**: The Documentation and Discussions menu entries in commands.rs still link to `wezterm.org` and `github.com/wezterm/wezterm/discussions/`.
+  - Evidence: `wezterm-gui/src/commands.rs` lines 1674, 2166-2167.
 
-- **Windows tag workflow creates PR to `wez/winget-pkgs`**.
-  - Evidence: `.github/workflows/gen_windows_tag.yml` line 114.
-
-- **Release notes template points at `wezterm.org` changelog and install pages**.
-  - Evidence: `ci/create-release.sh` lines 6-13.
-
-- **Deploy script packages under `WezTerm-*.zip` artifact names**.
-  - Evidence: `ci/deploy.sh` lines 22-24, 104-110; `.github/workflows/gen_macos.yml` line 98: `path: "WezTerm-*.zip"`.
-
-- **RPM/DEB `deploy.sh` sets Packager to `Wez Furlong <wez@wezfurlong.org>`**.
-  - Evidence: `ci/deploy.sh` lines 191, 306.
-
-- **FUNDING.yml still routes donations to upstream maintainer**.
-  - Evidence: `.github/FUNDING.yml`: `github: wez`, `patreon: WezFurlong`, `ko_fi: wezfurlong`, `liberapay: wez`.
-
-- **`ci/check-rust-version.sh` error message links to `wezterm.org`**.
-  - Evidence: `ci/check-rust-version.sh` line 22: `echo "See https://wezterm.org/install/source.html"`.
+- **Release notes and docs URLs are placeholder stubs**: The update checker changelog link and the AppStream/Flatpak homepage URL contain `TODO.arcterm.dev` placeholder domains that will 404 if a user clicks them.
+  - Evidence: `wezterm-gui/src/update.rs` lines 92, 191; `assets/arcterm.appdata.xml` lines 30-31; `ci/create-release.sh` lines 6-13.
 
 ---
 
 ### 3. Security Concerns
 
-**Severity: Medium** -- No hardcoded credentials found. Concerns are structural.
+**Severity: High (for prototype-stage gaps that become critical on first real plugin execution)**
 
-- **Update checker sends unencrypted version string to GitHub API**: The request includes the ArcTerm/WezTerm version in the User-Agent; this is standard practice for GitHub API callers but worth noting.
-  - Evidence: `wezterm-gui/src/update.rs` line 43-45.
+#### 3a. From AUDIT-main.md — Still Open
+
+- **[AUDIT I2] LLM response rendered as raw terminal text (escape injection)**: Tokens from the LLM backend are passed directly to `Change::Text()` without stripping ANSI escape sequences. A compromised or adversarially prompted LLM could inject terminal control sequences (window title change, clipboard write via OSC 52, alternate screen switch).
+  - Evidence: `wezterm-gui/src/ai_pane.rs` line 221: `term.render(&[Change::Text(display_token)])?;` — no sanitization. `wezterm-gui/src/overlay/ai_command_overlay.rs` line 183: `result.push_str(token)` (collected and then later passed to the overlay display path without stripping).
+  - Remediation: The `strip-ansi-escapes` crate is already in the workspace; apply it to all LLM token streams before rendering.
+
+- **[AUDIT I4] Terminal scrollback sent to remote LLM without explicit user consent gate**: `open_ai_pane` and `show_command_overlay` both call `AiConfig::default()` which hardcodes the Ollama backend — safe today. However, there is no architectural gate preventing a user config (when the Lua AI config API is added) from silently switching to the Claude backend, which would transmit terminal scrollback to `https://api.anthropic.com/v1/messages` without a consent prompt.
+  - Evidence: `wezterm-gui/src/ai_pane.rs` lines 25-26; `arcterm-ai/src/backend/claude.rs` lines 44-49: `ureq::post(CLAUDE_API_URL)...send_json(&body)` — no consent check.
+  - Remediation: Add `ai.allow_remote_backend = false` config key; enforce in `create_backend`; add runtime prompt before first remote call.
+
+- **[AUDIT A1] `sk-ant-test` test fixture matches Anthropic key prefix pattern**: The string `sk-ant-test` appears in four source locations and matches the `sk-ant-` prefix used by real Anthropic API keys. GitHub secret scanning and tools like truffleHog will flag this as a potential credential leak.
+  - Evidence: `arcterm-ai/src/backend/claude.rs` lines 69, 88; `arcterm-ai/src/config.rs` line 55; `arcterm-ai/tests/backend_tests.rs` line 20.
+  - Remediation: Replace with `"test-key-not-real"` or similar clearly synthetic value.
+
+- **[AUDIT A2] `terminal:read` unconditionally granted to every WASM plugin**: Every plugin automatically receives `terminal:read` regardless of declared capabilities. This violates least privilege — a plugin declared with only `net:connect:api.example.com:443` can also read terminal output.
+  - Evidence: `arcterm-wasm-plugin/src/capability.rs` lines 97-110: `// Ensure terminal:read is always granted`.
+  - Note: This is currently safe because actual WASM callbacks are not dispatched (guest `Instance` is not stored; see §8a below). It becomes a security gap the moment instantiation is wired.
+  - Remediation: Remove the unconditional default; require explicit `terminal:read` declaration.
+
+- **[AUDIT A3] No upper bound on `memory_limit_mb` from Lua config**: A user config can set an arbitrarily large `memory_limit_mb`, potentially allowing a plugin to exhaust all available host RAM. The `checked_mul` in `loader.rs:146` catches overflow for values that overflow `usize`, but a value of `65536` (64 GB) passes through and creates a `StoreLimitsBuilder` with a 64 GB ceiling.
+  - Evidence: `lua-api-crates/plugin/src/lib.rs` line 254: `let memory_limit_mb: u32 = config_table.get("memory_limit_mb").unwrap_or(64)` — no cap.
+  - Remediation: Clamp to a configurable maximum (suggested: 512 MB) in the Lua registration function.
+
+- **[AUDIT A4] Plugin name not validated for log injection**: The `name` field from Lua config is used directly in `log::info!("[plugin/{}] ...")` calls. A plugin name containing newlines, ANSI codes, or syslog control characters could corrupt log output or confuse log parsers.
+  - Evidence: `arcterm-wasm-plugin/src/lifecycle.rs` line 49: `log::info!("Plugin '{}': {} → {}", self.name, ...)`; `arcterm-wasm-plugin/src/host_api.rs` lines 61, 68, 74.
+  - Remediation: Validate plugin names to `[a-zA-Z0-9_-]` at registration time in `lua-api-crates/plugin/src/lib.rs`.
+
+- **[AUDIT A5] CI deploy script echoes macOS certificate password hash and uses `eval`**: Line 59 of `deploy.sh` writes `SHA-1(MACOS_PW)` to CI build logs. Line 62 uses `eval` on keychain output, which is exploitable if the keychain name contains shell metacharacters.
+  - Evidence: `ci/deploy.sh` lines 59, 62.
+  - Remediation: Remove the `shasum` line; replace `eval echo $(...)` with `$(... | tr -d '"')`.
+
+#### 3b. Inherited (from WezTerm)
 
 - **~855 raw `unsafe` blocks across non-vendor Rust source**: Unsafe is pervasive in font rasterization (HarfBuzz FFI, FreeType FFI), PTY handling, windowing (macOS Objective-C bridge, Wayland, Win32), and the SSH session layer. This is inherited upstream code with a long test history, but any ArcTerm-added unsafe code in new crates must be reviewed carefully.
-  - Evidence: `wezterm-font/src/hbwrap.rs`, `wezterm-font/src/ftwrap.rs`, `wezterm-font/src/fcwrap.rs`, `pty/src/unix.rs`, `pty/src/win/`, `window/src/os/macos/`, `wezterm-ssh/src/sessioninner.rs` (multiple).
+  - Evidence: `wezterm-font/src/hbwrap.rs`, `wezterm-font/src/ftwrap.rs`, `pty/src/unix.rs`, `window/src/os/macos/`, `wezterm-ssh/src/sessioninner.rs` (multiple).
 
-- **SSH host key verification delegates to libssh2's known_hosts**: This is correct behavior, but the code path at `wezterm-ssh/src/host.rs` line 107 will prompt users interactively when a new key is encountered. There is no automated acceptance mechanism, which is safe but means headless/CI use of SSH is difficult.
-  - Evidence: `wezterm-ssh/src/host.rs` lines 107-190.
-
-- **macOS entitlements are overly broad**: The entitlement plist requests Bluetooth, Camera, Audio Input, Contacts, Calendar, Location, and Photos Library access. These were inherited from upstream WezTerm where they were set to allow child processes (shells) to request those permissions. For ArcTerm's AI use cases, this permission set will need to be reviewed -- AI panes connecting to external services may require additional entitlements (e.g., outgoing network connections) while the current blanket grants may prompt macOS to display confusing permission dialogs.
-  - Evidence: `ci/macos-entitlement.plist`.
-
-- **`cargo deny` is configured but not run in CI**: The `deny.toml` file exists and is properly structured, but no CI workflow invokes `cargo deny check`. Security advisories for dependencies will not be caught automatically.
-  - Evidence: No `cargo deny` step found in any `.github/workflows/*.yml` file. `deny.toml` exists at project root.
+- **`cargo deny` is configured but not run in CI**: The `deny.toml` file exists and is properly structured, but no CI workflow invokes `cargo deny check`.
+  - Evidence: No `cargo deny` step found in any `.github/workflows/*.yml` file; `deny.toml` exists at project root.
 
 - **No `cargo audit` or `cargo clippy` in CI**: Neither security audit nor lint checking is automated.
   - Evidence: Grep of `.github/workflows/` finds no audit or clippy steps. Only `cargo fmt` (in `fmt.yml`) and `cargo nextest run` are automated quality gates.
+
+- **macOS entitlements are overly broad**: The entitlement plist requests Bluetooth, Camera, Audio Input, Contacts, Calendar, Location, and Photos Library access. For ArcTerm's AI use cases, outgoing network connections to Ollama and optionally Anthropic should be explicitly audited against this grant.
+  - Evidence: `ci/macos-entitlement.plist`.
+
+- **No macOS signing secrets provisioned**: Tag and continuous workflows reference `MACOS_CERT`, `MACOS_CERT_PW`, `MACOS_APPLEID`, `MACOS_APP_PW`, `MACOS_TEAM_ID`. Without these, macOS Gatekeeper will quarantine the app and the notification delegate will not function.
+  - Evidence: `.github/workflows/gen_macos_tag.yml` (signing section); `wezterm-toast-notification/src/macos.rs` lines 16-17.
 
 ---
 
@@ -160,52 +146,63 @@ ArcTerm is a fork of WezTerm at an early rebrand stage (Phase 1 just completed p
 
 **Severity: Medium**
 
-- **No `rust-toolchain.toml` or `rust-toolchain` file**: The minimum Rust version is pinned to 1.71.0 in `ci/check-rust-version.sh` as a shell check, but there is no `rust-toolchain.toml` to enforce this via `rustup`. CI uses `dtolnay/rust-toolchain@stable` (fmt workflow) or `dtolnay/rust-toolchain@nightly` without pinning a specific version. Contributors building locally will use whatever `rustc` they have installed.
-  - Evidence: `ci/check-rust-version.sh` (minimum `1.71.0`); `fmt.yml` (nightly, unpinned); no `rust-toolchain.toml` found in repo root.
+- **No `rust-toolchain.toml` to pin Rust version**: The minimum Rust version is enforced as a shell check in `ci/check-rust-version.sh` (minimum `1.71.0`) but there is no `rust-toolchain.toml`. Contributors building locally will use whatever `rustc` they have installed.
+  - Evidence: `ci/check-rust-version.sh` line 11; no `rust-toolchain.toml` found in repo root.
 
-- **CI workflows are generated from Python scripts, not written directly**: The workflow files are prefixed `gen_` and `ci/generate-workflows.py` is the source of truth. Manually editing the `.yml` files will have changes overwritten.
+- **CI workflows are generated from a Python script**: The `gen_*.yml` workflow files are generated by `ci/generate-workflows.py`. Manually editing `.yml` files will have changes overwritten on the next generation pass.
   - Evidence: `ci/generate-workflows.py`; all workflow files named `gen_*.yml`.
-  - [Inferred] Any ArcTerm-specific CI changes (e.g., pointing deployment at the correct repos) should be made in `generate-workflows.py`, not in the `.yml` files directly.
+  - [Inferred] ArcTerm-specific CI changes should be made in `generate-workflows.py`.
 
-- **`MACOSX_DEPLOYMENT_TARGET` is `10.12`**: macOS 10.12 (Sierra, 2016) reached end-of-life in October 2019. Apple dropped support in Xcode 14 (2022). Building with this target on modern Xcode may produce warnings or fail.
+- **`MACOSX_DEPLOYMENT_TARGET` is EOL macOS 10.12**: macOS 10.12 (Sierra, 2016) reached end-of-life in October 2019. Building with this target on modern Xcode may produce warnings or fail.
   - Evidence: `.github/workflows/gen_macos.yml` line 29; `gen_macos_tag.yml` line 16; `gen_macos_continuous.yml` line 32.
 
-- **`sccache-action` pinned to `v0.0.9`**: The sccache GitHub Action was at a very old version at time of analysis. Pinned action versions can become stale.
-  - Evidence: `.github/workflows/gen_macos.yml` line 43: `uses: mozilla-actions/sccache-action@v0.0.9`.
+- **`sccache-action` pinned to `v0.0.9`**: The sccache GitHub Action is pinned to a very old version.
+  - Evidence: `.github/workflows/gen_macos.yml` line 43.
 
-- **Nix flake update workflow uses a PAT (`FLAKE_LOCK_GH_PAT`)**: This PAT would need to be provisioned in the fork's secrets for the flake lock auto-update to work.
+- **Nix flake update workflow uses a PAT (`FLAKE_LOCK_GH_PAT`)**: This PAT must be provisioned in the fork's secrets for the flake lock auto-update to work.
   - Evidence: `.github/workflows/nix-update-flake.yml` line 24.
-
-- **No secrets for macOS signing are provisioned in the fork**: The tag and continuous workflows reference `MACOS_CERT`, `MACOS_CERT_PW`, `MACOS_APPLEID`, `MACOS_APP_PW`, `MACOS_TEAM_ID` -- these were the upstream author's Apple Developer credentials and would need to be replaced with ArcTerm's own for code-signed builds.
-  - Evidence: `.github/workflows/gen_macos_tag.yml` lines 82-83, 96.
-  - Consequence: Without signing, macOS will quarantine the app on first launch and show Gatekeeper warnings. The macOS notification delegate (`WezTermNotifDelegate`) specifically notes signing is required for `UNUserNotificationCenter` to work: `wezterm-toast-notification/src/macos.rs` line 16-17.
 
 ---
 
 ### 5. Technical Debt (TODO/FIXME/HACK Comments)
 
-**Severity: Low-Medium** -- All inherited from upstream WezTerm; none are ArcTerm-introduced.
+**Severity: Low-Medium**
 
-- **`mux/src/termwiztermtab.rs` line 113**: Terminal writer is a `Vec::new()` (a black hole) with comment `// FIXME: connect to something?`. This means terminal output from the termwiz tab type is silently discarded rather than sent anywhere useful. This affects the overlay pane type.
+#### 5a. ArcTerm-Introduced TODOs
+
+- **WASM plugin instantiation is not wired** (High impact when addressed): `load_single_plugin` compiles the WASM component and creates the Store but discards the `_loaded` result. The guest `Instance` is never actually instantiated against the host API linker. No WASM callbacks are dispatched today. The `shutdown_all` method similarly notes it cannot call `instance.call_destroy()` yet.
+  - Evidence: `arcterm-wasm-plugin/src/lifecycle.rs` lines 139-148 (`let _loaded = ...; // TODO: Store _loaded`), lines 177-179 (`// TODO: Call instance.call_destroy`).
+  - Risk: When this wiring is completed, the security gaps flagged in §3a (unconditional `terminal:read` grant, plugin name log injection, memory limit) become immediately exploitable.
+
+- **Network host API is a stub**: `http-get` and `http-post` host functions pass the capability check but return `Err("network not yet implemented")`. No actual HTTP client is wired.
+  - Evidence: `arcterm-wasm-plugin/src/host_api.rs` lines 209-210, 234-235.
+
+- **Terminal write host API is a stub**: `send-text` and `inject-output` pass the capability check but only log; no actual pane routing is wired.
+  - Evidence: `arcterm-wasm-plugin/src/host_api.rs` lines 311-312, 337-338.
+
+- **AI config is not wired to Lua user config**: Both `open_ai_pane` and `show_command_overlay` call `AiConfig::default()` directly, bypassing any user configuration. There is no path from the user's `arcterm.lua` to configure `backend`, `api_key`, or `model`.
+  - Evidence: `wezterm-gui/src/ai_pane.rs` line 25; `wezterm-gui/src/overlay/ai_command_overlay.rs` line 97.
+  - Risk: The Claude backend can only be activated by a code change today — but when Lua config integration is added, the missing consent gate (§3a, AUDIT I4) will become immediately reachable.
+
+- **Release notes URLs are `TODO.arcterm.dev` placeholders**: These will 404 if clicked by any user who receives an update notification.
+  - Evidence: `wezterm-gui/src/update.rs` line 92; `ci/create-release.sh` lines 6-13.
+
+- **`SshMultiplexing::WezTerm` wiki URL is a TODO**: The deprecation comment links to a non-existent wiki page.
+  - Evidence: `config/src/ssh.rs` line 26: `// See: https://github.com/lgbarn/arcterm/wiki/Configuration (TODO: update URL)`.
+
+#### 5b. Inherited from WezTerm
+
+- **`mux/src/termwiztermtab.rs` terminal writer is a black hole**: The terminal writer is `Vec::new()` with comment `// FIXME: connect to something?`. Terminal output from the termwiz tab type is silently discarded.
   - Evidence: `mux/src/termwiztermtab.rs` line 113.
 
-- **`mux/src/lib.rs` lines 1233, 1240, 1389**: Clipboard integration missing in mux pixel dimension calculations.
-  - Evidence: `mux/src/lib.rs` lines 1233, 1240: `// FIXME: clipboard`, `// FIXME: split pane pixel dimensions`.
+- **`mux/src/lib.rs` clipboard and split pane pixel dimension FIXMEs**:
+  - Evidence: `mux/src/lib.rs` lines 1233, 1240.
 
-- **`mux/src/ssh.rs` line 266**: `// FIXME: this isn't useful without a way to talk to the remote mux.`
-  - Evidence: `mux/src/ssh.rs` line 266.
+- **`wezterm-input-types/src/lib.rs` Hyper and Meta modifier keys unhandled**:
+  - Evidence: Lines 1750, 1893.
 
-- **`wezterm-client/src/client.rs` line 201**: `// FIXME: We currently get a bunch of these` (referring to a class of errors that is logged but not handled).
-  - Evidence: `wezterm-client/src/client.rs` line 201.
-
-- **`termwiz/src/render/terminfo.rs`**: Multiple TODO items around image rendering (sixel, iterm protocol) and terminfo feature detection.
-  - Evidence: Lines 397, 419, 547, 602, 624, 1083.
-
-- **`wezterm-input-types/src/lib.rs`**: Hyper and Meta modifier keys are not handled.
-  - Evidence: Lines 1750, 1893: `// TODO: Hyper and Meta are not handled yet.`
-
-- **Significant dead code suppression in font subsystem**: `wezterm-font/src/hbwrap.rs` and `wezterm-font/src/fcwrap.rs` contain numerous `#[allow(dead_code)]` and `#[allow(unused)]` attributes, suggesting the HarfBuzz and Fontconfig FFI wrappers expose more API surface than is actively used.
-  - Evidence: `wezterm-font/src/hbwrap.rs` lines 24, 252, 291, 306, 373, 411, 416, 510, 522, 528, 530, 957, 994, 1013, 1026, 1033, 1073; `wezterm-font/src/fcwrap.rs` line 248.
+- **Significant dead code suppression in font subsystem**: `#[allow(dead_code)]` and `#[allow(unused)]` attributes throughout HarfBuzz and Fontconfig FFI wrappers.
+  - Evidence: `wezterm-font/src/hbwrap.rs` (16+ attributes); `wezterm-font/src/fcwrap.rs` line 248.
 
 ---
 
@@ -213,23 +210,20 @@ ArcTerm is a fork of WezTerm at an early rebrand stage (Phase 1 just completed p
 
 **Severity: Low** -- Dependencies are generally current; workspace-level version management is used consistently.
 
-- **`bitflags` version split**: The workspace specifies `bitflags = "1.3"` but the lock file resolves both `1.3.2` and `2.10.0`. This indicates at least one transitive dependency requires bitflags v2. When bitflags v2 was released it had a breaking API change; using both versions adds binary size.
+- **`bitflags` version split**: Workspace specifies `bitflags = "1.3"` but lock file resolves both `1.3.2` and `2.10.0`.
   - Evidence: `Cargo.toml` line 51; `Cargo.lock` (both versions present).
 
-- **`mlua` at `0.9.9`; `mlua 0.10` was released**: mlua 0.10 introduced breaking API changes. Upgrading requires testing all Lua bindings in `lua-api-crates/` and `config/src/lua/`. For ArcTerm's planned Lua extension API for AI features, staying on 0.9 means building on an outdated API.
-  - Evidence: `Cargo.toml` line (mlua = "0.9"); `Cargo.lock` (version "0.9.9"). [Inferred from mlua changelog knowledge -- version 0.10 released September 2024.]
+- **`mlua` at `0.9.9`; `mlua 0.10` was released**: mlua 0.10 introduced breaking API changes. Upgrading requires testing all Lua bindings in `lua-api-crates/` and `config/src/lua/`.
+  - Evidence: `Cargo.toml` (`mlua = "0.9"`); `Cargo.lock` (version "0.9.9"). [Inferred from mlua changelog knowledge.]
 
-- **`ssh2` workspace version `"0.9.3"` but lock resolves `0.9.5`**: Minor version drift between declared and resolved; not a concern but indicates the lock file was updated without updating the workspace manifest.
-  - Evidence: `Cargo.toml` line 208; `Cargo.lock` (version "0.9.5").
-
-- **`deny.toml` wildcards policy is `allow`**: The `bans.wildcards = "allow"` setting means wildcard version constraints (e.g., `version = "*"`) will not trigger any warning. Wildcard constraints are a security and reproducibility risk.
+- **`deny.toml` wildcards policy is `allow`**: The `bans.wildcards = "allow"` setting means wildcard version constraints will not trigger warnings.
   - Evidence: `deny.toml` line 157.
 
-- **`deny.toml` is effectively unconfigured for bans and advisories**: The `ignore`, `deny`, and `skip` lists are all empty/commented out. This is the template file with no project-specific rules applied.
+- **`deny.toml` is effectively unconfigured for bans and advisories**: The `ignore`, `deny`, and `skip` lists are all empty/commented out.
   - Evidence: `deny.toml` lines 72-77, 178-184.
 
-- **Ongoing dependency churn visible in commit history**: Recent commits include automated bumps for `lru`, `time`, `git2`, `bytes`. This is healthy maintenance but the velocity suggests upstream is actively managing security updates that ArcTerm will need to merge regularly.
-  - Evidence: Git log (`build(deps): bump lru from 0.12.5 to 0.16.3`, `build(deps): bump time from 0.3.44 to 0.3.47`, etc.).
+- **Ongoing dependency churn from upstream**: Automated bumps for `lru`, `time`, `git2`, `bytes` will continue arriving from upstream and must be merged regularly.
+  - Evidence: Recent git log entries (`build(deps): bump lru`, `build(deps): bump time`, etc.).
 
 ---
 
@@ -237,88 +231,92 @@ ArcTerm is a fork of WezTerm at an early rebrand stage (Phase 1 just completed p
 
 **Severity: Low** -- Inherited from WezTerm with no ArcTerm-specific changes yet.
 
-- **Rendering pipeline has ~85 `Arc`/`Mutex`/`RwLock` instances in `mux/src/` alone**: The mux uses `parking_lot` locks (which are faster than `std::sync` locks) pervasively. High lock contention under AI workloads that inspect multiple panes simultaneously could become a bottleneck.
-  - Evidence: `mux/src/lib.rs`, `mux/src/localpane.rs`, `mux/src/termwiztermtab.rs` (all use `parking_lot`). Count from grep: 85 instances.
-  - [Inferred] AI cross-pane context reading (planned feature) will require taking read locks on multiple panes; the lock ordering must be established to avoid deadlocks.
+- **High `Arc`/`Mutex`/`RwLock` density in mux**: AI cross-pane context reads will require taking read locks on multiple panes simultaneously. Lock ordering must be established to avoid deadlocks.
+  - Evidence: `mux/src/lib.rs`, `mux/src/localpane.rs`, `mux/src/termwiztermtab.rs` (all use `parking_lot`). ~85 instances in `mux/src/` alone.
+  - [Inferred] The agent session's multi-step execution model adds a new pattern where AI pane and host pane share state across async event loop turns.
 
-- **Synchronous update checker blocks a dedicated thread**: The update check uses `http_req` (a synchronous HTTP library) on a dedicated thread spawned at startup. This is fine for update checks but is not a pattern suitable for AI API calls, which will need async (`reqwest` is already in the workspace for `sync-color-schemes`).
-  - Evidence: `wezterm-gui/src/update.rs` lines 4-5 (`use http_req::request`), lines 225-232 (thread spawn).
+- **Synchronous HTTP in AI backends**: Both `OllamaBackend` and `ClaudeBackend` use `ureq` (synchronous blocking HTTP) for streaming responses. The streaming loop in `ai_pane.rs` runs on a dedicated TermWiz thread (acceptable), but any future move to async will require re-evaluation.
+  - Evidence: `arcterm-ai/src/backend/ollama.rs` line 34 (`ureq::post`); `arcterm-ai/src/backend/claude.rs` line 44 (`ureq::post`); `wezterm-gui/src/ai_pane.rs` line 192 (`BufReader::new`).
 
-- **No explicit performance profiling tooling in CI**: There is a `benchmarking` crate used in `wezterm-gui/src/shapecache.rs` (bench for text shaping) but it is not run in CI. No regression gates exist.
+- **No explicit performance profiling tooling in CI**: The benchmarking crate is used for text shaping but not run in CI. No regression gates exist.
   - Evidence: `wezterm-gui/src/shapecache.rs` lines 259-304.
 
 ---
 
-### 8. Missing Infrastructure for Planned Features
+### 8. Operational Gaps
 
-**Severity: High** -- The three planned ArcTerm extensions have no infrastructure yet.
+**Severity: Low** -- No health checks, metrics, or structured logging added for ArcTerm-specific code.
 
-#### 8a. WASM Plugin System
+- **No health check endpoint for Ollama connectivity**: The `is_available()` check uses a 2-second timeout `GET /api/tags`, which blocks the TermWiz thread briefly on startup. If Ollama is slow, this causes a noticeable delay opening the AI pane.
+  - Evidence: `arcterm-ai/src/backend/ollama.rs` lines 42-49.
 
-- **No `wasmtime` or equivalent in the workspace**: The WASM plugin crate (`arcterm-wasm-plugin`) described in `docs/plans/2026-03-18-wezterm-fork-plan.md` does not exist and `wasmtime` is not a workspace dependency. The existing `lua-api-crates/plugin/` is a Lua-based Git plugin loader (fetches Lua plugins from GitHub), not a WASM host.
-  - Evidence: `Cargo.toml` -- no `wasmtime`; `lua-api-crates/plugin/src/lib.rs` (Git-based Lua plugin loader only); `deps/harfbuzz/harfbuzz/src/wasm/sample/rust/hello-wasm/` uses `wasm-bindgen 0.2` but only as a harfbuzz sample.
-  - Missing: WASM component model loader, capability sandbox, plugin lifecycle management, host API surface.
+- **Destructive command detection is advisory, not a security boundary**: The `is_destructive()` function uses substring matching and is bypassable (e.g., shell aliases, obfuscation, `base64 | bash`). The UI displays a red warning without a disclaimer that it is heuristic-only.
+  - Evidence: `arcterm-ai/src/destructive.rs` lines 44-48; `wezterm-gui/src/ai_pane.rs` lines 139-143.
+  - Recommendation: Add "Warning is advisory only — review before running" text adjacent to the red warning.
 
-- **No plugin dispatch hook in the terminal state machine**: To expose terminal state to WASM plugins, `term/src/terminalstate/performer.rs` would need to call plugin callbacks on relevant events (key input, output, OSC sequences). No such hook exists.
-  - Evidence: `term/src/terminalstate/performer.rs` -- no plugin or hook call sites visible.
-
-#### 8b. AI Integration Layer
-
-- **No `arcterm-ai` crate**: The AI pane, Ollama client, and cross-pane context system described in `docs/plans/2026-03-17-local-llm-implementation.md` do not exist in any form. The plan references `arcterm-app/src/config.rs` paths from the original (pre-fork) arcterm project, which are not present here.
-  - Evidence: `ls /Users/lgbarn/Personal/arcterm/ | grep arcterm` -- no arcterm-prefixed crates found. The plan's Task 1 references `arcterm-app/src/config.rs` which does not exist in this workspace.
-  - Missing: Ollama HTTP client, AI config section, AI pane type, cross-pane context reader, command suggestion overlay.
-
-- **`reqwest` is in the workspace but only used for the `sync-color-schemes` utility crate**: The async HTTP client that the AI integration will need is present as a workspace dependency but not wired into the GUI codebase yet.
-  - Evidence: `Cargo.toml` line 184: `reqwest = "0.12"`; only `sync-color-schemes/Cargo.toml` uses it.
-
-- **No async runtime in `wezterm-gui`**: The GUI binary uses WezTerm's custom `promise` executor rather than Tokio. Adding Tokio for AI HTTP streaming would require either integrating the two runtimes (possible but complex) or implementing streaming over the `promise` executor.
-  - Evidence: `Cargo.toml` `tokio = "1.0"` is a workspace dependency; `wezterm-gui/Cargo.toml` would need to be checked for whether it opts in. [Inferred] The `promise` crate at `promise/` is a custom async executor used by WezTerm's GUI thread.
+- **No structured logging in arcterm-ai or arcterm-wasm-plugin**: Both crates use `log::info!`/`log::warn!`/`log::error!` (unstructured). Correlating plugin events with AI responses in production logs will be difficult without a request ID or plugin ID in each log line.
+  - Evidence: `arcterm-wasm-plugin/src/host_api.rs` (all log calls are plain string format); `arcterm-ai/src/agent.rs` (no log calls at all).
 
 ---
 
 ## Summary Table
 
-| Concern | Severity | Category | Confidence |
-|---------|----------|----------|------------|
-| 13 rebrand files uncommitted (at risk from `git restore`) | Critical | Rebrand / Git | Observed |
-| Update checker points at `wezterm/wezterm` releases | Critical | Rebrand / UX | Observed |
-| Tag CI workflows push to `wez/` repos (Homebrew, Gemfury, winget) | Critical | CI / Rebrand | Observed |
-| macOS app bundle is still `WezTerm.app` | High | Rebrand | Observed |
-| Windows installer binary metadata says "WezTerm" | High | Rebrand | Observed |
-| Quit dialog says "Terminate WezTerm?" | High | Rebrand / UX | Observed |
-| `SshMultiplexing::WezTerm` enum variant in public Lua API | High | Rebrand / API | Observed |
-| `FUNDING.yml` routes donations to upstream author | High | Rebrand | Observed |
-| No WASM plugin infrastructure exists | High | Missing Feature | Observed |
-| No AI integration crate exists | High | Missing Feature | Observed |
-| macOS signing secrets not provisioned | High | CI / Build | Observed |
-| No `cargo deny check` in CI | Medium | Security | Observed |
-| No `cargo audit` or `cargo clippy` in CI | Medium | Security / Quality | Observed |
-| `wezterm.org` URLs in user-visible error messages | Medium | Rebrand / UX | Observed |
-| macOS Objective-C class names still "WezTerm*" | Medium | Rebrand | Observed |
-| `MACOSX_DEPLOYMENT_TARGET` is EOL macOS 10.12 | Medium | Build | Observed |
-| No `rust-toolchain.toml` to pin Rust version | Medium | Build | Observed |
-| CI workflows generated from Python script (easy to accidentally overwrite) | Medium | CI | Observed |
-| `deny.toml` not configured (bans/advisories lists empty) | Medium | Dependency Health | Observed |
-| `bitflags` dual version 1.x and 2.x in dependency graph | Low | Dependency Health | Observed |
-| `mlua` at 0.9.x; 0.10 available with breaking changes | Low | Dependency Health | Inferred |
-| ~855 unsafe blocks inherited from upstream | Low | Security | Observed |
-| `termwiztermtab` writer is `Vec::new()` (black hole) | Low | Technical Debt | Observed |
-| No async runtime wired into GUI for AI HTTP streaming | Low | Architecture | Inferred |
-| No profiling/benchmarking gates in CI | Low | Performance | Observed |
+| Concern | Severity | Category | Status | Confidence |
+|---------|----------|----------|--------|------------|
+| WASM plugin instantiation not wired (callbacks never dispatch) | High | Architecture | Open | Observed |
+| LLM response rendered without ANSI escape stripping | High | Security | Open | Observed |
+| No consent gate before sending scrollback to remote LLM backend | High | Security | Open | Observed |
+| `terminal:read` unconditionally granted to all WASM plugins | High | Security | Open | Observed |
+| AI config not wired to Lua user configuration | High | Architecture | Open | Observed |
+| `sk-ant-test` in test fixtures matches real key prefix pattern | Medium | Security | Open | Observed |
+| No upper bound on plugin `memory_limit_mb` from Lua config | Medium | Security | Open | Observed |
+| Plugin name not validated for log injection | Medium | Security | Open | Observed |
+| CI deploy script echoes password hash, uses `eval` on keychain output | Medium | Security | Open | Observed |
+| Network and terminal-write host API functions are stubs | Medium | Architecture | Open | Observed |
+| Release notes URLs are `TODO.arcterm.dev` placeholders (will 404) | Medium | UX | Open | Observed |
+| Shell completion scripts reference `org.wezfurlong.wezterm` | Low | Rebrand | Open | Observed |
+| Nautilus integration script uses old `org.wezfurlong.wezterm` class | Low | Rebrand | Open | Observed |
+| Help menu links to `wezterm.org` and `github.com/wezterm` | Low | Rebrand / UX | Open | Observed |
+| Windows installer `MyAppPublisher` still "Wez Furlong" | Low | Rebrand | Open | Observed |
+| `SshMultiplexing::WezTerm` legacy alias (wiki URL is a TODO) | Low | Rebrand | Open | Observed |
+| No `cargo deny check` in CI | Medium | Security | Open | Observed |
+| No `cargo audit` or `cargo clippy` in CI | Medium | Security / Quality | Open | Observed |
+| No `rust-toolchain.toml` to pin Rust version | Medium | Build | Open | Observed |
+| `MACOSX_DEPLOYMENT_TARGET` is EOL macOS 10.12 | Medium | Build | Open | Observed |
+| CI workflows generated from Python script | Medium | CI | Open | Observed |
+| macOS signing secrets not provisioned | High | CI / Build | Open | Observed |
+| `deny.toml` not configured (bans/advisories lists empty) | Medium | Dependency Health | Open | Observed |
+| Synchronous HTTP in AI backends (ureq on TermWiz thread) | Low | Performance | Open | Observed |
 | Lock contention risk for AI cross-pane context reads | Low | Performance | Inferred |
+| ~855 unsafe blocks inherited from upstream | Low | Security | Open | Observed |
+| `termwiztermtab` writer is `Vec::new()` (black hole) | Low | Technical Debt | Open | Observed |
+| `bitflags` dual version 1.x and 2.x in dependency graph | Low | Dependency Health | Open | Observed |
+| `mlua` at 0.9.x; 0.10 available with breaking changes | Low | Dependency Health | Inferred |
+| Destructive command detection advisory but UI implies certainty | Low | UX / Security | Open | Observed |
+| Path traversal via `..` in WASM filesystem capability | Critical | Security | **[Resolved - 2026-03-19]** | Observed |
+| 13 rebrand files uncommitted (at risk from `git restore`) | Critical | Rebrand / Git | **[Resolved - 2026-03-19]** | Observed |
+| Update checker pointed at `wezterm/wezterm` releases | Critical | Rebrand / UX | **[Resolved - 2026-03-19]** | Observed |
+| Tag CI workflows pushed to `wez/` repos | Critical | CI / Rebrand | **[Resolved - 2026-03-19]** | Observed |
+| macOS quit dialog said "Terminate WezTerm?" | High | Rebrand / UX | **[Resolved - 2026-03-19]** | Observed |
+| macOS Objective-C class names were "WezTerm*" | Medium | Rebrand | **[Resolved - 2026-03-19]** | Observed |
+| macOS app bundle was `WezTerm.app` | High | Rebrand | **[Resolved - 2026-03-19]** | Observed |
+| `FUNDING.yml` routed donations to upstream author | High | Rebrand | **[Resolved - 2026-03-19]** | Observed |
+| No WASM plugin infrastructure existed | High | Missing Feature | **[Resolved - 2026-03-19]** | Observed |
+| No AI integration crate existed | High | Missing Feature | **[Resolved - 2026-03-19]** | Observed |
+| Structured output (OSC 7770) crate | N/A | Removed Feature | **[Resolved - 2026-03-19]** | Observed |
 
 ---
 
 ## Open Questions
 
-1. **Is there an Apple Developer account for ArcTerm?** Without one, macOS code signing and notarization (required for Gatekeeper) cannot be configured, and the macOS notification system will not function.
+1. **When will WASM plugin instantiation be wired?** The TODO at `arcterm-wasm-plugin/src/lifecycle.rs:147` is the gate for all plugin security concerns. The security fixes (unconditional `terminal:read`, plugin name validation, memory cap) must land before or in the same commit as instantiation wiring.
 
-2. **Should `SshMultiplexing::WezTerm` be renamed or aliased?** Renaming breaks existing user configs. Adding `ArcTerm` as an alias and deprecating `WezTerm` is the lower-risk path, but requires keeping the old variant indefinitely.
+2. **Is there an Apple Developer account for ArcTerm?** Without one, macOS code signing and notarization (required for Gatekeeper) cannot be configured, and the macOS notification system will not function. This blocks any official macOS distribution.
 
-3. **Which Rust async executor will AI HTTP streaming use?** Tokio is in the workspace but the GUI thread uses WezTerm's custom `promise` executor. The integration strategy (bridge, dual runtime, or rewriting the update checker on Tokio as a template) needs a decision before AI crate implementation begins.
+3. **When will AI config be exposed to Lua?** The current `AiConfig::default()` hardcode is safe, but the moment Lua config integration is added, the consent gate for remote backends (AUDIT I4) must be in place simultaneously. This is a sequencing risk.
 
-4. **Will ArcTerm maintain separate release artifacts from WezTerm?** This determines the urgency of fixing the update checker URL and the CI deployment pipeline. If ArcTerm will distribute builds, the `WezTerm-*.zip` naming, Homebrew tap, and package registries all need to be stood up for the fork.
+4. **Will ArcTerm publish its own documentation domain?** Resolving the `TODO.arcterm.dev` placeholders in update notifications, AppStream metadata, and release notes requires a real domain and documentation site. Until then, any user who receives an update notification and clicks the changelog link gets a 404.
 
-5. **Will the Linux `.desktop` file and app-id remain `org.wezfurlong.wezterm`?** Changing the app-id is a breaking change for users who have custom keybindings or autostart entries. A phased migration or compatibility alias would be needed.
+5. **Should `SshMultiplexing::WezTerm` be deprecated on a timeline?** The variant is now a documented legacy alias with a deprecation comment. A sunset date and a migration guide (once the wiki URL is real) would complete this transition.
 
-6. **Will `wasmtime` use the component model or the core module API?** This determines the WASM plugin binary format users will need to target. The component model is newer and more capable but requires WIT interface definitions to be designed up front.
+6. **Will the `ureq` synchronous HTTP model for AI backends remain long-term?** Both backends use blocking `ureq` on TermWiz-spawned threads. If AI responses need to be integrated into the main GUI event loop in the future (e.g., for inline suggestions dispatching key events), switching to async will require significant refactoring.
