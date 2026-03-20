@@ -2,7 +2,7 @@
 
 **Feature Branch**: `006-warp-style-ai-ux`
 **Created**: 2026-03-19
-**Status**: Draft
+**Status**: Complete
 **Input**: User description: "Modify ArcTerm to function like Warp — compact bottom command panel, agent mode with multi-step execution, polished integrated AI UX"
 
 ## User Scenarios & Testing *(mandatory)*

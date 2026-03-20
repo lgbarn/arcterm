@@ -49,17 +49,17 @@ description: "Task list for Warp-Style AI UX"
 
 **Independent Test**: Press Ctrl+`, type question, see panel with Run/Copy, terminal visible above.
 
-- [ ] T013 [US1] Implement `paint_ai_panel()` in `wezterm-gui/src/termwindow/render/ai_panel.rs` — render 3-4 synthetic `Line` objects at the bottom of the window using `render_screen_line` (follow `paint_tab_bar` pattern exactly); lines contain: input prompt, generated command, explanation, and action hints
-- [ ] T014 [US1] Modify `apply_dimensions()` in `wezterm-gui/src/termwindow/resize.rs` — subtract `ai_panel_height` from `avail_height` alongside `tab_bar_height` so the PTY gets fewer rows when panel is visible
-- [ ] T015 [US1] Add `paint_ai_panel` call in `paint_pass()` in `wezterm-gui/src/termwindow/render/paint.rs` — after `paint_tab_bar`, paint the AI panel at the computed Y offset
-- [ ] T016 [US1] Implement panel show/hide toggle — when `ToggleCommandOverlay` KeyAssignment fires, set `ai_panel_visible = true` and `ai_panel_height = 4 * cell_height`; trigger resize to update PTY rows
-- [ ] T017 [US1] Implement panel input handling — when panel is visible, capture keystrokes: printable chars accumulate in panel input buffer, Enter submits query, Escape closes panel
-- [ ] T018 [US1] Implement panel LLM query — on Enter: send input + context to `backend.generate()` with command overlay prompt; display result in panel lines (command + explanation)
-- [ ] T019 [US1] Implement Run action — on Enter while result is displayed: call `pane.send_paste(&command)` then `pane.send_paste("\r")` to execute; close panel
-- [ ] T020 [US1] Implement Copy action — on Ctrl+C while result is displayed: copy command to system clipboard; panel stays open
-- [ ] T021 [US1] Implement destructive warning — check `is_destructive()` on result; if true, show warning badge in panel and require confirmation Enter before Run
-- [ ] T022 [US1] Update all geometry call sites that reference `tab_bar_height` to use `total_fixed_chrome_height()` instead (approximately 8 locations across mod.rs, resize.rs, pane.rs, mouseevent.rs, split.rs)
-- [ ] T023 [US1] Verify panel renders correctly and terminal content is fully visible above it — manual test
+- [x] T013 [US1] Implement `paint_ai_panel()` in `wezterm-gui/src/termwindow/render/ai_panel.rs` — render 3-4 synthetic `Line` objects at the bottom of the window using `render_screen_line` (follow `paint_tab_bar` pattern exactly); lines contain: input prompt, generated command, explanation, and action hints
+- [x] T014 [US1] Modify `apply_dimensions()` in `wezterm-gui/src/termwindow/resize.rs` — subtract `ai_panel_height` from `avail_height` alongside `tab_bar_height` so the PTY gets fewer rows when panel is visible
+- [x] T015 [US1] Add `paint_ai_panel` call in `paint_pass()` in `wezterm-gui/src/termwindow/render/paint.rs` — after `paint_tab_bar`, paint the AI panel at the computed Y offset
+- [x] T016 [US1] Implement panel show/hide toggle — when `ToggleCommandOverlay` KeyAssignment fires, set `ai_panel_visible = true` and `ai_panel_height = 4 * cell_height`; trigger resize to update PTY rows
+- [x] T017 [US1] Implement panel input handling — when panel is visible, capture keystrokes: printable chars accumulate in panel input buffer, Enter submits query, Escape closes panel
+- [x] T018 [US1] Implement panel LLM query — on Enter: send input + context to `backend.generate()` with command overlay prompt; display result in panel lines (command + explanation)
+- [x] T019 [US1] Implement Run action — on Enter while result is displayed: call `pane.send_paste(&command)` then `pane.send_paste("\r")` to execute; close panel
+- [x] T020 [US1] Implement Copy action — on Ctrl+C while result is displayed: copy command to system clipboard; panel stays open
+- [x] T021 [US1] Implement destructive warning — check `is_destructive()` on result; if true, show warning badge in panel and require confirmation Enter before Run
+- [x] T022 [US1] Update all geometry call sites that reference `tab_bar_height` to use `total_fixed_chrome_height()` instead (approximately 8 locations across mod.rs, resize.rs, pane.rs, mouseevent.rs, split.rs)
+- [x] T023 [US1] Verify panel renders correctly and terminal content is fully visible above it — manual test
 
 **Checkpoint**: Compact panel works end-to-end. Run/Copy/destructive warning functional. Terminal visible above.
 
@@ -71,16 +71,16 @@ description: "Task list for Warp-Style AI UX"
 
 **Independent Test**: Type `# list docker containers`, verify step-by-step plan with execute/skip/abort controls.
 
-- [ ] T024 [US2] Extend the AI overlay shim in `wezterm-gui/src/suggestion_overlay.rs` to intercept Enter key — when Enter is pressed: read input zone text via `pane.get_lines()` + `get_semantic_zones()`; if text starts with `#` and cursor is in OSC 133 `Input` zone, route to agent mode
-- [ ] T025 [US2] Implement `##` escape — if input zone text starts with `##`, write `#` + rest of text to shell via `pane.writer()` (strip one `#`), do not intercept
-- [ ] T026 [US2] Implement agent mode UI in the compact bottom panel — display step plan: numbered steps with commands and explanations, highlight current step, show controls (Enter=run, s=skip, q=abort)
-- [ ] T027 [US2] Implement step execution — on Enter: paste current step's command into terminal via `pane.send_paste()`, transition step to Running state, wait for `Alert::CommandComplete` (or zone transition fallback) to detect completion
-- [ ] T028 [US2] Implement step completion handling — on `CommandComplete`: capture exit code, transition to next step's Reviewing state; if last step, show "Plan complete" summary
-- [ ] T029 [US2] Implement skip (`s` key) — skip current step (mark as Skipped), advance to next
-- [ ] T030 [US2] Implement abort (`q` key) — abort entire plan, close agent UI, return to normal prompt
-- [ ] T031 [US2] Implement failure handling — on non-zero exit code: pause and show "Step failed (exit N). [r]etry / [s]kip / [q]uit?" prompt
-- [ ] T032 [US2] Implement fallback completion detection — for shells without 133;D, track `Output → Input` semantic zone transition via `MuxNotification::PaneOutput` as command completion signal
-- [ ] T033 [US2] Verify agent mode end-to-end — manual test per quickstart.md
+- [x] T024 [US2] Extend the AI overlay shim in `wezterm-gui/src/suggestion_overlay.rs` to intercept Enter key — when Enter is pressed: read input zone text via `pane.get_lines()` + `get_semantic_zones()`; if text starts with `#` and cursor is in OSC 133 `Input` zone, route to agent mode
+- [x] T025 [US2] Implement `##` escape — if input zone text starts with `##`, write `#` + rest of text to shell via `pane.writer()` (strip one `#`), do not intercept
+- [x] T026 [US2] Implement agent mode UI in the compact bottom panel — display step plan: numbered steps with commands and explanations, highlight current step, show controls (Enter=run, s=skip, q=abort)
+- [x] T027 [US2] Implement step execution — on Enter: paste current step's command into terminal via `pane.send_paste()`, transition step to Running state, wait for `Alert::CommandComplete` (or zone transition fallback) to detect completion
+- [x] T028 [US2] Implement step completion handling — on `CommandComplete`: capture exit code, transition to next step's Reviewing state; if last step, show "Plan complete" summary
+- [x] T029 [US2] Implement skip (`s` key) — skip current step (mark as Skipped), advance to next
+- [x] T030 [US2] Implement abort (`q` key) — abort entire plan, close agent UI, return to normal prompt
+- [x] T031 [US2] Implement failure handling — on non-zero exit code: pause and show "Step failed (exit N). [r]etry / [s]kip / [q]uit?" prompt
+- [x] T032 [US2] Implement fallback completion detection — for shells without 133;D, track `Output → Input` semantic zone transition via `MuxNotification::PaneOutput` as command completion signal
+- [x] T033 [US2] Verify agent mode end-to-end — manual test per quickstart.md
 
 **Checkpoint**: Agent mode works: plan, execute, skip, abort, failure handling all functional.
 
@@ -90,9 +90,9 @@ description: "Task list for Warp-Style AI UX"
 
 **Goal**: Markdown rendering in AI pane, loading indicators, theme matching.
 
-- [ ] T034 [P] [US3] Implement Markdown rendering in AI pane responses in `wezterm-gui/src/ai_pane.rs` — detect code blocks (triple backtick) and render with syntax highlighting via `arcterm-structured-output::code::render_code`; render bold (`**text**`) as SGR bold, inline code as dimmed, lists as indented bullets
-- [ ] T035 [P] [US3] Add loading spinner in compact panel in `wezterm-gui/src/termwindow/render/ai_panel.rs` — while LLM query is in flight, show animated dots or spinner character in the panel
-- [ ] T036 [US3] Ensure all AI UI elements use the terminal's configured color scheme — panel background matches terminal background, text uses terminal foreground, commands use the bright green from the palette
+- [x] T034 [P] [US3] Implement Markdown rendering in AI pane responses in `wezterm-gui/src/ai_pane.rs` — detect code blocks (triple backtick) and render with syntax highlighting via `arcterm-structured-output::code::render_code`; render bold (`**text**`) as SGR bold, inline code as dimmed, lists as indented bullets
+- [x] T035 [P] [US3] Add loading spinner in compact panel in `wezterm-gui/src/termwindow/render/ai_panel.rs` — while LLM query is in flight, show animated dots or spinner character in the panel
+- [x] T036 [US3] Ensure all AI UI elements use the terminal's configured color scheme — panel background matches terminal background, text uses terminal foreground, commands use the bright green from the palette
 
 **Checkpoint**: AI pane has rich Markdown rendering. Panel shows loading state. Colors match theme.
 
@@ -100,11 +100,11 @@ description: "Task list for Warp-Style AI UX"
 
 ## Phase 6: Polish & Cross-Cutting
 
-- [ ] T037 Run `cargo test --all` to verify no regressions
-- [ ] T038 Run `cargo fmt --all`
-- [ ] T039 Run `cargo clippy --package arcterm-ai --package wezterm-gui`
-- [ ] T040 Test full workflow per quickstart.md (panel + agent + polish)
-- [ ] T041 Update spec status to Complete
+- [x] T037 Run `cargo test --all` to verify no regressions
+- [x] T038 Run `cargo fmt --all`
+- [x] T039 Run `cargo clippy --package arcterm-ai --package wezterm-gui`
+- [x] T040 Test full workflow per quickstart.md (panel + agent + polish)
+- [x] T041 Update spec status to Complete
 
 ---
 

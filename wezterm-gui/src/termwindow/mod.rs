@@ -2412,8 +2412,23 @@ impl TermWindow {
             Some(tab) => tab,
             None => return,
         };
+
+        // Get active pane index for the split
+        let active_pane_index = match tab.get_active_pane() {
+            Some(p) => {
+                tab.iter_panes_ignoring_zoom()
+                    .iter()
+                    .find(|pp| pp.pane.pane_id() == p.pane_id())
+                    .map(|pp| pp.index)
+                    .unwrap_or(0)
+            }
+            None => return,
+        };
+
         let pane_id = pane.pane_id();
-        let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
+
+        // Create a small bottom split (4 rows) for the command panel
+        let (panel_pane, future) = start_overlay(self, &tab, move |_tab_id, term| {
             let result = crate::overlay::ai_command_overlay::show_command_overlay(term)?;
             if let Some(command) = result {
                 let mux = Mux::get();
@@ -2423,7 +2438,18 @@ impl TermWindow {
             }
             Ok(())
         });
-        self.assign_overlay(tab.tab_id(), overlay);
+
+        // Insert as a vertical split at the bottom (command panel below, ~20% height)
+        let split_request = ::mux::tab::SplitRequest {
+            direction: ::mux::tab::SplitDirection::Vertical,
+            target_is_second: true,
+            size: ::mux::tab::SplitSize::Percent(20),
+            top_level: false,
+        };
+        if let Err(err) = tab.split_and_insert(active_pane_index, split_request, panel_pane) {
+            log::error!("Failed to split for command panel: {:#}", err);
+            return;
+        }
         promise::spawn::spawn(future).detach();
     }
 
