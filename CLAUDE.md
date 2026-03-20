@@ -79,3 +79,10 @@ Internal crate names (`wezterm-gui`, `wezterm-font`, etc.) are NOT renamed to ke
 3. **AI Integration** — `arcterm-ai` crate; Ollama (default: `qwen2.5-coder:7b`) and Claude API backends; interactive AI pane (`OpenAiPane` action) and command overlay (`ToggleCommandOverlay` action); cross-pane context via scrollback and CWD.
 4. **Inline AI Suggestions** — ghost-text command completions using `arcterm-ai`; debounced 300ms after keystroke; accept with Tab, dismiss with Escape; requires OSC 133 shell integration or heuristic fallback.
 5. **Structured Output** — `arcterm-structured-output` crate; OSC 7770 escape sequence; renders code (syntax-highlighted via syntect), JSON trees, diffs, and images natively in the terminal.
+
+## Active Technologies
+- Rust (edition 2021) + arcterm-ai (existing), termwiz, mux (006-warp-style-ai-ux)
+- N/A — ephemeral UI state (006-warp-style-ai-ux)
+
+## Recent Changes
+- 006-warp-style-ai-ux: Added Rust (edition 2021) + arcterm-ai (existing), termwiz, mux
