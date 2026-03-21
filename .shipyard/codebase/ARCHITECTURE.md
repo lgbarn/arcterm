@@ -2,7 +2,7 @@
 
 ## Overview
 
-ArcTerm is a fork of WezTerm structured as a Rust workspace. Its architecture is a **layered GUI terminal emulator**: a native windowing layer drives a GPU renderer, which displays the output of an in-process terminal model fed by a multiplexer (mux) that manages PTY subprocesses. The mux layer also exposes a Unix socket server enabling multi-client attach/detach sessions. ArcTerm-specific extensions (WASM plugins, AI integration) are planned as additive crates above the mux layer.
+ArcTerm is a fork of WezTerm structured as a Rust workspace. Its architecture is a **layered GUI terminal emulator**: a native windowing layer drives a GPU renderer, which displays the output of an in-process terminal model fed by a multiplexer (mux) that manages PTY subprocesses. The mux layer also exposes a Unix socket server enabling multi-client attach/detach sessions. Two ArcTerm-specific crates (`arcterm-ai` and `arcterm-wasm-plugin`) now exist and are wired into `wezterm-gui` as a dependency layer above the mux layer, though their integration into the GUI event loop is partially complete.
 
 ---
 
@@ -11,43 +11,77 @@ ArcTerm is a fork of WezTerm structured as a Rust workspace. Its architecture is
 ### High-Level Component Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  wezterm-gui  (binary: wezterm-gui)                             │
-│  ┌──────────┐  ┌──────────────┐  ┌───────────────────────────┐  │
-│  │ frontend │  │  TermWindow  │  │  Renderer (Glium / WebGPU)│  │
-│  │GuiFrontEnd│ │ (event loop) │  │  GlyphCache, ShapeCache   │  │
-│  └────┬─────┘  └──────┬───────┘  └──────────────┬────────────┘  │
-└───────│───────────────│─────────────────────────│───────────────┘
-        │ MuxNotification│                          │ quads/vertices
-        ▼                ▼                          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  mux  (crate)                                                   │
-│  ┌──────┐  ┌──────┐  ┌────────┐  ┌──────────────────────────┐  │
-│  │  Mux │  │ Pane │  │  Tab   │  │  Domain (Local/SSH/Client)│  │
-│  │      │  │      │  │        │  │  LocalDomain → PTY        │  │
-│  └──────┘  └──┬───┘  └────────┘  └──────────────────────────┘  │
-│               │ reader thread                                    │
-└───────────────│─────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│  wezterm-gui  (binary: wezterm-gui)                                     │
+│  ┌──────────┐  ┌──────────────┐  ┌─────────────────────────────────┐   │
+│  │ frontend │  │  TermWindow  │  │  Renderer (Glium / WebGPU)      │   │
+│  │GuiFrontEnd│ │ (event loop) │  │  GlyphCache, ShapeCache         │   │
+│  └────┬─────┘  └──────┬───────┘  └──────────────┬──────────────────┘   │
+│       │               │                          │ quads/vertices        │
+│  ┌────────────────────────────────────────────┐  │                       │
+│  │  ArcTerm layers (in wezterm-gui)           │  │                       │
+│  │  ┌─────────────┐  ┌───────────────────┐   │  │                       │
+│  │  │  ai_pane.rs │  │ overlay/           │   │  │                       │
+│  │  │ (AI split   │  │ ai_command_overlay │   │  │                       │
+│  │  │  pane)      │  │ suggestion_overlay │   │  │                       │
+│  │  └──────┬──────┘  └────────┬──────────┘   │  │                       │
+│  └─────────│──────────────────│──────────────┘  │                       │
+└────────────│──────────────────│─────────────────│───────────────────────┘
+             │ arcterm_ai::     │ arcterm_ai::     │
+             │ backend, prompts │ suggestions      │
+             ▼                  ▼                  ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  arcterm-ai  (crate)                                                    │
+│  ┌──────────┐ ┌─────────┐ ┌──────────┐ ┌──────────┐ ┌───────────────┐  │
+│  │ backend  │ │ context │ │  agent   │ │  suggest │ │  destructive  │  │
+│  │ (Ollama, │ │ (Pane   │ │ (multi-  │ │  ions    │ │  (command     │  │
+│  │  Claude) │ │ Context)│ │  step)   │ │          │ │   detection)  │  │
+│  └──────────┘ └─────────┘ └──────────┘ └──────────┘ └───────────────┘  │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│  arcterm-wasm-plugin  (crate)                                           │
+│  ┌──────────┐ ┌─────────────┐ ┌───────────┐ ┌──────────┐ ┌──────────┐  │
+│  │capability│ │  loader     │ │  lifecycle│ │host_api  │ │  event   │  │
+│  │ (grants, │ │(wasmtime    │ │ (Plugin   │ │(linker   │ │  router  │  │
+│  │  checks) │ │ Component)  │ │ Manager)  │ │ register)│ │          │  │
+│  └──────────┘ └─────────────┘ └───────────┘ └──────────┘ └──────────┘  │
+└─────────────────────────────────────────────────────────────────────────┘
+             ↕ (both depend on mux + config)
+┌─────────────────────────────────────────────────────────────────────────┐
+│  mux  (crate)                                                           │
+│  ┌──────┐  ┌──────┐  ┌────────┐  ┌──────────────────────────────────┐  │
+│  │  Mux │  │ Pane │  │  Tab   │  │  Domain (Local/SSH/Client)       │  │
+│  │      │  │      │  │        │  │  LocalDomain → PTY               │  │
+│  └──────┘  └──┬───┘  └────────┘  └──────────────────────────────────┘  │
+│               │ reader thread                                            │
+└───────────────│─────────────────────────────────────────────────────────┘
                 │ raw PTY bytes
                 ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  term  (crate: wezterm-term)                                    │
-│  Terminal model: Screen, Scrollback, CellAttributes             │
-│  Escape sequence state machine (via vtparse / termwiz parser)   │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│  term  (crate: wezterm-term)                                            │
+│  Terminal model: Screen, Scrollback, CellAttributes                     │
+│  Escape sequence state machine (via vtparse / termwiz parser)           │
+└─────────────────────────────────────────────────────────────────────────┘
                 │ TerminalState::perform_actions
                 ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  pty  (crate: portable-pty) + wezterm-ssh                       │
-│  Platform PTY: Unix openpty / Windows ConPTY                    │
-│  SSH PTY: libssh-rs or ssh2                                     │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│  pty  (crate: portable-pty) + wezterm-ssh                               │
+│  Platform PTY: Unix openpty / Windows ConPTY                            │
+│  SSH PTY: libssh-rs or ssh2                                             │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Layer Boundaries
 
-- **GUI layer** (`wezterm-gui`): window management, key/mouse event translation, font rendering, GPU compositing. Depends on `mux`, `window`, `wezterm-font`.
-  - Evidence: `wezterm-gui/src/main.rs` (imports `mux`, `window`, `wezterm-font`)
+- **GUI layer** (`wezterm-gui`): window management, key/mouse event translation, font rendering, GPU compositing. Depends on `mux`, `window`, `wezterm-font`, `arcterm-ai`, `arcterm-wasm-plugin`.
+  - Evidence: `wezterm-gui/Cargo.toml` lines 38 and 99 (`arcterm-ai` and `arcterm-wasm-plugin` declared as path dependencies)
+
+- **AI layer** (`arcterm-ai`): LLM backend abstraction, pane context, system prompts, destructive command detection, inline suggestions, agent session management. Depends on `mux` and `config`.
+  - Evidence: `arcterm-ai/Cargo.toml` lines 9-11; `arcterm-ai/src/lib.rs`
+
+- **WASM plugin layer** (`arcterm-wasm-plugin`): capability-based sandboxed WASM plugin loading via wasmtime Component Model. Depends on `mux` and `config`.
+  - Evidence: `arcterm-wasm-plugin/Cargo.toml` lines 8-14; `arcterm-wasm-plugin/src/lib.rs`
 
 - **Mux layer** (`mux`): multiplexing abstraction over PTYs. Owns all live tabs, panes, windows, and workspace state. Communicates upward via the `MuxNotification` pub/sub system.
   - Evidence: `mux/src/lib.rs` lines 57-98 (`MuxNotification` enum) and lines 692-699 (`Mux::subscribe`)
@@ -82,6 +116,68 @@ ArcTerm is a fork of WezTerm structured as a Rust workspace. Its architecture is
 6. **`render_screen_line`** (in `wezterm-gui/src/termwindow/render/screen_line.rs` line 26) maps each cell to a quad: looks up glyph textures from `GlyphCache`, resolves colors, and writes vertices into the `TripleLayerQuadAllocator`.
 7. The quad buffer is submitted to **Glium** (OpenGL) or **WebGPU** (wgpu) for GPU compositing.
    - Evidence: `wezterm-gui/src/renderstate.rs` lines 22-31 (`RenderContext` enum with `Glium` and `WebGpu` variants)
+
+### Data Flow: AI Pane
+
+1. User triggers the AI pane action (key assignment not yet wired into `KeyAssignment` enum or `commands.rs` — the overlay modules exist but are not yet bound to user-invocable commands).
+   - Evidence: `wezterm-gui/src/main.rs` line 37 (`mod ai_pane` declared); `wezterm-gui/src/overlay/mod.rs` line 9 (`pub mod ai_command_overlay` declared); no `KeyAssignment` or `commands.rs` entry found for `OpenAiPane` or `ToggleCommandOverlay`.
+   - [Inferred] The overlay dispatch mechanism would follow the existing `start_overlay` / `start_overlay_pane` pattern in `wezterm-gui/src/overlay/mod.rs`.
+2. `open_ai_pane` acquires a `TermWizTerminal`, checks LLM availability via `arcterm_ai::backend::LlmBackend::is_available()`, then enters a blocking event loop.
+   - Evidence: `wezterm-gui/src/ai_pane.rs` lines 24-63
+3. On user input, messages are assembled as `Vec<Message>` (system + conversation history), sent to `LlmBackend::chat()`, and the streaming response is tokenized from NDJSON lines.
+   - Evidence: `wezterm-gui/src/ai_pane.rs` lines 75-110; `arcterm-ai/src/backend/mod.rs` lines 39-58
+4. Tokens are rendered to the `TermWizTerminal` surface via `term.render(&[Change::Text(...)])`.
+
+### Data Flow: AI Command Overlay
+
+1. `show_command_overlay` acquires a `TermWizTerminal`, displays a line editor prompt, collects a natural-language query.
+   - Evidence: `wezterm-gui/src/overlay/ai_command_overlay.rs` lines 75-80
+2. The query is sent to `LlmBackend::generate()` using `COMMAND_OVERLAY_SYSTEM_PROMPT` from `arcterm-ai/src/prompts.rs`.
+3. The response is cleaned (markdown stripped) and optionally prefixed with the `WARNING_LABEL` from `arcterm_ai::destructive::maybe_warn`.
+   - Evidence: `arcterm-ai/src/destructive.rs` lines 52-58
+
+### Data Flow: Inline Suggestion (Ghost Text)
+
+The `SuggestionState` struct in `wezterm-gui/src/suggestion_overlay.rs` manages debounce logic (300ms default), cookie-based invalidation, and Tab-to-accept / Escape-to-dismiss state. The key logic is complete and unit-tested, but the module is **not yet compiled into the binary**: the declaration is commented out in `main.rs`.
+
+- Evidence: `wezterm-gui/src/main.rs` lines 39-40:
+  ```rust
+  // Suggestion overlay not yet wired — state management ready, Pane wrapper TODO
+  // mod suggestion_overlay;
+  ```
+- Evidence: `arcterm-ai/src/suggestions.rs` `is_at_shell_prompt()` uses OSC 133 semantic zones as primary signal with a heuristic fallback (cursor on last row + shell-like process name).
+
+### Data Flow: WASM Plugin System
+
+1. During config evaluation, Lua calls `wezterm.plugin.register_wasm()` which calls `arcterm_wasm_plugin::config::register_plugin()`, appending a `WasmPluginConfig` to the global `REGISTERED_PLUGINS` `Mutex<Vec<...>>`.
+   - Evidence: `arcterm-wasm-plugin/src/config.rs` lines 56-73
+2. At startup, `take_registered_plugins()` drains the global list and `PluginManager::load_all()` iterates over them.
+   - Evidence: `arcterm-wasm-plugin/src/lifecycle.rs` lines 81-124
+3. For each plugin: `loader::load_plugin()` reads the `.wasm` bytes, compiles them into a `wasmtime::component::Component`, creates a `Store<PluginStoreData>` with memory limits (`StoreLimitsBuilder`) and a fuel budget, then transitions the plugin through `Loading → Initializing → Running`.
+   - Evidence: `arcterm-wasm-plugin/src/loader.rs` lines 127-183
+4. Before each guest callback, `loader::refuel_store()` resets the fuel budget to prevent cross-callback accumulation.
+   - Evidence: `arcterm-wasm-plugin/src/loader.rs` lines 207-214 (documented rationale in doc comment)
+5. Host functions are registered into a `wasmtime::component::Linker<PluginStoreData>` via `host_api::create_default_linker()`. Each function checks `ctx.data().capabilities.check()` before performing any privileged operation.
+   - Evidence: `arcterm-wasm-plugin/src/host_api.rs` lines 354-364
+6. [Inferred] The `PluginManager` is not yet instantiated anywhere in `wezterm-gui`. The `arcterm-wasm-plugin` crate is a dependency of `wezterm-gui` but no call site was found in `wezterm-gui/src/`.
+
+### Capability Model (WASM Plugin Sandboxing)
+
+Capability strings follow the format `<resource>:<operation>[:<target>]`. Recognized capabilities:
+
+| Capability String | Effect |
+|---|---|
+| `terminal:read` | Always granted by default (built into `CapabilitySet::new`) |
+| `terminal:write` | Required for `send-text`, `inject-output` |
+| `fs:read:<path>` | Required for `read-file`; path-prefix enforced; `..` rejected |
+| `fs:write:<path>` | Required for `write-file`; same enforcement |
+| `net:connect:<host>:<port>` | Required for `http-get`, `http-post`; exact host:port match |
+| `keybinding:register` | Required for `register-key-binding` |
+
+- Evidence: `arcterm-wasm-plugin/src/capability.rs` lines 51-87 (parsing), lines 115-161 (enforcement including path-traversal block)
+
+The WIT world `arcterm-plugin@1.0.0` defines the host-guest interface contract formally.
+- Evidence: `arcterm-wasm-plugin/wit/plugin-host-api.wit` lines 112-127
 
 ### IPC / RPC Between Components
 
@@ -118,13 +214,15 @@ Connection::run_message_loop()   ← platform native loop
     └─ trigger repaints → TermWindow::paint_impl
          │
          └─ submits quads to GPU
-```
 
 Background threads (non-GUI):
-- One thread per pane: `read_from_pane_pty` (blocking PTY reader)
-- One thread per pane: `parse_buffered_data` (escape sequence parser)
-- One thread: `LocalListener::run` (Unix socket acceptor)
-- SSH sessions: async tasks on a `smol` executor
+- One thread per pane: read_from_pane_pty (blocking PTY reader)
+- One thread per pane: parse_buffered_data (escape sequence parser)
+- One thread: LocalListener::run (Unix socket acceptor)
+- SSH sessions: async tasks on a smol executor
+- AI queries (arcterm-ai): blocking HTTP via ureq, run on overlay threads
+  via promise::spawn::spawn_into_new_thread (TermWizTerminal pattern)
+```
 
 ### Cross-Platform Abstraction Layers
 
@@ -135,23 +233,19 @@ Background threads (non-GUI):
 | GPU rendering | `RenderContext` enum in `wezterm-gui/src/renderstate.rs` | Glium (OpenGL), WebGPU (wgpu) |
 | Font loading | `wezterm-font::FontConfiguration` | FreeType, CoreText, DirectWrite |
 | SSH | `wezterm-ssh::Session` | `ssh2` (libssh2), `libssh-rs` |
+| LLM backend | `arcterm_ai::backend::LlmBackend` trait | `OllamaBackend`, `ClaudeBackend` |
+| WASM sandbox | `wasmtime::Store<PluginStoreData>` | wasmtime v36 Component Model |
 
-### Extension Points for New Features
+### ArcTerm-Specific Integration Status
 
-The following locations are the minimal-conflict integration points for planned ArcTerm features:
+| Feature | Crate | GUI wired? | Notes |
+|---|---|---|---|
+| AI pane (conversational) | `arcterm-ai` | Partially | `mod ai_pane` declared in `main.rs`; no `KeyAssignment` binding found |
+| Command overlay | `arcterm-ai` | Partially | `pub mod ai_command_overlay` in `overlay/mod.rs`; no binding found |
+| Inline suggestion (ghost text) | `arcterm-ai` | Not yet | `suggestion_overlay.rs` exists but `mod` is commented out in `main.rs` |
+| WASM plugin loading | `arcterm-wasm-plugin` | Not yet | Crate is a dep of `wezterm-gui` but no call site found in `src/` |
 
-1. **AI Integration (`arcterm-ai` crate)**
-   - [Inferred] Best attached as a `MuxNotification` subscriber in `mux/src/lib.rs` or as a new `Pane` trait implementation. `MuxNotification::PaneOutput` provides a stream of parsed terminal output at the right abstraction level.
-   - The `wezterm-gui/src/scripting/` module provides a Lua scripting bridge; an AI crate could expose itself there similarly to existing `lua-api-crates/`.
-
-2. **WASM Plugin System (`arcterm-wasm-plugin` crate)**
-   - [Inferred] Should integrate at the same level as Lua API crates in `lua-api-crates/`. The `config/src/lua.rs` `add_context_setup_func` mechanism (called at `wezterm-gui/src/main.rs` lines 1205-1207) is the registration path.
-
-3. **Structured Output / OSC 7770**
-   - The escape sequence parser in `mux/src/lib.rs` (`parse_buffered_data`, line 160) calls `parser.parse(...)`. New OSC sequences can be handled by extending `termwiz::escape::parser::Parser` or intercepting at the `Action` dispatch level in `term`.
-
-4. **New Domain types** (e.g., WASM sandbox domain)
-   - Implement the `Domain` trait (`mux/src/domain.rs` lines 49-80) and register via `Mux::add_domain`. This is already the pattern for `LocalDomain`, `RemoteSshDomain`, `ClientDomain`.
+Evidence: `wezterm-gui/src/main.rs` lines 37-40 for AI pane/suggestion status; `wezterm-gui/Cargo.toml` lines 38,99 for dependency declarations.
 
 ---
 
@@ -160,17 +254,25 @@ The following locations are the minimal-conflict integration points for planned 
 | Aspect | Detail | Confidence |
 |--------|--------|------------|
 | Architectural pattern | Layered monolith (GUI → mux → term → PTY) | Observed |
+| ArcTerm-specific crates | `arcterm-ai` and `arcterm-wasm-plugin` (both are workspace members) | Observed |
+| arcterm-structured-output | Removed; not present in workspace or codebase | Observed |
+| AI pane integration | Module compiled (`mod ai_pane`); no key binding wired yet | Observed |
+| Inline suggestion integration | Module exists but commented out of `main.rs` | Observed |
+| WASM plugin integration | Crate is a wezterm-gui dep; no instantiation in GUI found | Observed |
 | Async executor (GUI) | Custom `SpawnQueue` integrated with native event loop (not Tokio) | Observed |
 | Async executor (background) | `smol` / `async-executor` | Observed |
 | GPU backends | Glium (OpenGL) and WebGPU (wgpu), selected via `RenderContext` enum | Observed |
 | IPC protocol | Length-prefixed LEB128 PDUs over Unix socket | Observed |
 | Plugin/scripting system | Lua via `mlua`, registered through `add_context_setup_func` | Observed |
+| LLM HTTP client | `ureq` v2 (sync/blocking), runs on overlay threads | Observed |
+| WASM runtime | `wasmtime` v36 with Component Model and fuel metering | Observed |
 | PTY threading model | 2 threads per pane (reader + parser), plus GUI main thread | Observed |
 | Cross-platform window backends | macOS (Cocoa/CF), X11, Wayland, Windows (Win32) | Observed |
-| ArcTerm-specific code today | Rebrand strings only; no new crates yet | Observed |
 
 ## Open Questions
 
-- The `arcterm-wasm-plugin` and `arcterm-ai` crates mentioned in `CLAUDE.md` do not yet exist in the repository. It is unclear what interface contracts they will expose.
+- The `KeyAssignment` enum (in `config/`) has no `OpenAiPane` or `ToggleCommandOverlay` variants; neither does `commands.rs` in `wezterm-gui`. The mechanism for triggering the AI pane and command overlay from a user key press is not yet implemented or is in a branch not visible here.
+- `arcterm-wasm-plugin` is declared as a dependency of `wezterm-gui` but no startup call to `PluginManager::load_all` or `take_registered_plugins` was found in `wezterm-gui/src/`. The integration call site is missing.
 - The `FrontEndSelection` config option (`config/src/config.rs`) implies an alternate frontend path; its full extent is not traced here.
 - WebGPU (`wgpu`) is present as a render backend but its completeness relative to Glium is not verified from code inspection alone.
+- The `wezterm.plugin.register_wasm()` Lua function (the config-side entry point for WASM plugin registration) is referenced in `arcterm-wasm-plugin/src/config.rs` doc comments but the actual Lua registration code in `lua-api-crates/` has not been verified.

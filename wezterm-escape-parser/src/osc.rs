@@ -51,9 +51,6 @@ pub enum OperatingSystemCommand {
     RxvtExtension(Vec<String>),
     ConEmuProgress(Progress),
 
-    /// ArcTerm structured output — OSC 7770 JSON payload
-    ArcTermStructuredOutput(String),
-
     Unspecified(Vec<Vec<u8>>),
 }
 
@@ -362,16 +359,6 @@ impl OperatingSystemCommand {
                 }
                 Ok(OperatingSystemCommand::RxvtExtension(vec))
             }
-            ArcTermStructuredOutput => {
-                // The payload is everything after "7770;", joined as UTF-8
-                let payload = osc
-                    .iter()
-                    .skip(1)
-                    .map(|s| String::from_utf8_lossy(s).to_string())
-                    .collect::<Vec<_>>()
-                    .join(";");
-                Ok(OperatingSystemCommand::ArcTermStructuredOutput(payload))
-            }
             FinalTermSemanticPrompt => self::FinalTermSemanticPrompt::parse(osc)
                 .map(OperatingSystemCommand::FinalTermSemanticPrompt),
             ChangeColorNumber => Self::parse_change_color_number(osc),
@@ -510,8 +497,6 @@ osc_entries!(
     RxvtProprietary = "777",
     FinalTermSemanticPrompt = "133",
     ITermProprietary = "1337",
-    /// ArcTerm structured output (code blocks, JSON trees, diffs, images)
-    ArcTermStructuredOutput = "7770",
     /// Here the "Sun" suffix comes from the table in
     /// <https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Miscellaneous>
     /// that lays out various window related escape sequences.
@@ -597,7 +582,6 @@ impl Display for OperatingSystemCommand {
             SetSelection(s, val) => write!(f, "52;{};{}", s, base64_encode(val))?,
             SystemNotification(s) => write!(f, "9;{}", s)?,
             ITermProprietary(i) => i.fmt(f)?,
-            ArcTermStructuredOutput(payload) => write!(f, "7770;{}", payload)?,
             FinalTermSemanticPrompt(i) => i.fmt(f)?,
             ResetColors(colors) => {
                 write!(f, "104")?;

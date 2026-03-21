@@ -2,7 +2,7 @@
 
 ## Overview
 
-ArcTerm integrates with SSH (via two parallel backends: libssh-rs and libssh2), tmux (via a control-mode protocol parser), the system font stack (FreeType/HarfBuzz/platform locators), a dual GPU rendering backend (wgpu/WebGPU and Glium/OpenGL), a Lua 5.4 scripting and plugin system, OS notification services (macOS UNNotifications, Windows toast, Linux D-Bus), and the system clipboard. No AI/LLM integrations exist yet; they are planned. The mux protocol operates over Unix domain sockets and optionally TLS TCP, using a custom binary framing format.
+ArcTerm integrates with SSH (via two parallel backends: libssh-rs and libssh2), tmux (via a control-mode protocol parser), the system font stack (FreeType/HarfBuzz/platform locators), a dual GPU rendering backend (wgpu/WebGPU and Glium/OpenGL), a Lua 5.4 scripting and plugin system, OS notification services (macOS UNNotifications, Windows toast, Linux D-Bus), and the system clipboard. Two ArcTerm-specific integration layers are now present: `arcterm-ai` (Ollama local LLM and Anthropic Claude API) and `arcterm-wasm-plugin` (wasmtime Component Model sandbox). The mux protocol operates over Unix domain sockets and optionally TLS TCP, using a custom binary framing format.
 
 ---
 
@@ -140,7 +140,7 @@ The font pipeline has four distinct abstracted layers, each with platform-specif
 
 ---
 
-### Plugin System
+### Plugin System (Git-based Lua)
 
 - **Mechanism**: Git-based. The `plugin` Lua API crate clones or updates git repositories into a plugins directory using `git2` (v0.20).
   - Evidence: `lua-api-crates/plugin/src/lib.rs` lines 1-9 (imports `git2::Repository`, `Remote`)
@@ -148,8 +148,82 @@ The font pipeline has four distinct abstracted layers, each with platform-specif
   - Evidence: `lua-api-crates/plugin/src/lib.rs` line 62
 - **Directory naming**: Git URLs are encoded into filesystem-safe directory names using a deterministic encoding scheme (slashes become `sZs`, colons `sCs`, dots `sDs`).
   - Evidence: `lua-api-crates/plugin/src/lib.rs` lines 20-42
-- **No WASM sandbox**: The planned `arcterm-wasm-plugin` crate (capability-based WASM sandbox) does not exist yet. Plugins are Lua modules loaded directly into the interpreter.
-  - Evidence: `Cargo.toml` members list (no `arcterm-wasm-plugin`); `CLAUDE.md` "Planned ArcTerm Extensions"
+- **No sandbox**: Lua plugins load directly into the interpreter with full process privileges.
+
+---
+
+### WASM Plugin System (arcterm-wasm-plugin)
+
+- **Runtime**: wasmtime v36 with Component Model (`wasm_component_model = true`, `consume_fuel = true`). Each plugin runs in its own `Store<PluginStoreData>` with independent memory and fuel limits.
+  - Evidence: `arcterm-wasm-plugin/Cargo.toml` line 14; `arcterm-wasm-plugin/src/loader.rs` lines 103-108
+- **Plugin declaration**: Plugins are `.wasm` files declared in the user's `arcterm.lua`. A global `REGISTERED_PLUGINS` Mutex (populated during Lua config evaluation) is drained at startup by `take_registered_plugins()`.
+  - Evidence: `arcterm-wasm-plugin/src/config.rs` lines 52-81
+- **Capability model**: Capabilities are declared as strings in config (e.g., `"fs:read:/home/user/projects"`, `"net:connect:api.example.com:443"`). `CapabilitySet::check()` enforces them before each host function call. `terminal:read` is always granted by default.
+  - Evidence: `arcterm-wasm-plugin/src/capability.rs` lines 39-161
+  - Path traversal protection: `..` components in requested paths are unconditionally rejected.
+  - Evidence: `arcterm-wasm-plugin/src/capability.rs` lines 126-135
+- **Host interfaces** (WIT import paths):
+
+  | Interface | Functions | Status |
+  |---|---|---|
+  | `arcterm:plugin/log@0.1.0` | `info`, `warn`, `error` | Implemented |
+  | `arcterm:plugin/filesystem@0.1.0` | `read-file`, `write-file` | Implemented |
+  | `arcterm:plugin/network@0.1.0` | `http-get`, `http-post` | Stub — returns `Err("network not yet implemented")` |
+  | `arcterm:plugin/terminal@0.1.0` | `send-text`, `inject-output` | Stub — logs only, no pane routing |
+
+  Evidence: `arcterm-wasm-plugin/src/host_api.rs` lines 1-365
+- **Resource limits**: `StoreLimitsBuilder` enforces per-plugin memory cap (default 64 MB); per-callback fuel budget (default 1,000,000 units) is reset before each dispatch via `refuel_store`.
+  - Evidence: `arcterm-wasm-plugin/src/loader.rs` lines 36-43, 162-168, 207-214
+- **Lifecycle states**: Loading → Initializing → Running → Stopping → Stopped / Failed. A single failed plugin does not prevent others from loading.
+  - Evidence: `arcterm-wasm-plugin/src/lifecycle.rs` lines 6-12, 80-123
+- **Event routing**: `EventRouter` dispatches `PluginEvent` (OutputChanged, Bell, FocusChanged, KeyBindingTriggered) to plugin subscriber lists by name.
+  - Evidence: `arcterm-wasm-plugin/src/event_router.rs` lines 1-69
+- **Integration gap**: The `LoadedPlugin` (`Component` + `Store`) is not yet stored after `load_plugin` succeeds. The lifecycle manager calls `load_plugin` for validation but discards the result (`let _loaded = ...`). Component Model instantiation and guest `init()`/`destroy()` calls are marked as TODO.
+  - Evidence: `arcterm-wasm-plugin/src/lifecycle.rs` lines 139, 147 (`// TODO: Store _loaded`); lines 178-181 (`// TODO: Call instance.call_destroy`)
+
+---
+
+### AI / LLM Integration (arcterm-ai)
+
+- **Crate**: `arcterm-ai` v0.1.0 — present as a workspace member.
+  - Evidence: `Cargo.toml` line 4 (`"arcterm-ai"`); `arcterm-ai/Cargo.toml`
+
+#### Ollama Backend
+
+- **Transport**: Synchronous HTTP POST via `ureq` v2. Streaming responses are returned as `Box<dyn Read + Send>` (NDJSON lines from the Ollama server).
+- **Endpoints**:
+  - Chat: `{endpoint}/api/chat` (default: `http://localhost:11434/api/chat`)
+  - Availability check: `{endpoint}/api/tags` with 2-second timeout
+- **Default model**: `qwen2.5-coder:7b`
+- **Request format**: JSON body `{ "model": "...", "messages": [...], "stream": true }`
+  - Evidence: `arcterm-ai/src/backend/ollama.rs` lines 17-50; `arcterm-ai/src/config.rs` lines 27-34
+- **Runtime requirement**: Ollama must be running locally (or at a configured endpoint). No embedded inference.
+
+#### Claude API Backend
+
+- **Transport**: Synchronous HTTP POST via `ureq` v2.
+- **Endpoint**: `https://api.anthropic.com/v1/messages` (hardcoded constant)
+- **Protocol version**: `anthropic-version: 2023-06-01` header
+- **Authentication**: `x-api-key` header; key sourced from `AiConfig.api_key`. Availability check is purely `!api_key.is_empty()`.
+- **Request format**: JSON body with `model`, `max_tokens: 4096`, top-level `system` string (extracted from `Role::System` messages), `messages` array (user/assistant only), `stream: true`
+  - Evidence: `arcterm-ai/src/backend/claude.rs` lines 6-61
+- **Tested model IDs** (in test fixtures): `claude-sonnet-4-20250514`
+  - Evidence: `arcterm-ai/src/backend/claude.rs` lines 69, 75, 88
+
+#### AI Feature Set
+
+- **AI pane** (`OpenAiPane` action): Conversational assistant with scrollback + CWD context. System prompt instructs terse responses and warns on destructive operations.
+  - Evidence: `arcterm-ai/src/prompts.rs` lines 4-10
+- **Command overlay** (`ToggleCommandOverlay` action): One-shot command generator. System prompt specifies one command, no markdown.
+  - Evidence: `arcterm-ai/src/prompts.rs` lines 13-16
+- **Inline suggestions**: Ghost-text completions debounced 300ms after keystroke. Detection: OSC 133;B/C semantic zones (primary) or heuristic cursor-on-last-row + shell process name (fallback). Accept: Tab. Dismiss: Escape.
+  - Evidence: `arcterm-ai/src/suggestions.rs` lines 40-68, 29-38
+- **Agent mode**: Multi-step planner. LLM returns JSON array of `{command, explanation}`. Steps execute one at a time with user review. States: Planning → Reviewing → Executing → Completed / StepFailed / Aborted. Supports skip, retry, abort.
+  - Evidence: `arcterm-ai/src/agent.rs` lines 10-17, 40-165
+- **Destructive command detection**: Pattern-based heuristic. Matches against a hardcoded list (rm -rf, DROP TABLE, git push --force, dd, mkfs, fork bomb, etc.). Returns a `WARNING_LABEL` prefix. Not a security boundary.
+  - Evidence: `arcterm-ai/src/destructive.rs` lines 7-49
+- **Context extraction**: `PaneContext` carries scrollback (up to N lines, configurable), CWD, foreground process name, pane dimensions. `format_for_llm()` formats into a structured text block.
+  - Evidence: `arcterm-ai/src/context.rs`; `arcterm-ai/src/prompts.rs` lines 19-42
 
 ---
 
@@ -212,19 +286,10 @@ Evidence: `wezterm-toast-notification/Cargo.toml` lines 15-35
 
 ---
 
-### AI / LLM Integrations
+### Removed: OSC 7770 / Structured Output
 
-**None present.** No references to Anthropic, Claude, Ollama, OpenAI, LLM, or any AI inference library were found in any Rust source or Cargo.toml file in the workspace (excluding the `target/` build directory).
-
-The `arcterm-ai` crate referenced in `CLAUDE.md` does not exist as a workspace member.
-- Evidence: `Cargo.toml` `[workspace] members` list; exhaustive grep across all `.rs` and `.toml` files returned no AI-related matches
-
-The ArcTerm-specific rebrand changes made to date are limited to:
-- `TERM_PROGRAM` env var set to `"ArcTerm"` (`config/src/config.rs` line 1602)
-- Terminal identification string `"ArcTerm"` passed to `wezterm_term::Terminal::new()` (`mux/src/domain.rs` line 624)
-- CLI `about` string updated to `"ArcTerm - AI-Powered Terminal Emulator"` (`wezterm-gui/src/main.rs` line 70)
-- Windows AppUserModelID set to `"com.lgbarn.arcterm"` (`wezterm-gui/src/main.rs` line 1175)
-- Terminal capability detection updated to recognize `"ArcTerm"` alongside `"WezTerm"` (`termwiz/src/caps/mod.rs` line 305)
+- The `arcterm-structured-output` crate (OSC 7770 escape sequence, JSON tree rendering, diff rendering, `syntect`-based syntax highlighting) has been removed. No references to it remain in any Cargo.toml or Rust source file.
+  - Evidence: `Cargo.toml` workspace members (lines 2-21); grep of all `.toml` files for `arcterm-structured-output`, `syntect`, and `osc.7770` returned zero matches.
 
 ---
 
@@ -247,20 +312,29 @@ The ArcTerm-specific rebrand changes made to date are limited to:
 | GPU backend (primary) | wgpu 25.0.2 (WebGPU/WGSL) | Observed |
 | GPU backend (legacy) | glium 0.35 (OpenGL/GLSL) | Observed |
 | Lua scripting | mlua 0.9 / Lua 5.4 vendored | Observed |
-| Plugin system | git2 0.20 (git clone/update) | Observed |
+| Lua plugin system | git2 0.20 (git clone/update) | Observed |
+| WASM plugin system | wasmtime 36 (Component Model) | Observed |
+| WASM network API | Stub — not yet implemented | Observed |
+| WASM terminal API | Stub — log only, no pane routing | Observed |
+| AI backend: Ollama | ureq 2 → localhost:11434/api/chat | Observed |
+| AI backend: Claude | ureq 2 → api.anthropic.com/v1/messages | Observed |
+| AI inline suggestions | OSC 133 zones + heuristic fallback | Observed |
+| AI agent mode | JSON step planner, state machine | Observed |
 | Notifications (macOS) | objc2-user-notifications 0.3 | Observed |
 | Notifications (Windows) | windows crate UI_Notifications | Observed |
 | Notifications (Linux) | zbus 4.2 D-Bus | Observed |
-| Update checks | http_req 0.11 → api.github.com | Observed |
+| Update checks | http_req 0.11 → api.github.com (wezterm upstream URL) | Observed |
 | Clipboard | OS-native + OSC 52 | Observed / Inferred |
 | Serial port | serial2 0.2 | Observed |
 | WSL (Windows) | wsl.exe auto-discovery | Observed |
-| AI / LLM | None | Observed |
-| WASM plugins | None (planned) | Observed |
+| Structured output (OSC 7770) | Removed | Observed |
 
 ## Open Questions
 
 - The update check endpoint (`https://api.github.com/repos/wezterm/wezterm/releases/latest`) still points to the upstream wezterm repository. Should this be updated to an ArcTerm release endpoint, or disabled until ArcTerm has its own release infrastructure?
-- The plugin system uses `git2` without any sandboxing — Lua plugins execute with full process privileges. Is a capability model planned before making this user-facing?
+- The Lua plugin system uses `git2` without any sandboxing — Lua plugins execute with full process privileges. Is a capability model planned before making this user-facing?
 - The dual GPU backend (Glium + wgpu) means two code paths for every render operation. Is there a plan to deprecate Glium once wgpu is mature and fully tested on all platforms?
 - `reqwest` v0.12 appears in the workspace dependencies but no first-party crate was observed importing it directly. Which transitive dependency pulls it in?
+- The WASM network API (`http-get`, `http-post`) is a stub. `ureq` is already available in `arcterm-ai`. Will the WASM plugin network layer reuse `ureq`, or require a different HTTP client to meet its capability-enforcement model?
+- `arcterm-ai` calls `ureq::post(...).send_json(...)` synchronously. When integrated into the GUI, which thread or executor will own these blocking calls to prevent stalling the event loop?
+- The WASM plugin integration gap (compiled `Component` and `Store` are discarded after `load_plugin` in `PluginManager::load_single_plugin`) means no guest code actually executes yet. What is the planned integration point to wire the `Linker` and call guest exports from the GUI event loop?

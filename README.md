@@ -2,7 +2,7 @@
 
 <img height="128" alt="ArcTerm Icon" src="assets/icon/arcterm-icon.svg" align="left">
 
-**An AI-native GPU-accelerated terminal emulator.** Built on [WezTerm](https://github.com/wez/wezterm), extended with WASM plugins, structured output, and local AI integration powered by [Ollama](https://ollama.com).
+**An AI-native GPU-accelerated terminal emulator.** Built on [WezTerm](https://github.com/wez/wezterm), extended with WASM plugins and local AI integration powered by [Ollama](https://ollama.com).
 
 <br clear="left"/>
 <br>
@@ -26,9 +26,6 @@ Type `# deploy to staging` at your shell prompt. ArcTerm breaks the task into st
 
 ### Inline Suggestions
 As you type, ghost text appears suggesting command completions — like GitHub Copilot for your terminal. Tab to accept, keep typing to dismiss. Context-aware: reads your recent output and working directory.
-
-### Structured Output (OSC 7770)
-CLI tools can send rich content to ArcTerm: syntax-highlighted code blocks, collapsible JSON trees, colored diffs, and inline images. Other terminals silently ignore the escape sequences. [Protocol docs](docs/osc-7770-protocol.md).
 
 ### WASM Plugin System
 Extend ArcTerm with sandboxed WebAssembly plugins. Plugins run in isolated wasmtime instances with capability-based permissions — they can only access what you explicitly grant (filesystem paths, network hosts, terminal I/O). [Plugin development guide](CONTRIBUTING.md#developing-wasm-plugins).
@@ -103,7 +100,6 @@ git merge upstream/main
 |-------|---------|
 | `arcterm-ai` | LLM backends (Ollama/Claude), context extraction, suggestions, agent mode |
 | `arcterm-wasm-plugin` | WASM sandbox, capability enforcement, host API, plugin lifecycle |
-| `arcterm-structured-output` | OSC 7770 renderers (code, JSON, diff, image) |
 | `wezterm-gui` | Main GUI binary + AI pane, command overlay, suggestion overlay |
 | `term` | Terminal emulation (VT parsing, escape sequences) |
 | `mux` | Multiplexer (tabs, panes, sessions) |
@@ -111,7 +107,7 @@ git merge upstream/main
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, feature-specific guides, WASM plugin development, and the OSC 7770 protocol.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, feature-specific guides, and WASM plugin development.
 
 ## License
 

@@ -295,7 +295,7 @@ mod unix {
             }
         }
 
-        fn compute_path(class_name: &str) -> PathBuf {
+        pub fn compute_path(class_name: &str) -> PathBuf {
             config::RUNTIME_DIR.join(Self::compute_name(class_name))
         }
 
@@ -334,6 +334,13 @@ pub fn publish_gui_sock_path(path: &Path, class_name: &str) -> anyhow::Result<Na
 /// a running instance; it is just the last published path.
 pub fn resolve_gui_sock_path(class_name: &str) -> anyhow::Result<PathBuf> {
     NameHolder::resolve(class_name)
+}
+
+/// Return the path of the discovery symlink itself (not its target).
+/// Useful for cleaning up stale symlinks on startup.
+#[cfg(unix)]
+pub fn gui_sock_symlink_path(class_name: &str) -> PathBuf {
+    NameHolder::compute_path(class_name)
 }
 
 /// This function returns a list of the gui-sock- paths in

@@ -52,17 +52,6 @@ The GUI integration lives in `wezterm-gui/src/ai_pane.rs` (interactive pane) and
 
 Ghost-text completions triggered after 300ms of inactivity at a shell prompt. Detection uses OSC 133 semantic zones (primary) with a heuristic fallback (cursor on last row + shell process name). `clean_suggestion` in `arcterm-ai/src/suggestions.rs` strips markdown, backticks, and repeated prefixes from LLM output before rendering.
 
-### 5. Structured Output (`arcterm-structured-output/`)
-
-OSC 7770 escape sequence renders rich content inline.
-
-- `payload.rs` — parses `{"type": "code"|"json"|"diff"|"image", ...}` JSON.
-- `code.rs` — syntax highlighting via syntect.
-- `json_tree.rs`, `diff.rs`, `image.rs` — type-specific renderers.
-- Max payload: 1MB default (`DEFAULT_MAX_PAYLOAD_SIZE`). Payloads over the limit are discarded with a log warning.
-
-See `docs/osc-7770-protocol.md` for the full protocol specification.
-
 ## Development
 
 ### Building
@@ -96,7 +85,7 @@ $ cargo fmt --all
 - `wezterm-gui/` — GUI renderer
 - `config/` — Configuration system (Lua plugins)
 - `mux/` — Multiplexer
-- `arcterm-*` — ArcTerm-specific crates (WASM plugins, AI integration, structured output)
+- `arcterm-*` — ArcTerm-specific crates (WASM plugins, AI integration)
 
 ## Developing WASM Plugins
 
@@ -163,26 +152,6 @@ wezterm.plugin.register_wasm({
 | `fs:write:/path` | Write files under `/path`. |
 | `net:connect:host:port` | HTTP requests to `host:port`. |
 | `keybinding:register` | Register global key bindings. |
-
-## Using the OSC 7770 Protocol
-
-OSC 7770 lets CLI tools emit structured content that ArcTerm renders as syntax-highlighted code, JSON trees, diffs, or images. Other terminals silently discard it.
-
-```bash
-# Emit a syntax-highlighted code block
-printf '\033]7770;{"type":"code","language":"rust","content":"fn main() {}"}\033\\'
-
-# Emit a collapsible JSON tree
-DATA=$(cat data.json | python3 -c "import sys,json; print(json.dumps({'type':'json','content':sys.stdin.read().strip()}))")
-printf "\033]7770;${DATA}\033\\"
-
-# Detect ArcTerm before emitting
-if [ "$TERM_PROGRAM" = "ArcTerm" ]; then
-    printf '\033]7770;{"type":"diff","content":"'"$(git diff | sed 's/"/\\"/g')"'"}\033\\'
-fi
-```
-
-See `docs/osc-7770-protocol.md` for the full payload schema and limits.
 
 ## Submitting a Pull Request
 

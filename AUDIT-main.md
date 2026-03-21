@@ -2,7 +2,7 @@
 
 **Branch:** `main` (relative to `upstream/main`)
 **Date:** 2026-03-19
-**Scope:** All ArcTerm-specific code: `arcterm-wasm-plugin`, `arcterm-ai`, `arcterm-structured-output`, `wezterm-gui` AI/overlay additions, `lua-api-crates/plugin`, `term`, `wezterm-escape-parser`, and CI scripts.
+**Scope:** All ArcTerm-specific code: `arcterm-wasm-plugin`, `arcterm-ai`, `wezterm-gui` AI/overlay additions, `lua-api-crates/plugin`, `term`, `wezterm-escape-parser`, and CI scripts.
 
 ---
 
@@ -11,14 +11,13 @@
 **Verdict:** FAIL
 **Risk Level:** High
 
-Two findings require attention before shipping: a path traversal vulnerability in the WASM plugin filesystem capability check that a plugin author could exploit to read or write files outside their declared sandbox, and a memory amplification issue in OSC 7770 image processing that can turn a 10 MB escape sequence into over 640 MB of host heap allocation. Neither is remotely exploitable today (WASM plugins are currently in a half-wired prototype state and OSC 7770 rendering is not yet gated by any user consent), but both are the kind of issue that becomes critical the moment those features ship. The remaining findings are advisory-level code quality items. Fix the path traversal before enabling real plugin execution, and reduce the OSC 7770 payload ceiling before enabling the feature for untrusted terminal sessions.
+One finding requires attention before shipping: a path traversal vulnerability in the WASM plugin filesystem capability check that a plugin author could exploit to read or write files outside their declared sandbox. This is not remotely exploitable today (WASM plugins are currently in a half-wired prototype state), but it becomes critical the moment the feature ships. The remaining findings are advisory-level code quality items. Fix the path traversal before enabling real plugin execution.
 
 ### What to Do
 
 | Priority | Finding | Location | Effort | Action |
 |----------|---------|----------|--------|--------|
 | 1 | Path traversal via `..` in filesystem capability | `capability.rs:123-128` | Small | Normalize the requested path before `starts_with` check; reject `..` components |
-| 2 | Memory amplification in OSC 7770 image rendering | `lib.rs:16`, `image.rs` | Small | Reduce `DEFAULT_MAX_PAYLOAD_SIZE` to 1 MB; add decoded-bytes limit |
 | 3 | Terminal output sent to LLM without user consent gate | `ai_pane.rs:25-26` | Medium | Require explicit user opt-in before scrollback is sent to any remote backend |
 | 4 | LLM response rendered as raw terminal text (escape injection) | `ai_pane.rs:216` | Small | Strip ANSI escape sequences from LLM tokens before `Change::Text` |
 | 5 | CI password SHA echoed to build logs | `deploy.sh:59` | Trivial | Remove `echo $MACOS_PW \| shasum` line |
@@ -27,7 +26,6 @@ Two findings require attention before shipping: a path traversal vulnerability i
 | 8 | No bounds on `memory_limit_mb` from Lua config | `lua-api-crates/plugin/src/lib.rs:254` | Trivial | Clamp to a maximum (e.g., 512 MB) before passing to wasmtime |
 
 ### Themes
-- **Input trust boundary not enforced at OSC layer:** OSC 7770 payloads originate from terminal program output — any process running in the terminal can inject them. The 10 MB ceiling and lack of user consent creates amplification and unexpected rendering risks.
 - **Prototype-stage safety gaps:** Several security controls exist in skeleton form (host API capability checks pass, but real plugin execution is not wired; AI API key is not loaded from user config yet; terminal:read is unconditionally granted). These are safe today but create a window where a future wiring commit accidentally ships without the corresponding security hardening.
 - **CI credential hygiene:** The macOS signing section of `deploy.sh` (inherited from upstream) leaks a password hash to build logs. This is a low-severity advisory but should be cleaned up.
 
@@ -58,28 +56,7 @@ Two findings require attention before shipping: a path traversal vulnerability i
 
 ---
 
-**[I2] Memory Amplification in OSC 7770 Image Payload Processing**
-- **Location:** `arcterm-structured-output/src/lib.rs:16,36`; `arcterm-structured-output/src/image.rs:22-28`
-- **CWE:** CWE-400 (Uncontrolled Resource Consumption)
-- **Description:** The OSC 7770 renderer enforces a 10 MB ceiling on the raw JSON payload string (`DEFAULT_MAX_PAYLOAD_SIZE = 10 * 1024 * 1024`). For image blocks, the JSON `data` field contains base64-encoded image data. A 10 MB base64 string decodes to approximately 7.5 MB of binary data. Additionally, the renderer pre-allocates a `Vec<Action>` with capacity `payload_str.len() * 2 + 64` (up to ~20 million entries), and each `Action::Print(char)` entry in the SGR rendering path is at least 8 bytes. A single crafted OSC 7770 sequence can therefore cause the process to allocate over 640 MB of heap memory. Any terminal program running in an ArcTerm pane (including SSH-connected sessions) can emit OSC 7770 sequences without user consent.
-- **Impact:** A malicious or compromised remote process can cause ArcTerm to exhaust available memory, leading to a process crash or system memory pressure. This is exploitable by any command run in any pane — including SSH sessions — with no user interaction required beyond having OSC 7770 rendering enabled.
-- **Remediation:**
-  1. Reduce `DEFAULT_MAX_PAYLOAD_SIZE` to 1 MB (or make it configurable with a safe default).
-  2. In `image.rs`, add a pre-check on the `data` field length before calling `base64::decode`. Reject payloads where `data.len() > 1_400_000` (approximately 1 MB decoded).
-  3. Remove the over-eager pre-allocation: replace `payload_str.len() * 2 + 64` with a conservative constant (e.g., `4096`).
-  4. Consider requiring a user-level opt-in configuration flag before processing OSC 7770 at all.
-- **Evidence:**
-  ```rust
-  // lib.rs:16 — ceiling is 10 MB
-  pub const DEFAULT_MAX_PAYLOAD_SIZE: usize = 10 * 1024 * 1024;
-  // lib.rs:36 — pre-allocates up to 20M entries
-  let estimated_capacity = payload_str.len() * 2 + 64;
-  let mut actions = Vec::with_capacity(estimated_capacity);
-  ```
-
----
-
-**[I3] LLM Response Rendered as Raw Terminal Text (Escape Sequence Injection)**
+**[I2] LLM Response Rendered as Raw Terminal Text (Escape Sequence Injection)**
 - **Location:** `wezterm-gui/src/ai_pane.rs:216`; `wezterm-gui/src/overlay/ai_command_overlay.rs:183`
 - **CWE:** CWE-116 (Improper Encoding or Escaping of Output); OWASP A03:2021
 - **Description:** Tokens streamed from the LLM backend are passed directly to `term.render(&[Change::Text(token.to_string())])` without stripping ANSI escape sequences. The `termwiz` `Change::Text` change type sends raw text to the terminal emulator, which will interpret any embedded ANSI/VT sequences. An LLM response containing `\x1b]0;malicious title\x07` would change the window title; a response containing `\x1b[?1049h` would enter alternate screen; a response containing OSC 52 sequences could write to the clipboard. While this requires an LLM that produces malicious output (or a compromised Ollama instance), the terminal render path provides no defense.
@@ -128,8 +105,6 @@ Two findings require attention before shipping: a path traversal vulnerability i
 
 - **[A6] `.env` not covered by `.gitignore`** — `.gitignore` — The project `.gitignore` does not include `.env`, `.env.local`, or `*.env` patterns. If a developer creates a `.env` file to store a Claude API key locally (a common pattern), it could be accidentally committed. Add `.env`, `.env.*`, and `*.env` to `.gitignore`.
 
-- **[A7] OSC 7770 escapes embed raw ANSI sequences via `Print` actions** — `arcterm-structured-output/src/lib.rs:67-78`; `arcterm-structured-output/src/image.rs:68-73` — The `render_title`, `emit_sgr`, and `emit_sgr_reset` functions construct ANSI escape sequences (e.g., `\x1b[1m`) and push them character by character as `Action::Print` entries. The downstream `performer.rs:780` feeds these back into `self.perform(action)`. This creates an unusual data flow: the structured output renderer produces raw escape bytes that re-enter the terminal state machine through the normal VT processing path. While the current sequences are safe, this architecture makes it easy to accidentally inject arbitrary control sequences from future renderers. Consider using `Action::CSI(...)` directly instead of embedding escape bytes in print characters.
-
 ---
 
 ## Cross-Component Analysis
@@ -137,8 +112,6 @@ Two findings require attention before shipping: a path traversal vulnerability i
 **WASM capability enforcement is prototype-only.** The capability enforcement layer (`capability.rs`, `host_api.rs`) is well-structured but the guest `Instance` is not yet stored after `load_single_plugin` (lifecycle.rs:139 discards `_loaded`). This means no actual WASM callbacks are dispatched today. When the instantiation wiring is completed (the TODO at lifecycle.rs:147), the path traversal vulnerability in [I1] becomes immediately exploitable. The security fix must precede that wiring commit.
 
 **AI backend has no configuration integration.** Both `open_ai_pane` and `show_command_overlay` call `AiConfig::default()` directly, bypassing any user configuration. The `AiConfig` struct supports Claude configuration, but there is currently no path from the user's Lua `wezterm.lua` to set `backend`, `api_key`, or `model`. This means the Claude backend can only be activated by a code change — not by a user config. This is safe today but is an architectural gap that will need careful attention when the AI config Lua API is added.
-
-**OSC 7770 processes input from any terminal process without gating.** The OSC 7770 handler in `performer.rs:772-783` processes payloads from any running process in the terminal, including SSH sessions and untrusted scripts. The `render()` function has a size check but no consent gate and no per-pane opt-in. This contrasts with other OSC sequences (e.g., OSC 52 clipboard access) which have explicit user-configurable policies. Add an `enable_osc_7770 = false` config key that must be explicitly enabled.
 
 **Destructive command detection is advisory, not a security boundary.** The `is_destructive()` function uses simple substring matching on lowercased text. It can be trivially bypassed (e.g., `r''m -rf /` with a shell alias, `\x72m -rf`, base64-encoded commands piped to `bash`). This is documented in the code (`// This is a heuristic — not a security boundary`) but the UI presents it with red warning text that may create false user confidence. Consider adding a disclaimer in the UI: "Warning is advisory only — review before running."
 
@@ -164,8 +137,7 @@ Two findings require attention before shipping: a path traversal vulnerability i
 | `wasmtime` | 36.0.6 | LTS branch; no known CVEs at audit date. Component Model enabled; fuel metering configured. |
 | `ureq` | 2.12.1 | Uses `rustls` for TLS (not native-tls). Certificate verification is enabled by default. No issues found. |
 | `base64` | 0.22.1 | Current stable. No known CVEs. |
-| `syntect` | 5.3.0 | Pure-Rust regex variant used (no PCRE). No known CVEs. |
-| `serde_json` | (workspace) | Used for OSC 7770 payload parsing — safe deserialization, no `unsafe` paths triggered. |
+| `serde_json` | (workspace) | Safe deserialization, no `unsafe` paths triggered. |
 
 **Note:** `cargo-audit` is not installed in this environment. Install with `cargo install cargo-audit` and run `cargo audit` before each release to check against the RustSec advisory database.
 

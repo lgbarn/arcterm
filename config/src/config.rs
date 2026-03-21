@@ -1006,10 +1006,10 @@ impl Config {
         // multiple.  In addition, it spawns a lot of subprocesses,
         // so we do this bit "by-hand"
 
-        // ArcTerm config paths (primary): arcterm.lua takes precedence over wezterm.lua
+        // ArcTerm only looks in arcterm config directories.
+        // No wezterm.lua fallback — clean break from upstream naming.
         let mut paths = vec![PathPossibility::optional(HOME_DIR.join(".arcterm.lua"))];
         for dir in CONFIG_DIRS.iter() {
-            // CONFIG_DIRS contains wezterm-named subdirs; also probe arcterm-named siblings
             let arcterm_dir = dir
                 .parent()
                 .map(|p| p.join("arcterm"))
@@ -1017,35 +1017,15 @@ impl Config {
             paths.push(PathPossibility::optional(arcterm_dir.join("arcterm.lua")));
         }
 
-        // Wezterm fallback paths (deprecated): kept for backward compatibility
-        paths.push(PathPossibility::optional(HOME_DIR.join(".wezterm.lua")));
-        for dir in CONFIG_DIRS.iter() {
-            paths.push(PathPossibility::optional(dir.join("wezterm.lua")))
-        }
-
         if cfg!(windows) {
-            // On Windows, a common use case is to maintain a thumb drive
-            // with a set of portable tools that don't need to be installed
-            // to run on a target system.  In that scenario, the user would
-            // like to run with the config from their thumbdrive because
-            // either the target system won't have any config, or will have
-            // the config of another user.
-            // So we prioritize that here: if there is a config in the same
-            // dir as the executable that will take precedence.
             if let Ok(exe_name) = std::env::current_exe() {
                 if let Some(exe_dir) = exe_name.parent() {
-                    // Insert arcterm.lua first, then wezterm.lua as fallback
-                    paths.insert(0, PathPossibility::optional(exe_dir.join("wezterm.lua")));
                     paths.insert(0, PathPossibility::optional(exe_dir.join("arcterm.lua")));
                 }
             }
         }
 
-        // ARCTERM_CONFIG_FILE takes priority over WEZTERM_CONFIG_FILE
-        if let Some(path) = std::env::var_os("WEZTERM_CONFIG_FILE") {
-            log::warn!("WEZTERM_CONFIG_FILE is deprecated; please use ARCTERM_CONFIG_FILE instead");
-            paths.insert(0, PathPossibility::required(path.into()));
-        }
+        // ARCTERM_CONFIG_FILE env var override
         if let Some(path) = std::env::var_os("ARCTERM_CONFIG_FILE") {
             log::trace!("Note: ARCTERM_CONFIG_FILE is set in the environment");
             paths.insert(0, PathPossibility::required(path.into()));
@@ -1072,19 +1052,6 @@ impl Config {
                 }
                 Ok(None) => continue,
                 Ok(Some(loaded)) => {
-                    // Emit a deprecation notice if the resolved config file is a
-                    // wezterm.lua fallback (i.e. not an arcterm.lua path).
-                    let is_wezterm_fallback = matches!(
-                        path_item.path.file_name(),
-                        Some(n) if n == "wezterm.lua" || n == ".wezterm.lua"
-                    );
-                    if is_wezterm_fallback {
-                        log::warn!(
-                            "Loaded deprecated config file '{}'. \
-                             Please rename it to 'arcterm.lua' (or '${{XDG_CONFIG_HOME}}/arcterm/arcterm.lua').",
-                            path_item.path.display()
-                        );
-                    }
                     return loaded;
                 }
             }
@@ -1168,12 +1135,6 @@ impl Config {
                 std::env::set_var("ARCTERM_CONFIG_FILE", p);
                 if let Some(dir) = p.parent() {
                     std::env::set_var("ARCTERM_CONFIG_DIR", dir);
-                }
-                // Also set deprecated vars for backward compatibility with
-                // tools that read WEZTERM_CONFIG_FILE during migration
-                std::env::set_var("WEZTERM_CONFIG_FILE", p);
-                if let Some(dir) = p.parent() {
-                    std::env::set_var("WEZTERM_CONFIG_DIR", dir);
                 }
                 Ok(cfg)
             });
