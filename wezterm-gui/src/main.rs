@@ -772,6 +772,31 @@ fn run_terminal_gui(opts: StartCommand, default_domain_name: Option<String>) -> 
         }
     }
 
+    // Clean stale discovery sockets from previous runs to prevent
+    // the double-window bug where a second instance launches because
+    // try_spawn fails on a dead socket.
+    #[cfg(unix)]
+    {
+        let class_name = crate::termwindow::get_window_class();
+        if let Ok(sock_path) =
+            wezterm_client::discovery::resolve_gui_sock_path(&class_name)
+        {
+            if sock_path.exists() {
+                match std::os::unix::net::UnixStream::connect(&sock_path) {
+                    Ok(_) => {} // Live instance exists, try_spawn will handle it
+                    Err(_) => {
+                        log::info!("Removing stale socket: {}", sock_path.display());
+                        let _ = std::fs::remove_file(&sock_path);
+                        // Also remove the symlink that pointed to the stale socket
+                        let symlink_path =
+                            wezterm_client::discovery::gui_sock_symlink_path(&class_name);
+                        let _ = std::fs::remove_file(&symlink_path);
+                    }
+                }
+            }
+        }
+    }
+
     // First, let's see if we can ask an already running wezterm to do this.
     // We must do this before we start the gui frontend as the scheduler
     // requirements are different.
